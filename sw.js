@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dicklum-water-v1';
+const CACHE_NAME = 'dicklum-water-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -40,6 +40,16 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
+  // Never intercept cross-origin tile servers, CDNs, or external APIs; let the browser fetch them directly
+  try {
+    const url = new URL(e.request.url);
+    if (url.origin !== self.location.origin) {
+      return;
+    }
+  } catch (err) {
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then((cached) => {
       return cached || fetch(e.request).catch(() => {

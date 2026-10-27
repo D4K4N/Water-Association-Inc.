@@ -11,59 +11,107 @@
  * - Active pipe tour route tracing
  */
 
+// Helper to build robust tile layer with automatic fallback on network/referrer errors
+function createRobustTileLayer(primaryUrl, options = {}, fallbackUrl = null) {
+  const mergedOpts = Object.assign({
+    referrerPolicy: 'no-referrer',
+    crossOrigin: false
+  }, options);
+
+  const layer = L.tileLayer(primaryUrl, mergedOpts);
+
+  if (fallbackUrl) {
+    layer.on('tileerror', function(error) {
+      if (error.tile && !error.tile._hasFallback) {
+        error.tile._hasFallback = true;
+        const coords = error.coords;
+        if (coords) {
+          error.tile.src = fallbackUrl
+            .replace('{z}', coords.z)
+            .replace('{y}', coords.y)
+            .replace('{x}', coords.x);
+        }
+      }
+    });
+  }
+
+  return layer;
+}
+
 // Available high-performance tile layer configurations
 const LAYER_PROVIDERS = {
   google_hybrid: {
     name: 'Google Satellite (Hybrid)',
-    createLayer: () => L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
-      subdomains: ['0', '1', '2', '3'],
-      maxZoom: 22,
-      maxNativeZoom: 20,
-      attribution: '© Google Maps'
-    })
+    createLayer: () => createRobustTileLayer(
+      'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+      {
+        subdomains: ['0', '1', '2', '3'],
+        maxZoom: 22,
+        maxNativeZoom: 20,
+        attribution: '© Google Maps'
+      },
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+    )
   },
   hybrid: {
     name: 'Google Satellite (Hybrid)',
-    createLayer: () => L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
-      subdomains: ['0', '1', '2', '3'],
-      maxZoom: 22,
-      maxNativeZoom: 20,
-      attribution: '© Google Maps'
-    })
+    createLayer: () => createRobustTileLayer(
+      'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+      {
+        subdomains: ['0', '1', '2', '3'],
+        maxZoom: 22,
+        maxNativeZoom: 20,
+        attribution: '© Google Maps'
+      },
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+    )
   },
   satellite: {
     name: 'Satellite (ESRI World Imagery)',
-    createLayer: () => L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      maxZoom: 22,
-      maxNativeZoom: 18,
-      attribution: '© ESRI World Imagery, Maxar'
-    })
+    createLayer: () => createRobustTileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 22,
+        maxNativeZoom: 18,
+        attribution: '© ESRI World Imagery, Maxar'
+      },
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+    )
   },
   streets: {
     name: 'Standard Streets (OpenStreetMap)',
-    createLayer: () => L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      subdomains: ['a', 'b', 'c'],
-      maxZoom: 22,
-      maxNativeZoom: 19,
-      attribution: '© OpenStreetMap contributors'
-    })
+    createLayer: () => createRobustTileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {
+        subdomains: ['a', 'b', 'c'],
+        maxZoom: 22,
+        maxNativeZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+      }
+    )
   },
   terrain: {
     name: 'Topographic Terrain (ESRI Topo)',
-    createLayer: () => L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
-      maxZoom: 22,
-      maxNativeZoom: 18,
-      attribution: '© ESRI World Topo'
-    })
+    createLayer: () => createRobustTileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 22,
+        maxNativeZoom: 18,
+        attribution: '© ESRI World Topo'
+      }
+    )
   },
   dark: {
     name: 'Dark Canvas (CartoDB)',
-    createLayer: () => L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: ['a', 'b', 'c', 'd'],
-      maxZoom: 22,
-      maxNativeZoom: 19,
-      attribution: '© CARTO, © OpenStreetMap'
-    })
+    createLayer: () => createRobustTileLayer(
+      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+      {
+        subdomains: ['a', 'b', 'c', 'd'],
+        maxZoom: 22,
+        maxNativeZoom: 19,
+        attribution: '© CARTO, © OpenStreetMap'
+      }
+    )
   }
 };
 
@@ -152,6 +200,25 @@ class FieldMapEngine {
 
     this._map.on('zoomend', () => {
       this._zoom = this._map.getZoom();
+    });
+
+    // Automatic container resize observer (vital for hidden views, responsive layout, PWA orientation)
+    if (typeof ResizeObserver !== 'undefined' && container) {
+      this._resizeObserver = new ResizeObserver(() => {
+        if (this._map) {
+          this._map.invalidateSize();
+        }
+      });
+      this._resizeObserver.observe(container);
+    }
+
+    // Immediate and delayed resize triggers to guarantee tile painting
+    [50, 150, 400, 1000].forEach(delay => {
+      setTimeout(() => {
+        if (this._map) {
+          this._map.invalidateSize();
+        }
+      }, delay);
     });
   }
 

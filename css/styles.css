@@ -638,6 +638,26 @@ html, body {
   overflow: hidden;
 }
 
+#field-map {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+#field-map .leaflet-pane {
+  z-index: 100;
+}
+
+#field-map .leaflet-top,
+#field-map .leaflet-bottom {
+  z-index: 200;
+}
+
 #field-map-canvas {
   width: 100%;
   height: 100%;

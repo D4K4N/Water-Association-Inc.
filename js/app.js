@@ -161,13 +161,15 @@ class WaterBillingApp {
     }
 
     if (viewId === 'view-map') {
-      setTimeout(() => {
-        if (this.mapEngine) {
-          this.mapEngine.resize();
-          this.syncPinsToMap();
-          this.syncRoutesToMap();
-        }
-      }, 100);
+      [50, 150, 300, 600, 1000].forEach(delay => {
+        setTimeout(() => {
+          if (this.mapEngine) {
+            this.mapEngine.resize();
+            this.syncPinsToMap();
+            this.syncRoutesToMap();
+          }
+        }, delay);
+      });
     }
   }
 

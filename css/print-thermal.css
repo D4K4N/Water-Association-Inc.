@@ -1,0 +1,145 @@
+/* Dicklum Water Association - Thermal Receipt Printing Styles (58mm and 80mm) */
+
+.thermal-paper-container {
+  background: #E5E7EB;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+}
+
+.thermal-receipt {
+  background: #FFFFFF;
+  color: #000000;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 14px 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  width: 100%;
+}
+
+.thermal-receipt.w-58 {
+  max-width: 270px; /* ~58mm physical roll */
+}
+
+.thermal-receipt.w-80 {
+  max-width: 360px; /* ~80mm physical roll */
+  font-size: 12px;
+}
+
+.t-center {
+  text-align: center;
+}
+
+.t-bold {
+  font-weight: 700;
+}
+
+.t-large {
+  font-size: 14px;
+}
+
+.t-total {
+  font-size: 15px;
+  margin: 4px 0;
+}
+
+.t-small {
+  font-size: 9.5px;
+  color: #333333;
+}
+
+.t-warning {
+  margin: 6px 0 2px 0;
+  font-weight: 700;
+}
+
+.t-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 0;
+}
+
+.t-divider {
+  overflow: hidden;
+  white-space: nowrap;
+  letter-spacing: 1px;
+  margin: 4px 0;
+  text-align: center;
+  font-size: 10px;
+}
+
+/* Print Media Query for Direct Pocket Thermal Roll Printing & Bond Paper Testing */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  body.printing-thermal #modal-thermal-preview,
+  body.printing-thermal #modal-thermal-preview *,
+  #modal-thermal-preview.active,
+  #modal-thermal-preview.active * {
+    visibility: visible;
+  }
+
+  body.printing-thermal #modal-thermal-preview,
+  #modal-thermal-preview.active {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+  }
+
+  .modal-card {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    background: transparent !important;
+  }
+
+  .modal-header, .modal-footer, .modal-backdrop {
+    display: none !important;
+  }
+
+  .thermal-paper-container {
+    background: transparent !important;
+    padding: 10px 0 !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+  }
+
+  /* Pocket Printer Thermal Paper Dimensions (Strict 58mm Width)
+     When printed on physical pocket printer: fits 58mm thermal paper roll 1:1.
+     When tested on regular bond paper: prints in center within 58mm boundary with cut guides. */
+  .thermal-receipt {
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 3mm 2.5mm !important;
+    width: 58mm !important;
+    max-width: 58mm !important;
+    min-width: 58mm !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+    border: 1px dashed #64748B !important; /* Dotted line marks pocket printer paper roll boundaries on bond paper */
+    font-family: 'Courier New', Courier, monospace !important;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+    color: #000000 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .thermal-receipt.w-80 {
+    width: 80mm !important;
+    max-width: 80mm !important;
+    min-width: 80mm !important;
+  }
+}

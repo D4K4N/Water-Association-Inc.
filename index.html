@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#4C6972">
+  <meta name="description" content="Dicklum Water Association, Inc. - Mobile Water Billing, GPS Mapping & Field Operations System">
+  <title>Dicklum Water Billing & Field Operations</title>
+  
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="assets/logo.png">
+  
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="css/print-thermal.css">
+  <link rel="stylesheet" href="css/print-a4.css">
+  <!-- Leaflet SDK — 100% Free Lifetime Open-Source Map Engine (Deep Zoom 22, Google Satellite & ESRI, Zero API Keys) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+
+<div id="app-container">
+
+  <!-- Main Top Header -->
+  <header class="app-header">
+    <div class="brand-wrapper">
+      <img src="assets/logo.png" alt="Dicklum Water Association Logo" class="brand-logo">
+      <div class="brand-info">
+        <h1>Dicklum Water Association</h1>
+        <p>Field Operations & Billing System</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span id="current-mode-badge" class="mode-badge mapping">MAPPING</span>
+      <span id="online-status-pill" class="status-pill online"><span class="status-dot"></span> Online</span>
+    </div>
+  </header>
+
+  <!-- Viewport for Mobile App Screens -->
+  <main class="app-viewport">
+
+    <!-- VIEW 1: Home / Operational Overview -->
+    <section id="view-splash" class="app-view active">
+      <div class="splash-content">
+        <div class="splash-hero">
+          <img src="assets/logo.png" alt="Dicklum Water Association" class="splash-logo">
+          <h2>Dicklum Water Association, Inc.</h2>
+          <p>Dicklum, Manolo Fortich, Bukidnon, Philippines</p>
+          <p style="font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 4px;">SEC Reg. CN2014-99120 • Field Utility System</p>
+        </div>
+
+        <div class="splash-modes-container">
+          <!-- Mapping Mode Card -->
+          <div id="card-mode-mapping" class="mode-select-card">
+            <div class="mode-card-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
+                <circle cx="12" cy="10" r="3"/>
+              </svg>
+            </div>
+            <div class="mode-card-info">
+              <h3>Mapping Mode</h3>
+              <p>Pin consumer household GPS, standalone water meters, and clustered pipe manifolds in the field.</p>
+            </div>
+          </div>
+
+          <!-- Reading Mode Card -->
+          <div id="card-mode-reading" class="mode-select-card">
+            <div class="mode-card-icon" style="background: var(--accent-amber-tint); color: var(--accent-amber);">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </div>
+            <div class="mode-card-info">
+              <h3>Reading Mode</h3>
+              <p>Tour routes, enter meter readings, auto-calculate consumption (Current − Previous), and print receipts.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="splash-footer-stats">
+          <div class="stat-item">
+            <span class="val" id="stat-total-consumers">8</span>
+            <span class="lbl">Consumers</span>
+          </div>
+          <div class="stat-item">
+            <span class="val" id="stat-total-meters">8</span>
+            <span class="lbl">Meters</span>
+          </div>
+          <div class="stat-item">
+            <span class="val" id="stat-month-readings">5</span>
+            <span class="lbl">Readings</span>
+          </div>
+        </div>
+
+        <p style="font-size: 11px; color: var(--text-muted);">Select an operational mode to begin field tasks.</p>
+      </div>
+    </section>
+
+    <!-- VIEW 2: Real Satellite Map Dashboard -->
+    <section id="view-map" class="app-view">
+      <div class="map-view-container">
+        <!-- Canvas Satellite Map Engine Wrapper -->
+        <div class="map-canvas-wrapper">
+          <div id="field-map" style="width:100%;height:100%;"></div>
+
+          <!-- Floating Top Search Bar & Controls (Overlaid on Map) -->
+          <div class="map-top-bar">
+            <div class="map-search-row">
+              <div class="search-input-box">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.3-4.3"/>
+                </svg>
+                <input type="text" id="map-search-input" placeholder="Search consumer, account #, or meter...">
+              </div>
+              <button id="btn-map-layers" class="map-layer-btn" title="Change Map Type">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                  <polyline points="2 17 12 22 22 17"/>
+                  <polyline points="2 12 12 17 22 12"/>
+                </svg>
+                <span id="map-current-layer-label">Satellite</span>
+              </button>
+              <!-- Floating Search Autocomplete Results Dropdown -->
+              <div id="map-search-results" class="map-search-results hidden"></div>
+            </div>
+
+            <div class="map-controls-row">
+              <div class="filter-chips-scroll">
+                <span class="map-filter-chip active" data-filter="both">Both</span>
+                <span class="map-filter-chip" data-filter="household">Households</span>
+                <span class="map-filter-chip" data-filter="meter">Water Meters</span>
+              </div>
+              <div class="mode-pills-group">
+                <button class="mode-toggle-btn active" data-mode="mapping">Mapping</button>
+                <button class="mode-toggle-btn" data-mode="reading">Reading</button>
+              </div>
+            </div>
+
+            <!-- Walking Route Recorder Bar (Phase 2, Section 7) -->
+            <div id="route-recorder-bar" class="route-recorder-bar hidden">
+              <div class="route-status-indicator">
+                <div class="route-pulse-dot"></div>
+                <span><strong>Recording Route:</strong> <span id="route-pts-counter">0 pts</span> (<span id="route-dist-counter">0m</span>)</span>
+              </div>
+              <div style="display: flex; gap: 4px;">
+                <button id="btn-stop-record-route" class="btn btn-sm btn-primary">Stop & Save</button>
+                <button id="btn-cancel-record-route" class="btn btn-sm btn-outline">Discard</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Real-Time GPS Tracking Button -->
+          <button id="btn-gps-my-location" class="gps-locate-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="22" x2="18" y1="12" y2="12"/>
+              <line x1="6" x2="2" y1="12" y2="12"/>
+              <line x1="12" x2="12" y1="6" y2="2"/>
+              <line x1="12" x2="12" y1="22" y2="18"/>
+            </svg>
+            <span>Live GPS</span>
+          </button>
+
+          <!-- Floating Zoom, Pin Drop, and Route Controls -->
+          <div class="map-floating-controls">
+            <button id="btn-start-record-route" class="map-circle-btn" title="Record Walking Route" style="color: #0284C7;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/>
+              </svg>
+            </button>
+            <button id="btn-zoom-in" class="map-circle-btn" title="Zoom In">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14"/><path d="M12 5v14"/>
+              </svg>
+            </button>
+            <button id="btn-zoom-out" class="map-circle-btn" title="Zoom Out">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14"/>
+              </svg>
+            </button>
+            <button id="fab-add-pin" class="map-circle-btn fab-add" title="Pin Location">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14"/><path d="M12 5v14"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Collapsible Consumer Bottom Sheet -->
+        <div id="map-bottom-sheet" class="map-bottom-sheet">
+          <div class="sheet-handle"></div>
+          <div class="sheet-header">
+            <div>
+              <strong id="sheet-consumer-name">Juan Carlos Dela Cruz</strong>
+              <span class="acct-pill" id="sheet-account-no">DWA-2026-001</span>
+            </div>
+            <button id="btn-close-sheet" class="modal-close">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div class="sheet-meta-grid">
+            <div><span class="text-muted">District:</span> <span id="sheet-zone" class="bold">Zone 2 - San Francisco</span></div>
+            <div><span class="text-muted">Meter:</span> <span id="sheet-meter-no" class="bold">WM-2024-001</span></div>
+            <div><span class="text-muted">Address:</span> <span id="sheet-address">Purok 2</span></div>
+            <div><span class="text-muted">Prev Rdg:</span> <span id="sheet-prev-reading" class="bold text-primary">1,954 m³</span></div>
+          </div>
+          <div class="sheet-actions" style="display: flex; gap: 8px;">
+            <button id="sheet-btn-read" class="btn btn-primary" style="flex: 1.2;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              Record Reading
+            </button>
+            <button id="sheet-btn-history" class="btn btn-outline" style="flex: 1;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
+              Bills & Payments
+            </button>
+          </div>
+        </div>
+
+        <!-- Collapsible Cluster Bottom Sheet -->
+        <div id="cluster-bottom-sheet" class="map-bottom-sheet">
+          <div class="sheet-handle"></div>
+          <div class="sheet-header">
+            <div>
+              <strong id="cluster-sheet-name">San Francisco Road Manifold</strong>
+              <span class="badge badge-warning" id="cluster-sheet-count">3 Meters</span>
+            </div>
+            <button id="btn-close-cluster-sheet" class="modal-close">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <p id="cluster-sheet-desc" style="font-size: 11px; color: var(--text-secondary); margin: 3px 0;"></p>
+          <div class="cluster-meters-list" id="cluster-meters-list">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: Water Meter Reading & History -->
+    <section id="view-reading" class="app-view">
+      <div class="view-header">
+        <button class="btn btn-sm btn-outline btn-back-home">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          Back to Map
+        </button>
+        <h2>Meter Reading & Computation</h2>
+        <span class="badge badge-success">Field Ready</span>
+      </div>
+
+      <div class="view-scroll-content">
+        <!-- Consumer Info Card (Clean Fresh State by Default) -->
+        <div class="consumer-badge-card" id="rdg-consumer-card">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong id="rdg-consumer-name">No Consumer Selected</strong>
+            <span class="acct-pill" id="rdg-account-no">—</span>
+          </div>
+          <div class="sub-row">
+            Address: <span id="rdg-address">Tap a water meter pin on the map or select below</span> (<span id="rdg-zone">—</span>)
+          </div>
+          <div class="sub-row">
+            Meter Serial: <strong id="rdg-meter-no">—</strong>
+          </div>
+        </div>
+
+        <!-- Quick Consumer Switcher Dropdown -->
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label for="rdg-quick-consumer-select" style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">
+            Select / Switch Consumer to Read:
+          </label>
+          <select id="rdg-quick-consumer-select" class="form-control" style="font-size: 12px; height: 36px;">
+            <option value="">-- Choose Consumer or Water Meter --</option>
+          </select>
+        </div>
+
+        <!-- Duplicate Warning Alert -->
+        <div id="rdg-duplicate-alert" class="alert alert-warning hidden"></div>
+
+        <!-- Reading Entry Card -->
+        <div class="reading-entry-card">
+          <div class="reading-comparison-box">
+            <div class="reading-box-col">
+              <span class="lbl">PREVIOUS READING (M³)</span>
+              <div class="stepper-input-container">
+                <button type="button" id="rdg-btn-prev-minus" class="stepper-btn">−</button>
+                <input type="number" id="rdg-previous-input" class="stepper-input" value="0" step="1" min="0" placeholder="0">
+                <button type="button" id="rdg-btn-prev-plus" class="stepper-btn">+</button>
+              </div>
+            </div>
+            <div class="reading-box-col">
+              <span class="lbl">CURRENT READING (M³)</span>
+              <div class="stepper-input-container">
+                <button type="button" id="rdg-btn-step-minus" class="stepper-btn">−</button>
+                <input type="number" id="rdg-current-input" class="stepper-input" value="0" step="1" min="0" placeholder="0">
+                <button type="button" id="rdg-btn-step-plus" class="stepper-btn">+</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Invalid Reading Alert -->
+          <div id="rdg-error-alert" class="alert alert-danger hidden"></div>
+
+          <!-- Rollover / Replacement Override -->
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
+            <input type="checkbox" id="rdg-override-checkbox">
+            Meter Replacement / Rollover Override (If physical meter was replaced or rolled over)
+          </label>
+        </div>
+
+        <!-- Reactive Computation Breakdown Card -->
+        <div class="calc-summary-card">
+          <h4>Utility Billing Computation (Dicklum Tariff)</h4>
+          <table class="calc-table">
+            <tr>
+              <td>Previous Reading:</td>
+              <td class="text-right" id="rdg-calc-prev">0 m³</td>
+            </tr>
+            <tr>
+              <td>Current Reading:</td>
+              <td class="text-right" id="rdg-calc-curr">0 m³</td>
+            </tr>
+            <tr>
+              <td>Water Consumption (Current − Previous):</td>
+              <td class="text-right bold text-primary" id="rdg-calc-usage">0 m³</td>
+            </tr>
+            <tr>
+              <td>Minimum Monthly Charge (up to 10 m³):</td>
+              <td class="text-right" id="rdg-calc-min-charge">PHP 100.00</td>
+            </tr>
+            <tr>
+              <td>Excess Consumption Charge:</td>
+              <td class="text-right" id="rdg-calc-excess-charge">PHP 0.00</td>
+            </tr>
+            <tr class="total-row">
+              <td>TOTAL AMOUNT DUE:</td>
+              <td class="text-right" id="rdg-calc-total-due">PHP 100.00</td>
+            </tr>
+          </table>
+
+          <div class="calc-explanation-box" id="rdg-calc-explanation">
+            Minimum monthly charge of PHP 100.00 covers water consumption up to 10 cubic meters (m³).
+          </div>
+
+          <div id="rdg-excess-warning-box" class="calc-warning-box hidden"></div>
+        </div>
+
+        <!-- Reading History for this Consumer (Phase 4, Section 12) -->
+        <div class="calc-summary-card">
+          <h4>Consumer Reading History</h4>
+          <div id="consumer-reading-history-list">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <!-- Optional Meter Photo -->
+        <div class="photo-capture-box" onclick="document.getElementById('rdg-photo-input').click()">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+            <circle cx="12" cy="13" r="3"/>
+          </svg>
+          <div style="font-size: 12px; font-weight: 700; color: var(--primary); margin-top: 2px;">
+            Capture Meter Photo Proof (Optional)
+          </div>
+          <div style="font-size: 10.5px; color: var(--text-muted);">
+            Automatically watermarked with GPS coordinates, timestamp, and meter number
+          </div>
+          <input type="file" id="rdg-photo-input" accept="image/*" capture="environment" style="display: none;">
+          <img id="rdg-photo-preview" class="hidden" alt="Meter Proof">
+        </div>
+
+        <!-- Notes -->
+        <div class="form-group">
+          <label for="rdg-notes-input">Field Notes / Meter Inspection Remarks:</label>
+          <input type="text" id="rdg-notes-input" class="form-control" placeholder="e.g. Normal dial movement, clean glass, no visible pipe leaks...">
+        </div>
+
+        <!-- Submit Actions -->
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;">
+          <button id="btn-save-print-reading" class="btn btn-primary" style="padding: 11px; font-size: 13px;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+            Save & Print Thermal Receipt
+          </button>
+          <button id="btn-save-reading" class="btn btn-outline" style="padding: 9px;">
+            Save Reading to Database
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: Water Bills & Statements -->
+    <section id="view-billing" class="app-view">
+      <div class="view-header">
+        <h2>Water Bills & Receipts</h2>
+        <span class="badge badge-warning">October 2026</span>
+      </div>
+      <div style="padding: 8px 10px 0 10px; display: flex; gap: 6px; flex-shrink: 0;">
+        <span class="map-filter-chip billing-filter-chip active" data-status="all">All Statements</span>
+        <span class="map-filter-chip billing-filter-chip" data-status="unpaid">Unpaid</span>
+        <span class="map-filter-chip billing-filter-chip" data-status="paid">Paid</span>
+      </div>
+      <div class="directory-scroll-list" id="billing-list-container">
+        <!-- Dynamically populated -->
+      </div>
+    </section>
+
+    <!-- VIEW 5: Records, Reports & Settings -->
+    <section id="view-settings" class="app-view">
+      <div class="view-header">
+        <h2>Records, Reports & Settings</h2>
+      </div>
+
+      <div class="settings-content">
+        <!-- Official Utility Reports Section (Phase 7, Section 18) -->
+        <div class="settings-section-card">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            Official Association Reports (PDF)
+          </h3>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+            Generate printable A4 summaries and audits based on real persistent records.
+          </p>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <button id="btn-report-billing-summary" class="btn btn-sm btn-primary">
+              Generate Monthly Billing Summary
+            </button>
+            <button id="btn-report-consumer-directory" class="btn btn-sm btn-outline">
+              Generate Consumer & Meter Directory
+            </button>
+          </div>
+        </div>
+
+        <!-- Tariff Rules (Phase 5, Section 13) -->
+        <div class="settings-section-card">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+            Dicklum Water Association Tariff
+          </h3>
+          <div class="form-group">
+            <label>Minimum Monthly Charge (PHP):</label>
+            <input type="number" id="tariff-min-charge" class="form-control" value="100.00" step="0.5">
+          </div>
+          <div class="form-group">
+            <label>Minimum Consumption Allowance (Cubic Meters included):</label>
+            <input type="number" id="tariff-min-allowance" class="form-control" value="10" step="1">
+          </div>
+          <div class="form-group">
+            <label>Excess Rate per m³ above allowance (Leave blank if unconfigured):</label>
+            <input type="number" id="tariff-excess-rate" class="form-control" placeholder="Not yet provided" step="0.5">
+          </div>
+          <div class="form-group">
+            <label>Active Billing Period:</label>
+            <input type="text" id="tariff-period-name" class="form-control" value="October 2026">
+          </div>
+          <button id="btn-save-tariff" class="btn btn-sm btn-primary">Save Tariff Settings</button>
+        </div>
+
+        <!-- Purok Districts & Manifold Clusters Management -->
+        <div class="settings-section-card">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Purok Districts & Manifold Clusters
+          </h3>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+            Manage water association Purok zones and grouped meter manifold clusters.
+          </p>
+
+          <div style="margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <label style="font-size: 11.5px; font-weight: 700; margin: 0;">Active Zones / Puroks:</label>
+              <span id="settings-zones-count" class="badge badge-success" style="font-size: 9px;">4 ZONES</span>
+            </div>
+            <div id="settings-zones-list" style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px;">
+              <!-- Populated dynamically -->
+            </div>
+            <div style="display: flex; gap: 6px; margin-top: 8px;">
+              <input type="text" id="settings-new-zone-input" class="form-control" placeholder="New Zone Name (e.g. Zone 5)" style="font-size: 11.5px;">
+              <button type="button" id="btn-settings-add-zone" class="btn btn-sm btn-primary" style="white-space: nowrap;">+ Add Zone</button>
+            </div>
+          </div>
+
+          <div style="border-top: 1px solid var(--border-color); padding-top: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label style="font-size: 11.5px; font-weight: 700; margin: 0;">Meter Manifold Clusters (Grouped by Purok/Zone):</label>
+              <button type="button" id="btn-settings-new-cluster-prompt" class="btn btn-xs btn-outline" style="font-weight: 600;">+ New Cluster</button>
+            </div>
+            <div id="settings-clusters-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow-y: auto;">
+              <!-- Populated dynamically -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Bluetooth Printer (Phase 6, Section 15) -->
+        <div class="settings-section-card">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
+            Portable Bluetooth Thermal Printer
+          </h3>
+          <div style="margin-bottom: 6px;">
+            <span class="text-muted" style="font-size: 11px;">Status:</span> 
+            <span id="printer-status-pill" class="badge badge-warning">DISCONNECTED</span>
+          </div>
+          <p id="printer-status-details" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+            Supports 58mm and 80mm ESC/POS Bluetooth printers (Senda PT-210, GOOJPRT, POS-5802).
+          </p>
+          <div class="form-group">
+            <label>Paper Width:</label>
+            <select id="select-paper-width" class="form-control">
+              <option value="58mm" selected>58mm Roll (Standard Mobile)</option>
+              <option value="80mm">80mm Roll (Wide)</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button id="btn-connect-bluetooth" class="btn btn-sm btn-primary">
+              Connect Bluetooth Printer
+            </button>
+            <button id="btn-test-ticket" class="btn btn-sm btn-outline">
+              Test Ticket
+            </button>
+          </div>
+        </div>
+
+        <!-- Offline Disaster Recovery (Phase 8, Section 21) -->
+        <div class="settings-section-card">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" y2="3"/></svg>
+            Offline Database & Data Recovery
+          </h3>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+            Persistent IndexedDB storage ensures full data preservation across reloads and offline field use.
+          </p>
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <button id="btn-export-backup" class="btn btn-sm btn-primary">
+              Export JSON Backup File
+            </button>
+            <label class="btn btn-sm btn-outline" style="cursor: pointer; text-align: center;">
+              Restore from JSON Backup
+              <input type="file" id="input-restore-backup" accept=".json" style="display: none;">
+            </label>
+            <button id="btn-clear-all-pins" class="btn btn-sm btn-outline" style="color: var(--primary); font-weight: 700;">
+              Clear All Pinned GPS Locations (Start Fresh)
+            </button>
+            <button id="btn-wipe-clean-slate" class="btn btn-sm btn-outline" style="color: var(--danger); font-weight: 700;">
+              Wipe All Data & Start Empty Utility (0 Records)
+            </button>
+            <button id="btn-reset-seed-data" class="btn btn-sm btn-outline" style="color: var(--text-muted);">
+              Reset to Default Dicklum Demo Data
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation Bar (Compact, visible, zero emojis) -->
+  <nav class="app-bottom-nav">
+    <button class="nav-item" data-view="view-splash">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+        <polyline points="9 22 9 12 15 12 15 22"/>
+      </svg>
+      <span>Home</span>
+    </button>
+    <button class="nav-item active" data-view="view-map">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
+        <line x1="9" y1="3" y2="18"/>
+        <line x1="15" y1="6" y2="21"/>
+      </svg>
+      <span>Map</span>
+    </button>
+    <button class="nav-item" data-view="view-reading">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+      <span>Readings</span>
+    </button>
+    <button class="nav-item" data-view="view-billing">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/>
+        <path d="M14 8H8"/><path d="M16 12H8"/><path d="M13 16H8"/>
+      </svg>
+      <span>Bills</span>
+    </button>
+    <button class="nav-item" data-view="view-settings">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+      <span>Records</span>
+    </button>
+  </nav>
+
+</div>
+
+<!-- MODAL 1: Real Satellite Map Layer Switcher -->
+<div id="modal-map-layers" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>Select Basemap Layer</h3>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="display: flex; flex-direction: column; gap: 8px;">
+      <button class="btn btn-outline layer-choice-btn active" data-layer="google_hybrid" style="justify-content: flex-start; padding: 10px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/></svg>
+        <div style="text-align: left; margin-left: 8px;">
+          <strong>Google Satellite (Hybrid) — Full Zoom</strong>
+          <div style="font-size: 10.5px; color: var(--text-muted);">High-definition Google aerial view with roads & labels (Deep zoom to Level 22)</div>
+        </div>
+      </button>
+
+      <button class="btn btn-outline layer-choice-btn" data-layer="satellite" style="justify-content: flex-start; padding: 10px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 7 9 3 5 7l4 4"/><path d="m17 11 4 4-4 4-4-4"/><path d="m8 12 4 4 6-6-4-4Z"/></svg>
+        <div style="text-align: left; margin-left: 8px;">
+          <strong>Satellite Imagery (ESRI World Imagery)</strong>
+          <div style="font-size: 10.5px; color: var(--text-muted);">ArcGIS high-resolution commercial satellite ground view</div>
+        </div>
+      </button>
+
+      <button class="btn btn-outline layer-choice-btn" data-layer="streets" style="justify-content: flex-start; padding: 10px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/></svg>
+        <div style="text-align: left; margin-left: 8px;">
+          <strong>Standard Streets (OpenStreetMap)</strong>
+          <div style="font-size: 10.5px; color: var(--text-muted);">Clear cartographic road, trail, and boundary map</div>
+        </div>
+      </button>
+
+      <button class="btn btn-outline layer-choice-btn" data-layer="terrain" style="justify-content: flex-start; padding: 10px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 20 21 4 21 12 2"/></svg>
+        <div style="text-align: left; margin-left: 8px;">
+          <strong>Topographic Terrain (ESRI Topo)</strong>
+          <div style="font-size: 10.5px; color: var(--text-muted);">Elevation contour lines and field water elevation</div>
+        </div>
+      </button>
+
+      <button class="btn btn-outline layer-choice-btn" data-layer="dark" style="justify-content: flex-start; padding: 10px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20Z"/></svg>
+        <div style="text-align: left; margin-left: 8px;">
+          <strong>Dark Canvas (CartoDB)</strong>
+          <div style="font-size: 10.5px; color: var(--text-muted);">High-contrast dark mode for direct outdoor sunlight</div>
+        </div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 2: Thermal Receipt Preview & Print -->
+<div id="modal-thermal-preview" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>Thermal Receipt Print Preview</h3>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding: 0;">
+      <div class="thermal-paper-container">
+        <div id="thermal-paper-content">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="btn-browser-thermal-print" class="btn btn-outline">Browser Print</button>
+      <button id="btn-execute-thermal-print" class="btn btn-primary">Print to Bluetooth</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 3: A4 Official Billing Statement Preview -->
+<div id="modal-a4-preview" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card" style="max-width: 600px;">
+    <div class="modal-header">
+      <h3>Official A4 Statement of Account</h3>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding: 0;">
+      <div class="a4-preview-container">
+        <div id="a4-statement-content">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-close btn btn-outline">Close</button>
+      <button id="btn-execute-a4-print" class="btn btn-primary">Print / Save as PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 4: Drop Pin / Add Location Modal -->
+<div id="modal-drop-pin" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="modal-drop-pin-title">Pin Water Meter / Household on Map</h3>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <!-- Pin Type Toggle -->
+      <div style="display: flex; gap: 12px; margin-bottom: 10px;">
+        <label style="display: flex; align-items: center; gap: 5px; font-weight: 700; cursor: pointer; font-size: 13px;">
+          <input type="radio" name="pin-type" value="meter" checked>
+          Water Meter Pin
+        </label>
+        <label style="display: flex; align-items: center; gap: 5px; font-weight: 700; cursor: pointer; font-size: 13px;">
+          <input type="radio" name="pin-type" value="household">
+          Consumer Household Pin
+        </label>
+      </div>
+
+      <!-- Zone / Purok District Selector (Shared, Dynamic, & Expandable) -->
+      <div class="form-group" style="background: var(--surface-alt); padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+          <label style="font-weight: 700; margin: 0; font-size: 11.5px; color: var(--primary); display: flex; align-items: center; gap: 5px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Assigned Purok / Zone District:
+          </label>
+          <button type="button" id="btn-pin-toggle-add-zone" class="btn btn-xs btn-outline" style="font-size: 10.5px; padding: 2px 7px; font-weight: 600;">
+            + Add New Zone / Purok
+          </button>
+        </div>
+        <select id="pin-zone-select" class="form-control" style="font-weight: 600; font-size: 12px;">
+          <!-- Dynamically populated via db.getZones() -->
+        </select>
+
+        <!-- Inline New Zone Input Box -->
+        <div id="pin-add-zone-box" style="display: none; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color);">
+          <div style="font-size: 10.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">Enter New Purok or Zone District Name:</div>
+          <div style="display: flex; gap: 6px;">
+            <input type="text" id="input-new-zone-name" class="form-control" placeholder="e.g. Zone 5, Purok 5 - Riverside" style="font-size: 11.5px;">
+            <button type="button" id="btn-save-new-zone" class="btn btn-sm btn-primary" style="white-space: nowrap;">Save Zone</button>
+            <button type="button" id="btn-cancel-new-zone" class="btn btn-sm btn-outline">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Coordinates & Live GPS Locator -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 6px;">
+        <div class="form-group" style="margin: 0;">
+          <label style="font-size: 11px;">Latitude:</label>
+          <input type="text" id="pin-lat-input" class="form-control" placeholder="8.368500">
+        </div>
+        <div class="form-group" style="margin: 0;">
+          <label style="font-size: 11px;">Longitude:</label>
+          <input type="text" id="pin-lng-input" class="form-control" placeholder="124.862500">
+        </div>
+      </div>
+
+      <!-- Quick GPS Autofill Button (Standing Here) -->
+      <button type="button" id="btn-pin-use-gps" class="btn btn-sm btn-outline" style="width: 100%; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; color: var(--primary); border-color: var(--primary);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
+        </svg>
+        Use My Current GPS (Where I Am Standing)
+      </button>
+
+      <!-- Water Meter Pin Form -->
+      <div id="form-pin-meter">
+        <div class="form-group">
+          <label><strong>Water Meter Owner / Consumer Name:</strong></label>
+          <input type="text" id="pin-meter-owner-name" class="form-control" placeholder="e.g. Maria Clara Santos">
+          <div id="pin-meter-existing-consumer-row" class="hidden" style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
+            <span>Or link to existing consumer:</span>
+            <select id="pin-meter-consumer-select" class="form-control" style="font-size: 11px; padding: 4px 6px; margin-top: 2px;"></select>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div class="form-group">
+            <label>Meter Serial Number:</label>
+            <input type="text" id="pin-meter-no" class="form-control" placeholder="e.g. WM-2026-001">
+          </div>
+          <div class="form-group">
+            <label>Initial Reading (m³):</label>
+            <input type="number" id="pin-meter-initial-reading" class="form-control" value="0" min="0" placeholder="0">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Address / Purok / Landmark:</label>
+          <input type="text" id="pin-meter-address" class="form-control" placeholder="e.g. Purok 2, San Francisco Road">
+        </div>
+
+        <div class="form-group">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; background: rgba(76, 105, 114, 0.08); padding: 8px; border-radius: var(--radius-xs); border: 1px dashed var(--primary);">
+            <input type="checkbox" id="pin-meter-link-household" checked>
+            Also link & pin Household for this owner at this location
+          </label>
+        </div>
+
+        <!-- Meter Cluster Manifold (Separated by Selected Zone) -->
+        <div class="form-group" style="background: rgba(76, 105, 114, 0.05); padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label style="font-size: 11.5px; font-weight: 700; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 4px;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 6.5h10M7 17.5h10M6.5 7v10M17.5 7v10"/></svg>
+              Meter Cluster (Grouped Manifold in this Zone):
+            </label>
+            <button type="button" id="btn-pin-toggle-add-cluster" class="btn btn-xs btn-outline" style="font-size: 10px; padding: 2px 7px; font-weight: 600;">
+              + New Cluster in Zone
+            </button>
+          </div>
+          <select id="pin-cluster-select" class="form-control" style="font-size: 11.5px;">
+            <option value="">-- Individual Standalone Meter (No Cluster) --</option>
+          </select>
+          <div id="pin-cluster-zone-badge" style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">
+            Showing clusters in this Purok/Zone. Standalone meters do not belong to a cluster manifold.
+          </div>
+
+          <!-- Inline New Cluster Input Box -->
+          <div id="pin-add-cluster-box" style="display: none; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color);">
+            <div style="font-size: 10.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">New Cluster Manifold Name (for this Zone):</div>
+            <div style="display: flex; gap: 6px;">
+              <input type="text" id="input-new-cluster-name" class="form-control" placeholder="e.g. Manifold B - Purok Curve" style="font-size: 11.5px;">
+              <button type="button" id="btn-save-new-cluster" class="btn btn-sm btn-primary" style="white-space: nowrap;">Save Cluster</button>
+              <button type="button" id="btn-cancel-new-cluster" class="btn btn-sm btn-outline">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Field Notes / Reminders:</label>
+          <input type="text" id="pin-meter-notes" class="form-control" placeholder="e.g. In front of blue gate, clear dial...">
+        </div>
+      </div>
+
+      <!-- Household Pin Form -->
+      <div id="form-pin-household" style="display: none;">
+        <div class="form-group">
+          <label>Consumer Full Name:</label>
+          <input type="text" id="pin-house-name" class="form-control" placeholder="e.g. Maria Clara Santos">
+        </div>
+        <div class="form-group">
+          <label>Address / Landmark:</label>
+          <input type="text" id="pin-house-address" class="form-control" placeholder="e.g. San Francisco Road, Dicklum">
+        </div>
+        <div class="form-group">
+          <label>Contact Number:</label>
+          <input type="text" id="pin-house-contact" class="form-control" placeholder="0917-000-0000">
+        </div>
+        <div class="form-group">
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; background: rgba(76, 105, 114, 0.08); padding: 8px; border-radius: var(--radius-xs); border: 1px dashed var(--primary);">
+            <input type="checkbox" id="pin-house-link-meter" checked>
+            Also create & link Water Meter at this household
+          </label>
+        </div>
+        <div id="pin-house-meter-fields">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="form-group">
+              <label>Meter Serial #:</label>
+              <input type="text" id="pin-house-meter-no" class="form-control" placeholder="e.g. WM-2026-001">
+            </div>
+            <div class="form-group">
+              <label>Initial Reading (m³):</label>
+              <input type="number" id="pin-house-meter-initial" class="form-control" value="0" min="0">
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Field Notes / Reminders:</label>
+          <input type="text" id="pin-house-notes" class="form-control" placeholder="Near highway curve, blue gate...">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-close btn btn-outline">Cancel</button>
+      <button id="btn-save-drop-pin" class="btn btn-primary">Save Pin</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 5: Record Payment Modal -->
+<div id="modal-record-payment" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>Record Official Payment</h3>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div style="background: var(--surface-alt); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 10px; font-size: 12px;">
+        <div>Bill Reference: <strong id="pay-bill-id">BILL-001</strong></div>
+        <div>Consumer Name: <strong id="pay-consumer-name">Juan Carlos Dela Cruz</strong></div>
+        <div>Total Amount Due: <strong id="pay-amount-due" class="text-primary">PHP 100.00</strong></div>
+      </div>
+      <div class="form-group">
+        <label>Amount Paid (PHP):</label>
+        <input type="number" id="pay-amount-input" class="form-control" value="100.00" step="0.5">
+      </div>
+      <div class="form-group">
+        <label>Official Receipt (OR) Number:</label>
+        <input type="text" id="pay-or-input" class="form-control" value="OR-991204">
+      </div>
+      <div class="form-group">
+        <label>Collector / Cashier Name:</label>
+        <input type="text" id="pay-collector-input" class="form-control" value="R. Fernandez">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-close btn btn-outline">Cancel</button>
+      <button id="btn-confirm-payment" class="btn btn-success">Record Payment</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 6: Official Utility Report Preview (Phase 7, Section 18) -->
+<div id="modal-report-preview" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card" style="max-width: 900px; width: 95%;">
+    <div class="modal-header">
+      <h3 id="report-modal-title">Official Report Preview</h3>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding: 0;">
+      <div class="report-preview-container">
+        <div id="report-content-container">
+          <!-- Dynamically populated report -->
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-close btn btn-outline">Close</button>
+      <button id="btn-print-report-modal" class="btn btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+        Print / Save Report (PDF)
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 7: Individual Consumer History & Payment Ledger -->
+<div id="modal-consumer-history" class="app-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card" style="max-width: 700px; width: 95%; max-height: 90dvh; display: flex; flex-direction: column;">
+    <div class="modal-header">
+      <div>
+        <h3 id="hist-modal-consumer-name" style="margin: 0; font-size: 15px; color: var(--primary);">Consumer History</h3>
+        <span id="hist-modal-acct-pill" class="acct-pill" style="font-size: 10px;">DWA-2026-001</span>
+      </div>
+      <button class="modal-close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding: 12px; overflow-y: auto; flex: 1;">
+      <!-- Consumer Profile Summary -->
+      <div id="hist-consumer-summary-box" style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 12px; font-size: 11.5px;">
+        <!-- Populated dynamically -->
+      </div>
+
+      <!-- Quick Financial Counters -->
+      <div class="metrics-ribbon" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 14px;">
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
+          <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; display: block;">Total Billed</span>
+          <strong id="hist-stat-billed" style="font-size: 13.5px; color: var(--text-primary);">PHP 0.00</strong>
+        </div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
+          <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; display: block;">Total Paid</span>
+          <strong id="hist-stat-paid" style="font-size: 13.5px; color: #059669;">PHP 0.00</strong>
+        </div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
+          <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; display: block;">Balance Due</span>
+          <strong id="hist-stat-balance" style="font-size: 13.5px; color: #DC2626;">PHP 0.00</strong>
+        </div>
+      </div>
+
+      <!-- Chronological Payment & Billing Records -->
+      <div style="margin-bottom: 14px;">
+        <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+          <span>Individual Bills & Payment Records</span>
+          <span id="hist-bills-count" class="badge badge-primary">0 Bills</span>
+        </h4>
+        <div id="hist-bills-list-container" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Dynamically populated bill cards -->
+        </div>
+      </div>
+
+      <!-- Individual Meter Readings History -->
+      <div>
+        <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+          <span>Meter Readings Log</span>
+          <span id="hist-readings-count" class="badge badge-warning">0 Readings</span>
+        </h4>
+        <div id="hist-readings-list-container" style="display: flex; flex-direction: column; gap: 6px;">
+          <!-- Dynamically populated reading log -->
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+      <button class="modal-close btn btn-outline">Close</button>
+      <button id="hist-btn-print-statement" class="btn btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Print Statement (A4)
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Scripts -->
+<script src="js/icons.js"></script>
+<script src="js/db.js"></script>
+<script src="js/sampleData.js"></script>
+<script src="js/billing.js"></script>
+<script src="js/reading.js"></script>
+<script src="js/thermalPrinter.js"></script>
+<script src="js/a4Statement.js"></script>
+<script src="js/reports.js"></script>
+<script src="js/backup.js"></script>
+<script src="js/mapEngine.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,364 @@
+/* Dicklum Water Association - A4 PDF Billing Statement Stylesheet */
+
+.a4-preview-container {
+  background: #CBD5E1;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+}
+
+.a4-document {
+  background: #FFFFFF;
+  width: 100%;
+  max-width: 210mm;
+  min-height: 297mm;
+  padding: 18mm 16mm;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #111827;
+  font-size: 11.5px;
+  line-height: 1.4;
+  position: relative;
+}
+
+/* Header */
+.a4-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2px solid #1B5E20;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+
+.a4-header-logo {
+  flex-shrink: 0;
+}
+
+.a4-header-text {
+  flex: 1;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.a4-header-text h1 {
+  font-size: 17px;
+  color: #1B5E20;
+  font-weight: 800;
+  margin-bottom: 2px;
+  letter-spacing: 0.5px;
+}
+
+.a4-subtitle {
+  font-size: 11px;
+  color: #374151;
+  font-weight: 600;
+}
+
+.a4-meta {
+  font-size: 9.5px;
+  color: #6B7280;
+}
+
+.a4-title-badge {
+  display: inline-block;
+  background: #E8F5E9;
+  color: #1B5E20;
+  font-weight: 800;
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: 4px;
+  margin-top: 6px;
+  letter-spacing: 1px;
+  border: 1px solid #A5D6A7;
+}
+
+.a4-header-billno {
+  flex-shrink: 0;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.billno-box, .billdate-box {
+  background: #F3F4F6;
+  border: 1px solid #D1D5DB;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.billno-box .lbl, .billdate-box .lbl {
+  display: block;
+  font-size: 8.5px;
+  color: #6B7280;
+  font-weight: 700;
+}
+
+.billno-box .val, .billdate-box .val {
+  font-size: 12px;
+  font-weight: 800;
+  color: #111827;
+}
+
+/* 2-Column Panels */
+.a4-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.a4-panel {
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.a4-panel-title {
+  background: #F8FAF9;
+  border-bottom: 1px solid #E5E7EB;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #1B5E20;
+  padding: 6px 10px;
+  letter-spacing: 0.5px;
+}
+
+.a4-table-compact {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.a4-table-compact td {
+  padding: 4px 10px;
+  border-bottom: 1px solid #F3F4F6;
+}
+
+.a4-table-compact td.lbl {
+  color: #6B7280;
+  width: 38%;
+}
+
+.a4-table-compact td.val.highlight {
+  font-weight: 800;
+  color: #1E40AF;
+}
+
+/* Computation Table */
+.a4-section {
+  margin-bottom: 14px;
+}
+
+.a4-table-bordered {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid #D1D5DB;
+  font-size: 11px;
+}
+
+.a4-table-bordered th {
+  background: #E8F5E9;
+  color: #1B5E20;
+  font-weight: 700;
+  padding: 6px 8px;
+  border: 1px solid #D1D5DB;
+  text-align: left;
+}
+
+.a4-table-bordered td {
+  padding: 6px 8px;
+  border: 1px solid #E5E7EB;
+}
+
+/* Itemized Charges & Advisory */
+.a4-grid-charges {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 14px;
+}
+
+.a4-advisory-box {
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 10px;
+}
+
+.a4-advisory-box h4 {
+  font-size: 10.5px;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.a4-advisory-box ul {
+  padding-left: 14px;
+  line-height: 1.4;
+  color: #4B5563;
+}
+
+.payment-status-badge {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: 800;
+  font-size: 10.5px;
+}
+
+.status-paid {
+  background: #DEF7EC;
+  color: #03543F;
+  border: 1px solid #84E1BC;
+}
+
+.status-unpaid {
+  background: #FEE2E2;
+  color: #991B1B;
+  border: 1px solid #F87171;
+}
+
+.a4-charges-box {
+  border: 1px solid #D1D5DB;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.a4-table-charges {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.a4-table-charges td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #E5E7EB;
+}
+
+.a4-table-charges tr.total-row {
+  background: #E8F5E9;
+  font-size: 13px;
+  color: #1B5E20;
+}
+
+/* Tear-off Line */
+.a4-tear-off {
+  margin: 18px 0 12px 0;
+}
+
+.tear-off-line {
+  border-top: 1.5px dashed #9CA3AF;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 4px;
+  font-size: 9.5px;
+  color: #6B7280;
+}
+
+.scissors {
+  font-size: 12px;
+}
+
+/* Cashier Stub */
+.a4-stub {
+  border: 1px solid #D1D5DB;
+  border-radius: 6px;
+  padding: 10px;
+  background: #F9FAFB;
+  font-size: 10px;
+}
+
+.stub-header {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid #E5E7EB;
+  padding-bottom: 4px;
+  margin-bottom: 6px;
+}
+
+.stub-body {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.stub-total {
+  font-size: 12px;
+  color: #1B5E20;
+}
+
+.stub-footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  color: #6B7280;
+  border-top: 1px dashed #D1D5DB;
+  padding-top: 4px;
+}
+
+/* Print Media Query */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #modal-a4-preview.active,
+  #modal-a4-preview.active *,
+  #modal-report-preview.active,
+  #modal-report-preview.active *,
+  body.printing-a4 #modal-a4-preview,
+  body.printing-a4 #modal-a4-preview *,
+  body.printing-a4 #modal-report-preview,
+  body.printing-a4 #modal-report-preview * {
+    visibility: visible;
+  }
+
+  #modal-a4-preview.active,
+  #modal-report-preview.active,
+  body.printing-a4 #modal-a4-preview,
+  body.printing-a4 #modal-report-preview {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+  }
+
+  .modal-card {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  .modal-header, .modal-footer, .modal-backdrop {
+    display: none !important;
+  }
+
+  .a4-preview-container,
+  .report-preview-container {
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  .a4-document,
+  .report-document {
+    box-shadow: none !important;
+    padding: 8mm !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  @page {
+    size: auto;
+    margin: 8mm;
+  }
+}

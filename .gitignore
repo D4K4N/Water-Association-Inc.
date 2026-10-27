@@ -1,0 +1,31 @@
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment & Private Keys
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Sensitive Customer Records & Data Backups (Do not commit real customer records to Git)
+*.backup.json
+dicklum-backup-*.json
+*.bak
+backups/
+export/
+
+# Runtime Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Node modules
+node_modules/
+
+# Local cache & build outputs
+dist/
+build/
+.cache/

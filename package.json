@@ -2,7 +2,6 @@
   "name": "dicklum-water-billing",
   "version": "1.0.0",
   "description": "Dicklum Water Association, Inc. - Mobile Water Billing & Field Operations System",
-  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "node test-suite.js"

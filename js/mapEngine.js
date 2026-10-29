@@ -38,14 +38,14 @@ function createRobustTileLayer(primaryUrl, options = {}, fallbackUrl = null) {
   return layer;
 }
 
-// Available high-performance tile layer configurations
+// Available high-performance tile layer configurations (Google Satellite Hybrid & Standard Streets)
 const LAYER_PROVIDERS = {
   google_hybrid: {
     name: 'Google Satellite (Hybrid)',
     createLayer: () => createRobustTileLayer(
-      'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+      'https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}',
       {
-        subdomains: ['0', '1', '2', '3'],
+        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         maxZoom: 22,
         maxNativeZoom: 20,
         attribution: '© Google Maps'
@@ -55,28 +55,7 @@ const LAYER_PROVIDERS = {
   },
   hybrid: {
     name: 'Google Satellite (Hybrid)',
-    createLayer: () => createRobustTileLayer(
-      'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-      {
-        subdomains: ['0', '1', '2', '3'],
-        maxZoom: 22,
-        maxNativeZoom: 20,
-        attribution: '© Google Maps'
-      },
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-    )
-  },
-  satellite: {
-    name: 'Satellite (ESRI World Imagery)',
-    createLayer: () => createRobustTileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 22,
-        maxNativeZoom: 18,
-        attribution: '© ESRI World Imagery, Maxar'
-      },
-      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
-    )
+    createLayer: () => LAYER_PROVIDERS.google_hybrid.createLayer()
   },
   streets: {
     name: 'Standard Streets (OpenStreetMap)',
@@ -87,29 +66,6 @@ const LAYER_PROVIDERS = {
         maxZoom: 22,
         maxNativeZoom: 19,
         attribution: '© OpenStreetMap contributors'
-      }
-    )
-  },
-  terrain: {
-    name: 'Topographic Terrain (ESRI Topo)',
-    createLayer: () => createRobustTileLayer(
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-      {
-        maxZoom: 22,
-        maxNativeZoom: 18,
-        attribution: '© ESRI World Topo'
-      }
-    )
-  },
-  dark: {
-    name: 'Dark Canvas (CartoDB)',
-    createLayer: () => createRobustTileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-      {
-        subdomains: ['a', 'b', 'c', 'd'],
-        maxZoom: 22,
-        maxNativeZoom: 19,
-        attribution: '© CARTO, © OpenStreetMap'
       }
     )
   }
@@ -373,59 +329,106 @@ class FieldMapEngine {
 
   // ─── GPS / Real Device Location ───────────────────────────────────────────
 
+  _calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // Earth radius in meters
+    const phi1 = lat1 * Math.PI / 180;
+    const phi2 = lat2 * Math.PI / 180;
+    const dPhi = (lat2 - lat1) * Math.PI / 180;
+    const dLam = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dPhi / 2) * Math.sin(dPhi / 2) +
+              Math.cos(phi1) * Math.cos(phi2) *
+              Math.sin(dLam / 2) * Math.sin(dLam / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
   setUserGps(lat, lng, accuracy, heading) {
     if (!this._map) return;
+
+    // Stationary jitter deadband: if device moved < 2.0 meters, suppress jitter
+    if (this._lastGpsRenderPos) {
+      const movedDist = this._calculateDistanceMeters(
+        this._lastGpsRenderPos.lat,
+        this._lastGpsRenderPos.lng,
+        lat,
+        lng
+      );
+      if (movedDist < 2.0) {
+        lat = this._lastGpsRenderPos.lat;
+        lng = this._lastGpsRenderPos.lng;
+      } else {
+        this._lastGpsRenderPos = { lat, lng };
+      }
+    } else {
+      this._lastGpsRenderPos = { lat, lng };
+    }
+
     this._userGps = { lat, lng, accuracy, heading };
+
+    // Clamped visual accuracy circle so coarse fixes (e.g. 1500m cell tower) do not flood the screen
+    // Visually capped between 6m and 60m radius for clear readability on mobile
+    const visualRadius = Math.min(Math.max(accuracy || 10, 6), 60);
 
     // Update Accuracy Circle
     if (!this._gpsAccuracyCircle) {
       this._gpsAccuracyCircle = L.circle([lat, lng], {
-        radius: accuracy || 10,
-        color: '#4C6972',
+        radius: visualRadius,
+        color: '#0284c7',
         weight: 1.5,
-        opacity: 0.5,
-        fillColor: '#4C6972',
-        fillOpacity: 0.12
+        opacity: 0.6,
+        fillColor: '#38bdf8',
+        fillOpacity: 0.15
       }).addTo(this._map);
     } else {
       this._gpsAccuracyCircle.setLatLng([lat, lng]);
-      if (accuracy != null) this._gpsAccuracyCircle.setRadius(accuracy);
+      this._gpsAccuracyCircle.setRadius(visualRadius);
     }
 
-    // Update GPS Dot Marker with Heading Cone
-    const coneStyle = (heading != null && !isNaN(heading))
-      ? `display:block; transform:rotate(${heading}deg);`
-      : 'display:none;';
-
-    const gpsHtml = `
-      <div class="gps-dot-container" style="position:relative; width:24px; height:24px; display:flex; align-items:center; justify-content:center;">
-        <div class="gps-heading-cone" style="${coneStyle}"></div>
-        <div class="gps-dot-halo"></div>
-        <div class="gps-dot"></div>
-        <div class="gps-dot-core"></div>
-      </div>
-    `;
-
-    const gpsIcon = L.divIcon({
-      className: 'custom-gps-icon',
-      html: gpsHtml,
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
-    });
-
+    // Update GPS Dot Marker without destroying the DOM on every tick
     if (!this._gpsMarker) {
+      const coneStyle = (heading != null && !isNaN(heading))
+        ? `display:block; transform:rotate(${heading}deg);`
+        : 'display:none;';
+
+      const gpsHtml = `
+        <div class="gps-dot-container" style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">
+          <div class="gps-heading-cone" id="gps-marker-cone" style="${coneStyle}"></div>
+          <div class="gps-dot-halo"></div>
+          <div class="gps-dot" style="background:#0284c7; border:2.5px solid #ffffff; box-shadow:0 0 8px rgba(2,132,199,0.7); width:14px; height:14px; border-radius:50%;"></div>
+        </div>
+      `;
+
+      const gpsIcon = L.divIcon({
+        className: 'custom-gps-icon',
+        html: gpsHtml,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+
       this._gpsMarker = L.marker([lat, lng], {
         icon: gpsIcon,
         zIndexOffset: 1000
       }).addTo(this._map);
     } else {
+      // Smoothly update location without rebuilding DOM icon element
       this._gpsMarker.setLatLng([lat, lng]);
-      this._gpsMarker.setIcon(gpsIcon);
+
+      // Rotate heading cone directly via DOM
+      const cone = document.getElementById('gps-marker-cone');
+      if (cone) {
+        if (heading != null && !isNaN(heading)) {
+          cone.style.display = 'block';
+          cone.style.transform = `rotate(${heading}deg)`;
+        } else {
+          cone.style.display = 'none';
+        }
+      }
     }
   }
 
   clearUserGps() {
     this._userGps = null;
+    this._lastGpsRenderPos = null;
     if (this._gpsMarker) {
       this._map.removeLayer(this._gpsMarker);
       this._gpsMarker = null;

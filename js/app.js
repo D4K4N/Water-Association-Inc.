@@ -7,8 +7,8 @@
 
 class WaterBillingApp {
   constructor() {
-    this.activeView = 'view-splash';
-    this.currentMode = 'mapping'; // 'mapping' or 'reading'
+    this.activeView = 'view-map'; // Launch directly to Unified Map Dashboard
+    this.currentMode = 'mapping';
     this.activeConsumer = null;
     this.activeMeter = null;
     this.activeCluster = null;
@@ -52,7 +52,7 @@ class WaterBillingApp {
     // 2. Load cached records
     await this.refreshDataCache();
 
-    // 3. Initialize Satellite Map Engine
+    // 3. Initialize Satellite Map Engine (Direct Launch)
     const mapContainer = document.getElementById('field-map');
     if (mapContainer) {
       this.mapEngine = new window.FieldMapEngine(mapContainer, {
@@ -64,6 +64,12 @@ class WaterBillingApp {
 
       this.mapEngine.selectPinCallback = (pin) => this.handlePinSelect(pin);
       this.mapEngine.dropPinCallback = (lat, lng) => this.handleMapTapToPin(lat, lng);
+
+      [50, 150, 350, 800].forEach(delay => {
+        setTimeout(() => {
+          if (this.mapEngine) this.mapEngine.resize();
+        }, delay);
+      });
     }
 
     // 4. Setup Bluetooth printer listener
@@ -174,30 +180,20 @@ class WaterBillingApp {
   }
 
   setMode(mode) {
-    this.currentMode = mode; // 'mapping' or 'reading'
+    this.currentMode = mode || 'mapping';
 
     const modeBadge = document.getElementById('current-mode-badge');
     if (modeBadge) {
-      if (mode === 'mapping') {
-        modeBadge.className = 'mode-badge mapping';
-        modeBadge.textContent = 'MAPPING MODE';
-      } else {
-        modeBadge.className = 'mode-badge reading';
-        modeBadge.textContent = 'READING MODE';
-      }
+      modeBadge.textContent = 'UNIFIED MAP';
     }
 
     if (this.mapEngine) {
-      this.mapEngine.setMappingMode(mode);
+      this.mapEngine.setMappingMode(this.currentMode);
     }
-
-    document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
 
     const fabPin = document.getElementById('fab-add-pin');
     if (fabPin) {
-      fabPin.style.display = mode === 'mapping' ? 'flex' : 'none';
+      fabPin.style.display = 'flex';
     }
   }
 
@@ -383,14 +379,27 @@ class WaterBillingApp {
 
   toggleRealtimeGps() {
     if (!navigator.geolocation) {
-      alert('Geolocation is not supported by this browser/device.\n\nFor GPS to work:\n• Use Chrome or Edge on Android\n• Access the app via HTTPS or localhost\n• Enable Location Services in device settings');
+      alert('Geolocation is not supported by this browser/device.\n\nFor GPS to work:\n• Use Chrome or Safari on mobile\n• Access the app via HTTPS\n• Enable Location Services and "Precise Location" in device settings');
       return;
     }
 
     if (this.gpsWatchId !== null) {
-      // Already tracking — recenter map on current GPS position instead of stopping
+      // Already tracking — recenter map directly on current GPS position with deep zoom 19
       if (this.mapEngine && this.mapEngine.userGps) {
-        this.mapEngine.panTo(this.mapEngine.userGps.lat, this.mapEngine.userGps.lng);
+        const { lat, lng } = this.mapEngine.userGps;
+        this.mapEngine.panTo(lat, lng, 19);
+        const btn = document.getElementById('btn-gps-my-location');
+        if (btn) {
+          const oldHtml = btn.innerHTML;
+          btn.innerHTML = `${window.AppIcons.crosshair()} Re-centered!`;
+          setTimeout(() => {
+            if (this.gpsWatchId !== null && this.mapEngine && this.mapEngine.userGps) {
+              const acc = Math.round(this.mapEngine.userGps.accuracy || 0);
+              const icon = acc <= 15 ? '●' : acc <= 40 ? '◉' : '○';
+              btn.innerHTML = `${window.AppIcons.crosshair()} ${icon} ±${acc}m`;
+            }
+          }, 1200);
+        }
       } else {
         this.stopRealtimeGps();
       }
@@ -405,29 +414,48 @@ class WaterBillingApp {
     btn.classList.add('active');
     btn.innerHTML = `${window.AppIcons.crosshair()} Acquiring GPS...`;
 
-    // Track whether we've already panned to the first location
+    // Track whether we've centered on real device location and the best accuracy seen
     this._gpsPannedOnce = false;
+    this._bestGpsAccuracy = Infinity;
 
     this.gpsWatchId = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude, accuracy, heading, speed } = pos.coords;
 
         if (this.mapEngine) {
-          // Update the GPS marker with real coordinates and heading
+          // Update the GPS marker with real coordinates, accuracy circle, and heading
           this.mapEngine.setUserGps(latitude, longitude, accuracy, heading);
 
-          // Auto-pan to device only on the FIRST GPS fix, not on every update
-          // (so the user can pan the map freely after initial centering)
-          if (!this._gpsPannedOnce) {
-            this._gpsPannedOnce = true;
-            this.mapEngine.panTo(latitude, longitude);
+          // Only auto-center the camera when we have an acceptable fix (<= 60m).
+          // Coarse cell-tower fixes (> 60m) are rendered on map but do NOT violently yank camera miles away.
+          if (accuracy <= 60) {
+            if (!this._gpsPannedOnce) {
+              this._gpsPannedOnce = true;
+              this._bestGpsAccuracy = accuracy;
+              const targetZoom = accuracy <= 20 ? 19 : 18;
+              this.mapEngine.panTo(latitude, longitude, targetZoom);
+            } else if (accuracy < this._bestGpsAccuracy - 20) {
+              // Only snap camera again if accuracy got dramatically sharper (e.g. from 55m down to 12m)
+              this._bestGpsAccuracy = accuracy;
+              this.mapEngine.panTo(latitude, longitude, 19);
+            }
           }
         }
 
-        // Update button with accuracy indicator
-        const accuracyIcon = accuracy <= 10 ? '●' : accuracy <= 30 ? '◉' : '○';
-        btn.innerHTML = `${window.AppIcons.crosshair()} ${accuracyIcon} ±${Math.round(accuracy)}m`;
-        btn.title = `GPS Active\nLat: ${latitude.toFixed(6)}\nLng: ${longitude.toFixed(6)}\nAccuracy: ±${Math.round(accuracy)}m${heading !== null ? '\nHeading: ' + Math.round(heading) + '°' : ''}`;
+        // Update button with real accuracy indicator
+        let accuracyStatus = '';
+        if (accuracy <= 10) {
+          accuracyStatus = `● ±${Math.round(accuracy)}m`;
+        } else if (accuracy <= 25) {
+          accuracyStatus = `● ±${Math.round(accuracy)}m`;
+        } else if (accuracy <= 60) {
+          accuracyStatus = `◉ ±${Math.round(accuracy)}m`;
+        } else {
+          accuracyStatus = `○ ±${Math.round(accuracy)}m (Acquiring)`;
+        }
+
+        btn.innerHTML = `${window.AppIcons.crosshair()} ${accuracyStatus}`;
+        btn.title = `GPS Status:\nLat: ${latitude.toFixed(6)}\nLng: ${longitude.toFixed(6)}\nAccuracy: ±${Math.round(accuracy)}m${accuracy > 50 ? '\nTip: Move outdoors or turn ON "Precise Location" in phone settings for pinpoint accuracy.' : '\nHigh precision satellite lock.'}`;
 
         // If recording route, append point
         if (this.isRecordingRoute) {
@@ -439,13 +467,13 @@ class WaterBillingApp {
         let msg = '';
         switch(err.code) {
           case 1:
-            msg = 'Location permission denied.\n\nTo enable GPS:\n1. Tap the lock icon in the address bar\n2. Allow Location access\n3. Refresh the page';
+            msg = 'Location permission denied.\n\nTo enable GPS:\n1. Tap the lock icon in the browser address bar\n2. Allow Location access (turn on "Precise Location")\n3. Refresh the page';
             break;
           case 2:
-            msg = 'GPS signal unavailable. Make sure:\n• Location services are enabled on your device\n• You are outdoors or near a window for better signal';
+            msg = 'GPS signal unavailable. Make sure:\n• Location services are enabled on your device\n• You are outdoors or near a window for better satellite lock';
             break;
           case 3:
-            msg = 'GPS request timed out. This can happen in areas with poor satellite coverage. Please try again outdoors.';
+            msg = 'GPS request timed out. This can happen in areas with weak satellite coverage. Please try again outdoors.';
             break;
           default:
             msg = 'Unable to acquire GPS location: ' + err.message;
@@ -459,8 +487,8 @@ class WaterBillingApp {
       },
       {
         enableHighAccuracy: true,
-        timeout: 20000,
-        maximumAge: 5000
+        timeout: 25000,
+        maximumAge: 0 // Always query hardware GPS, never accept stale cached coordinates
       }
     );
   }
@@ -471,6 +499,7 @@ class WaterBillingApp {
       this.gpsWatchId = null;
     }
     this._gpsPannedOnce = false;
+    this._bestGpsAccuracy = Infinity;
     const btn = document.getElementById('btn-gps-my-location');
     if (btn) {
       btn.classList.remove('active');
@@ -503,9 +532,21 @@ class WaterBillingApp {
   }
 
   appendRoutePoint(lat, lng, accuracy) {
+    const numLat = Number(lat);
+    const numLng = Number(lng);
+
+    // Suppress stationary jitter: don't record route point if moved < 2.5 meters
+    if (this.recordedRoutePoints.length > 0) {
+      const last = this.recordedRoutePoints[this.recordedRoutePoints.length - 1];
+      const distFromLast = this.calculateDistanceMeters(last.lat, last.lng, numLat, numLng);
+      if (distFromLast < 2.5) {
+        return;
+      }
+    }
+
     const pt = {
-      lat: Number(lat),
-      lng: Number(lng),
+      lat: numLat,
+      lng: numLng,
       time: new Date().toISOString(),
       accuracy: Math.round(accuracy || 0)
     };
@@ -916,6 +957,75 @@ class WaterBillingApp {
     container.innerHTML = window.a4StatementGenerator.generateHTML(bill, consumer, meter, this.cachedSettings);
 
     document.getElementById('modal-a4-preview').classList.add('active');
+  }
+
+  async downloadElementAsPdf(element, filename) {
+    if (!element) return;
+    filename = filename || 'document.pdf';
+    if (!filename.endsWith('.pdf')) filename += '.pdf';
+
+    const activeBtn = document.activeElement;
+    let origText = '';
+    if (activeBtn && activeBtn.tagName === 'BUTTON') {
+      origText = activeBtn.innerHTML;
+      activeBtn.disabled = true;
+      activeBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+        Saving PDF...
+      `;
+    }
+
+    try {
+      if (typeof html2pdf !== 'undefined') {
+        const opt = {
+          margin: [8, 8, 8, 8],
+          filename: filename,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+        await html2pdf().set(opt).from(element).save();
+      } else {
+        // Fallback: standalone print window
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <title>${filename}</title>
+              <link rel="stylesheet" href="css/styles.css">
+              <link rel="stylesheet" href="css/print-a4.css">
+              <style>
+                @page { size: A4; margin: 8mm; }
+                body { margin: 0; padding: 10px; background: #fff; font-family: sans-serif; }
+              </style>
+            </head>
+            <body>
+              ${element.innerHTML}
+              <script>
+                window.onload = function() { window.print(); }
+              <\/script>
+            </body>
+            </html>
+          `);
+          printWindow.document.close();
+        } else {
+          document.body.classList.add('printing-a4');
+          window.print();
+          setTimeout(() => document.body.classList.remove('printing-a4'), 1000);
+        }
+      }
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+      alert('PDF generation encountered an error: ' + err.message + '. Opening print preview instead.');
+      window.print();
+    } finally {
+      if (activeBtn && origText) {
+        activeBtn.disabled = false;
+        activeBtn.innerHTML = origText;
+      }
+    }
   }
 
   async executeThermalPrint() {
@@ -1709,15 +1819,19 @@ class WaterBillingApp {
   // --- Event Binding ---
 
   bindNavigationEvents() {
-    document.getElementById('card-mode-mapping').addEventListener('click', () => {
-      this.setMode('mapping');
-      this.switchView('view-map');
-    });
+    const cardMapping = document.getElementById('card-mode-mapping');
+    if (cardMapping) {
+      cardMapping.addEventListener('click', () => {
+        this.switchView('view-map');
+      });
+    }
 
-    document.getElementById('card-mode-reading').addEventListener('click', () => {
-      this.setMode('reading');
-      this.switchView('view-map');
-    });
+    const cardReading = document.getElementById('card-mode-reading');
+    if (cardReading) {
+      cardReading.addEventListener('click', () => {
+        this.switchView('view-reading');
+      });
+    }
 
     document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -2057,14 +2171,27 @@ class WaterBillingApp {
       this.executeBrowserThermalPrint();
     });
 
-    document.getElementById('btn-execute-a4-print').addEventListener('click', () => {
-      document.body.classList.add('printing-a4');
-      document.body.classList.remove('printing-thermal');
-      window.print();
-      setTimeout(() => {
-        document.body.classList.remove('printing-a4');
-      }, 1000);
-    });
+    const btnDownloadA4 = document.getElementById('btn-download-a4-pdf');
+    if (btnDownloadA4) {
+      btnDownloadA4.addEventListener('click', async () => {
+        const el = document.getElementById('a4-statement-content');
+        if (!el) return;
+        const filename = this.activeBill ? `Dicklum_SOA_${this.activeBill.id}.pdf` : 'Dicklum_Statement_of_Account.pdf';
+        await this.downloadElementAsPdf(el, filename);
+      });
+    }
+
+    const btnPrintA4 = document.getElementById('btn-execute-a4-print');
+    if (btnPrintA4) {
+      btnPrintA4.addEventListener('click', () => {
+        document.body.classList.add('printing-a4');
+        document.body.classList.remove('printing-thermal');
+        window.print();
+        setTimeout(() => {
+          document.body.classList.remove('printing-a4');
+        }, 1000);
+      });
+    }
 
     document.getElementById('btn-confirm-payment').addEventListener('click', () => {
       this.submitPayment();
@@ -2103,14 +2230,28 @@ class WaterBillingApp {
       this.openConsumerDirectoryReport();
     });
 
-    document.getElementById('btn-print-report-modal').addEventListener('click', () => {
-      document.body.classList.add('printing-a4');
-      document.body.classList.remove('printing-thermal');
-      window.print();
-      setTimeout(() => {
-        document.body.classList.remove('printing-a4');
-      }, 1000);
-    });
+    const btnDownloadReport = document.getElementById('btn-download-report-pdf');
+    if (btnDownloadReport) {
+      btnDownloadReport.addEventListener('click', async () => {
+        const el = document.getElementById('report-content-container');
+        if (!el) return;
+        const rawTitle = document.getElementById('report-modal-title')?.textContent || 'Dicklum_Report';
+        const filename = rawTitle.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
+        await this.downloadElementAsPdf(el, filename);
+      });
+    }
+
+    const btnPrintReport = document.getElementById('btn-print-report-modal');
+    if (btnPrintReport) {
+      btnPrintReport.addEventListener('click', () => {
+        document.body.classList.add('printing-a4');
+        document.body.classList.remove('printing-thermal');
+        window.print();
+        setTimeout(() => {
+          document.body.classList.remove('printing-a4');
+        }, 1000);
+      });
+    }
 
     // Bluetooth Printer
     document.getElementById('btn-connect-bluetooth').addEventListener('click', async () => {
@@ -2414,27 +2555,59 @@ class WaterBillingApp {
           alert('Geolocation is not supported by your browser.');
           return;
         }
-        btnPinUseGps.textContent = 'Locating GPS position...';
-        navigator.geolocation.getCurrentPosition(
+
+        // If real-time GPS is already active with high precision, use it immediately
+        if (this.mapEngine && this.mapEngine.userGps && this.mapEngine.userGps.accuracy <= 25) {
+          const { lat, lng, accuracy } = this.mapEngine.userGps;
+          const latInput = document.getElementById('pin-lat-input');
+          const lngInput = document.getElementById('pin-lng-input');
+          if (latInput) latInput.value = lat.toFixed(6);
+          if (lngInput) lngInput.value = lng.toFixed(6);
+          btnPinUseGps.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" x2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
+            </svg>
+            GPS Locked (±${Math.round(accuracy)}m): ${lat.toFixed(5)}, ${lng.toFixed(5)}
+          `;
+          this.mapEngine.panTo(lat, lng, 19);
+          return;
+        }
+
+        btnPinUseGps.innerHTML = `${window.AppIcons.crosshair()} Locking onto GPS satellites...`;
+
+        // Progressive high-accuracy GPS refinement
+        let bestAccuracy = Infinity;
+        let bestCoords = null;
+        const watchId = navigator.geolocation.watchPosition(
           (pos) => {
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            const latInput = document.getElementById('pin-lat-input');
-            const lngInput = document.getElementById('pin-lng-input');
-            if (latInput) latInput.value = lat.toFixed(6);
-            if (lngInput) lngInput.value = lng.toFixed(6);
-            btnPinUseGps.innerHTML = `
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" x2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
-              </svg>
-              GPS Locked: ${lat.toFixed(5)}, ${lng.toFixed(5)}
-            `;
-            if (this.mapEngine) {
-              this.mapEngine.panTo(lat, lng, 18);
+            const { latitude, longitude, accuracy } = pos.coords;
+            if (accuracy < bestAccuracy) {
+              bestAccuracy = accuracy;
+              bestCoords = { latitude, longitude };
+              const latInput = document.getElementById('pin-lat-input');
+              const lngInput = document.getElementById('pin-lng-input');
+              if (latInput) latInput.value = latitude.toFixed(6);
+              if (lngInput) lngInput.value = longitude.toFixed(6);
+              btnPinUseGps.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" x2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
+                </svg>
+                GPS Locked (±${Math.round(accuracy)}m): ${latitude.toFixed(5)}, ${longitude.toFixed(5)}
+              `;
+              if (this.mapEngine) {
+                this.mapEngine.setUserGps(latitude, longitude, accuracy);
+                this.mapEngine.panTo(latitude, longitude, 19);
+              }
+
+              // Once satellite accuracy drops to 15 meters or better, stop watching
+              if (accuracy <= 15) {
+                navigator.geolocation.clearWatch(watchId);
+              }
             }
           },
           (err) => {
-            alert(`Could not get GPS location: ${err.message}. You can still enter coordinates or tap anywhere on the map.`);
+            navigator.geolocation.clearWatch(watchId);
+            alert(`GPS Signal Error: ${err.message}. Make sure device Location and "Precise Location" are turned ON.`);
             btnPinUseGps.innerHTML = `
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" x2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
@@ -2442,8 +2615,13 @@ class WaterBillingApp {
               Use My Current GPS (Where I Am Standing)
             `;
           },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
         );
+
+        // Stop watching after 8 seconds
+        setTimeout(() => {
+          navigator.geolocation.clearWatch(watchId);
+        }, 8000);
       });
     }
 

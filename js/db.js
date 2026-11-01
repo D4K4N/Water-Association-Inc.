@@ -267,16 +267,36 @@ class WaterDB {
 
   // --- Zones & Purok Districts Management ---
 
+  normalizeZoneName(zoneName) {
+    if (!zoneName || typeof zoneName !== 'string') return 'Zone 1';
+    const trimmed = zoneName.trim();
+    const m = trimmed.match(/^(Zone\s*\d+)\s*[-–—]\s*(Dicklum Central|San Francisco|Sayre Highway\s*&\s*Riverside|Upper Dicklum)$/i);
+    if (m) {
+      return m[1].replace(/\s+/g, ' ');
+    }
+    return trimmed;
+  }
+
   async getZones() {
     const defaultZones = [
-      'Zone 1 - Dicklum Central',
-      'Zone 2 - San Francisco',
-      'Zone 3 - Sayre Highway & Riverside',
-      'Zone 4 - Upper Dicklum'
+      'Zone 1',
+      'Zone 2',
+      'Zone 3',
+      'Zone 4'
     ];
     const saved = await this.getSetting('zones');
     if (Array.isArray(saved) && saved.length > 0) {
-      return saved;
+      let changed = false;
+      const cleaned = [];
+      for (const z of saved) {
+        const norm = this.normalizeZoneName(z);
+        if (norm !== z) changed = true;
+        if (!cleaned.includes(norm)) cleaned.push(norm);
+      }
+      if (changed) {
+        await this.setSetting('zones', cleaned);
+      }
+      return cleaned;
     }
     await this.setSetting('zones', defaultZones);
     return defaultZones;
@@ -381,6 +401,17 @@ class WaterDB {
   }
 
   /**
+   * Clears all billing statements and reading records.
+   * Keeps consumers, meters, clusters, and map pins intact.
+   */
+  async clearAllBills() {
+    await this.ready();
+    await this.clear('bills');
+    await this.clear('readings');
+    return true;
+  }
+
+  /**
    * Completely wipes all sample data to start with an empty association utility.
    * Keeps tariff configuration and sets freshStart flag.
    */
@@ -393,26 +424,29 @@ class WaterDB {
     await this.put('settings', { key: 'freshStart', value: true });
     // Guarantee basic default tariff and association settings exist
     const tariff = await this.get('settings', 'tariff');
-    if (!tariff) {
-      await this.put('settings', {
-        key: 'tariff',
-        value: {
-          minimumChargePesos: 100.00,
-          minimumCoverageM3: 10,
-          excessPerM3Pesos: 15.00,
-          currency: 'PHP',
-          activeBillingPeriod: 'October 2026',
-          activeBillingCode: '2026-10'
-        }
-      });
-    }
+    const existingVal = (tariff && tariff.value) ? tariff.value : {};
+    const normalizedTariff = {
+      minimumCharge: Number(existingVal.minimumCharge ?? existingVal.minimumChargePesos) || 100.00,
+      minimumAllowance: Number(existingVal.minimumAllowance ?? existingVal.minimumCoverageM3) || 10,
+      excessRate: Number(existingVal.excessRate ?? existingVal.excessPerM3Pesos) || 15.00,
+      maintenanceFee: Number(existingVal.maintenanceFee) || 0.00,
+      penaltyPercent: Number(existingVal.penaltyPercent) || 10,
+      dueDays: Number(existingVal.dueDays) || 15,
+      currency: existingVal.currency || 'PHP',
+      activeBillingPeriod: existingVal.activeBillingPeriod || 'October 2026',
+      activeBillingCode: existingVal.activeBillingCode || '2026-10'
+    };
+    await this.put('settings', {
+      key: 'tariff',
+      value: normalizedTariff
+    });
     const zones = await this.getSetting('zones');
     if (!zones) {
       await this.setSetting('zones', [
-        'Zone 1 - Dicklum Central',
-        'Zone 2 - San Francisco',
-        'Zone 3 - Sayre Highway & Riverside',
-        'Zone 4 - Upper Dicklum'
+        'Zone 1',
+        'Zone 2',
+        'Zone 3',
+        'Zone 4'
       ]);
     }
     return true;

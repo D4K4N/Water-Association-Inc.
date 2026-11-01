@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dicklum-water-v2';
+const CACHE_NAME = 'dicklum-water-v7';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -40,23 +40,35 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Never intercept cross-origin tile servers, CDNs, or external APIs; let the browser fetch them directly
+  if (e.request.method !== 'GET') return;
+
   try {
     const url = new URL(e.request.url);
-    if (url.origin !== self.location.origin) {
+    // Never intercept cross-origin tile servers, CDNs, or /api/ endpoints
+    if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
       return;
     }
   } catch (err) {
     return;
   }
 
+  // Network-first strategy with offline cache fallback so code updates always apply immediately
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      return cached || fetch(e.request).catch(() => {
-        if (e.request.destination === 'document') {
-          return caches.match('./index.html');
+    fetch(e.request)
+      .then((response) => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(e.request, copy));
         }
-      });
-    })
+        return response;
+      })
+      .catch(() => {
+        return caches.match(e.request, { ignoreSearch: true }).then((cached) => {
+          if (cached) return cached;
+          if (e.request.destination === 'document') {
+            return caches.match('./index.html', { ignoreSearch: true });
+          }
+        });
+      })
   );
 });

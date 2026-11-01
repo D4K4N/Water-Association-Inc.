@@ -25,8 +25,12 @@ class BillingEngine {
   }
 
   async getTariffSettings() {
-    const custom = await window.db.getSetting('tariff');
-    return Object.assign({}, this.defaultTariff, custom || {});
+    const custom = (await window.db.getSetting('tariff')) || {};
+    const merged = Object.assign({}, this.defaultTariff, custom);
+    if (merged.excessRate === null || merged.excessRate === undefined || merged.excessRate === '' || isNaN(Number(merged.excessRate))) {
+      merged.excessRate = Number(custom.excessPerM3Pesos) || 15.00;
+    }
+    return merged;
   }
 
   /**
@@ -46,17 +50,18 @@ class BillingEngine {
     const consumption = curr - prev;
     const tariff = tariffOverrides || this.defaultTariff;
 
-    const minimumCharge = Number(tariff.minimumCharge) || 100.00;
-    const minimumAllowance = Number(tariff.minimumAllowance) || 10;
+    const minimumCharge = Number(tariff.minimumCharge ?? tariff.minimumChargePesos) || 100.00;
+    const minimumAllowance = Number(tariff.minimumAllowance ?? tariff.minimumCoverageM3) || 10;
     const maintenanceFee = Number(tariff.maintenanceFee) || 0.00;
 
-    // Check excess rate configuration
-    const isExcessRateConfigured = tariff.excessRate !== null && 
-                                   tariff.excessRate !== undefined && 
-                                   tariff.excessRate !== '' && 
-                                   !isNaN(Number(tariff.excessRate)) && 
-                                   Number(tariff.excessRate) > 0;
-    const excessRate = isExcessRateConfigured ? Number(tariff.excessRate) : null;
+    // Check excess rate configuration (supports both excessRate and legacy excessPerM3Pesos)
+    const rawExcess = tariff.excessRate !== undefined ? tariff.excessRate : tariff.excessPerM3Pesos;
+    const isExcessRateConfigured = rawExcess !== null && 
+                                   rawExcess !== undefined && 
+                                   rawExcess !== '' && 
+                                   !isNaN(Number(rawExcess)) && 
+                                   Number(rawExcess) > 0;
+    const excessRate = isExcessRateConfigured ? Number(rawExcess) : null;
 
     let excessMeters = 0;
     let excessCharge = 0.00;

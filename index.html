@@ -10,10 +10,23 @@
   
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="assets/logo.png">
+
+  <!-- Preconnect to Google Satellite & OSM Tile Servers for Fast, Zero-Latency Tile Loading -->
+  <link rel="preconnect" href="https://mt0.google.com" crossorigin>
+  <link rel="preconnect" href="https://mt1.google.com" crossorigin>
+  <link rel="preconnect" href="https://mt2.google.com" crossorigin>
+  <link rel="preconnect" href="https://mt3.google.com" crossorigin>
+  <link rel="preconnect" href="https://a.tile.openstreetmap.org" crossorigin>
+  <link rel="preconnect" href="https://b.tile.openstreetmap.org" crossorigin>
+  <link rel="preconnect" href="https://c.tile.openstreetmap.org" crossorigin>
+  <link rel="dns-prefetch" href="https://mt0.google.com">
+  <link rel="dns-prefetch" href="https://mt1.google.com">
+  <link rel="dns-prefetch" href="https://mt2.google.com">
+  <link rel="dns-prefetch" href="https://mt3.google.com">
   
-  <link rel="stylesheet" href="css/styles.css">
-  <link rel="stylesheet" href="css/print-thermal.css">
-  <link rel="stylesheet" href="css/print-a4.css">
+  <link rel="stylesheet" href="css/styles.css?v=7">
+  <link rel="stylesheet" href="css/print-thermal.css?v=7">
+  <link rel="stylesheet" href="css/print-a4.css?v=7">
   <!-- Leaflet SDK — 100% Free Lifetime Open-Source Map Engine (Deep Zoom 22, Google Satellite & ESRI, Zero API Keys) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -111,7 +124,7 @@
       <div class="map-view-container">
         <!-- Canvas Satellite Map Engine Wrapper -->
         <div class="map-canvas-wrapper">
-          <div id="field-map" style="width:100%;height:100%;"></div>
+          <div id="field-map"></div>
 
           <!-- Floating Top Search Bar & Controls (Overlaid on Map) -->
           <div class="map-top-bar">
@@ -135,15 +148,21 @@
               <div id="map-search-results" class="map-search-results hidden"></div>
             </div>
 
-            <div class="map-controls-row">
-              <div class="filter-chips-scroll">
-                <span class="map-filter-chip active" data-filter="both">Both</span>
-                <span class="map-filter-chip" data-filter="household">Households</span>
-                <span class="map-filter-chip" data-filter="meter">Water Meters</span>
+            <!-- Zone + Type Map Filters -->
+            <div class="map-filter-panel">
+              <div class="zone-chip-scroll" id="map-zone-chips">
+                <!-- Populated dynamically: All Zones, Zone 1, Zone 2 ... -->
               </div>
-              <div class="mode-pills-group">
-                <button class="mode-toggle-btn active" data-mode="mapping">Mapping</button>
-                <button class="mode-toggle-btn" data-mode="reading">Reading</button>
+              <div class="type-segment" id="map-type-segment" role="tablist" aria-label="Pin type filter">
+                <button type="button" class="type-seg-btn active" data-type="all">All</button>
+                <button type="button" class="type-seg-btn" data-type="household">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+                  Houses <span class="seg-count" id="seg-count-household">0</span>
+                </button>
+                <button type="button" class="type-seg-btn" data-type="meter">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/></svg>
+                  Meters <span class="seg-count" id="seg-count-meter">0</span>
+                </button>
               </div>
             </div>
 
@@ -172,8 +191,26 @@
             <span>Live GPS</span>
           </button>
 
-          <!-- Floating Zoom, Pin Drop, and Route Controls -->
+          <!-- Floating Zoom, Compass, Pin Drop, and Route Controls -->
           <div class="map-floating-controls">
+            <!-- Real-Time Compass Indicator (Two-Finger Twist / Shift+Drag / Right-Click Drag, Click to Reset North) -->
+            <button type="button" id="btn-map-compass" class="map-circle-btn map-compass-btn" title="Compass (Click to reset North 0° • Twist 2 fingers or Shift+Drag / Right-Click Drag to rotate)">
+              <span class="compass-degree-badge hidden" id="compass-degree-badge">0°</span>
+              <svg id="compass-needle-svg" class="compass-needle-svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                <!-- North pointer (Red) -->
+                <polygon points="12,2.5 15.2,12 8.8,12" fill="#EF4444" />
+                <!-- South pointer (Slate) -->
+                <polygon points="12,21.5 15.2,12 8.8,12" fill="#64748B" />
+                <!-- Center pivot ring -->
+                <circle cx="12" cy="12" r="2.1" fill="#FFFFFF" stroke="#0F172A" stroke-width="1.3" />
+              </svg>
+              <span class="compass-north-tag">N</span>
+            </button>
+            <!-- 0.5x / 1x Smooth Zoom Presets -->
+            <div class="zoom-preset-pill-group">
+              <button type="button" id="btn-zoom-05x" class="zoom-preset-pill" title="0.5x Wide Overview (District)">0.5x</button>
+              <button type="button" id="btn-zoom-1x" class="zoom-preset-pill active" title="1x Street Focus (Reading)">1x</button>
+            </div>
             <button id="btn-start-record-route" class="map-circle-btn" title="Record Walking Route" style="color: #0284C7;">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"/>
@@ -216,7 +253,7 @@
             <div><span class="text-muted">Address:</span> <span id="sheet-address">Purok 2</span></div>
             <div><span class="text-muted">Prev Rdg:</span> <span id="sheet-prev-reading" class="bold text-primary">1,954 m³</span></div>
           </div>
-          <div class="sheet-actions" style="display: flex; gap: 8px;">
+          <div class="sheet-actions" style="display: flex; gap: 6px; flex-wrap: wrap;">
             <button id="sheet-btn-read" class="btn btn-primary" style="flex: 1.2;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               Record Reading
@@ -224,6 +261,10 @@
             <button id="sheet-btn-history" class="btn btn-outline" style="flex: 1;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
               Bills & Payments
+            </button>
+            <button id="sheet-btn-unpin" class="btn btn-outline" style="color: var(--danger); border-color: #fca5a5;" title="Remove this GPS pin from map">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Delete Pin
             </button>
           </div>
         </div>
@@ -244,6 +285,12 @@
           <div class="cluster-meters-list" id="cluster-meters-list">
             <!-- Dynamically populated -->
           </div>
+          <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+            <button type="button" id="btn-unpin-cluster" class="btn btn-xs btn-outline" style="color: var(--danger); border-color: #fca5a5;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Delete Cluster Pin
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -262,9 +309,14 @@
       <div class="view-scroll-content">
         <!-- Consumer Info Card (Clean Fresh State by Default) -->
         <div class="consumer-badge-card" id="rdg-consumer-card">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
             <strong id="rdg-consumer-name">No Consumer Selected</strong>
-            <span class="acct-pill" id="rdg-account-no">—</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="acct-pill" id="rdg-account-no">—</span>
+              <button type="button" id="rdg-btn-delete-consumer" class="btn btn-xs btn-outline hidden" style="color: var(--danger); border-color: #fca5a5; padding: 2px 8px; font-size: 10.5px;" title="Permanently delete this consumer and water meter">
+                Delete
+              </button>
+            </div>
           </div>
           <div class="sub-row">
             Address: <span id="rdg-address">Tap a water meter pin on the map or select below</span> (<span id="rdg-zone">—</span>)
@@ -421,6 +473,117 @@
       </div>
 
       <div class="settings-content">
+        <!-- Master Consumer & Meter Directory Section -->
+        <div class="settings-section-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="margin: 0;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Registered Consumers & Water Meters
+            </h3>
+            <span id="consumer-records-count-badge" class="badge badge-success">0 CONSUMERS</span>
+          </div>
+          <div style="margin-bottom: 8px;">
+            <input type="text" id="consumer-search-input" class="form-control" placeholder="Search consumer name, account #, meter #, or zone..." style="font-size: 11.5px;">
+          </div>
+          <div id="consumers-list-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto;">
+            <!-- Dynamically populated with consumer cards, pin statuses, read meter and delete actions -->
+          </div>
+        </div>
+
+        <!-- Zone-Separated & Period-Filtered Records Export (Today vs This Month, PDF & Excel + Office PC Upload) -->
+        <div class="settings-section-card" style="border: 1.5px solid var(--primary); background: linear-gradient(180deg, rgba(15,118,110,0.04) 0%, #FFFFFF 100%);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <h3 style="margin: 0;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Office PC Sync &amp; Zone Records Export (PDF / Excel)
+            </h3>
+            <span id="office-sync-status-badge" class="badge badge-success" style="font-size: 9px;">READY</span>
+          </div>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 10px;">
+            After reading meters and printing thermal bills in the field, upload all current readings to the Office PC or download arranged tables separated by <strong>Zone 1 – Zone 4</strong> and by <strong>Today</strong> or <strong>This Month</strong>.
+          </p>
+
+          <!-- Step 1: Upload to Office PC / Pull on Office PC -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
+            <button type="button" id="btn-upload-readings-to-pc" class="btn btn-sm btn-primary" style="font-weight: 700;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload Readings to PC
+            </button>
+            <button type="button" id="btn-pull-readings-from-pc" class="btn btn-sm btn-outline" style="font-weight: 700; color: var(--primary); border-color: var(--primary);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Load PC Office Records
+            </button>
+          </div>
+
+          <!-- Step 2: Filter Options (Records I Made Today | Records of This Month | All) -->
+          <div style="margin-bottom: 10px;">
+            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
+              1 · Select Record Period to View / Download:
+            </label>
+            <div id="records-period-toggle" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; background: #F1F5F9; padding: 4px; border-radius: 10px;">
+              <button type="button" class="btn btn-xs records-period-btn active" data-period="today" style="background: #0F172A; color: #FFF; font-weight: 700; padding: 6px 4px; border-radius: 7px;">
+                Records Today
+              </button>
+              <button type="button" class="btn btn-xs records-period-btn" data-period="month" style="background: transparent; color: #334155; font-weight: 700; padding: 6px 4px; border-radius: 7px;">
+                This Month
+              </button>
+              <button type="button" class="btn btn-xs records-period-btn" data-period="all" style="background: transparent; color: #334155; font-weight: 700; padding: 6px 4px; border-radius: 7px;">
+                All Records
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 3: Zone-Separated Download Cards (Zone 1, Zone 2, Zone 3, Zone 4) -->
+          <div style="margin-bottom: 12px;">
+            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 6px;">
+              2 · Separate Data by Zone (Download Current Bills &amp; Readings as PDF or Excel):
+            </label>
+            <div id="zone-export-cards-container" style="display: flex; flex-direction: column; gap: 7px;">
+              <!-- Populated dynamically for Zone 1, Zone 2, Zone 3, Zone 4, and All Zones -->
+            </div>
+          </div>
+
+          <!-- Step 4: Individual Consumer / Water Meter Owner Reading Ledger (e.g. Mario: Previous -> Current Reading) -->
+          <div style="border-top: 1px dashed var(--border-strong); padding-top: 10px;">
+            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
+              3 · Individual Water Meter Owner Reading Table (Previous → Current Reading):
+            </label>
+            <select id="export-consumer-select" class="form-control" style="margin-bottom: 6px; font-size: 12px; font-weight: 600;">
+              <option value="">-- Select Consumer / Water Meter Owner (e.g. mario) --</option>
+            </select>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+              <button type="button" id="btn-export-consumer-pdf" class="btn btn-sm btn-primary">
+                📄 Consumer PDF Table
+              </button>
+              <button type="button" id="btn-export-consumer-excel" class="btn btn-sm btn-success">
+                📊 Consumer Excel (.xls)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Server-Enforced Login Gate & PIN Security Card -->
+        <div class="settings-section-card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <h3 style="margin: 0;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              Security Gate &amp; Secret Office PIN
+            </h3>
+            <span id="security-pin-status-badge" class="badge badge-success" style="font-size: 9px;">PROTECTED</span>
+          </div>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+            Protects your app, household locations, water meter pins, and billing records with your secret Office/Reader PIN.
+          </p>
+          <div style="display: flex; gap: 6px;">
+            <button type="button" id="btn-open-pin-setup" class="btn btn-sm btn-primary" style="flex: 1;">
+              Create / Change Secret PIN
+            </button>
+            <button type="button" id="btn-lock-app-now" class="btn btn-sm btn-outline" style="color: var(--danger); border-color: #FCA5A5;">
+              Lock App Now
+            </button>
+          </div>
+        </div>
+
         <!-- Official Utility Reports Section (Phase 7, Section 18) -->
         <div class="settings-section-card">
           <h3>
@@ -549,6 +712,9 @@
             </label>
             <button id="btn-clear-all-pins" class="btn btn-sm btn-outline" style="color: var(--primary); font-weight: 700;">
               Clear All Pinned GPS Locations (Start Fresh)
+            </button>
+            <button id="btn-clear-all-bills" class="btn btn-sm btn-outline" style="color: #D97706; font-weight: 700;">
+              Clear All Bills & Reading Records (Reset Monthly Reports)
             </button>
             <button id="btn-wipe-clean-slate" class="btn btn-sm btn-outline" style="color: var(--danger); font-weight: 700;">
               Wipe All Data & Start Empty Utility (0 Records)
@@ -682,6 +848,54 @@
   </div>
 </div>
 
+<!-- MODAL 3B: Add-Pin Popup — choose Type + Zone before pinning (map tap / GPS) -->
+<div id="modal-add-pin-wizard" class="app-modal sheet-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card wizard-card">
+    <div class="sheet-grabber"></div>
+    <div class="wizard-head">
+      <div>
+        <h3>Add to Map</h3>
+        <p id="wizard-location-text" class="wizard-sub">Tapped location</p>
+      </div>
+      <button class="modal-close" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="wizard-step-label">1 · What are you pinning?</div>
+    <div class="wizard-type-grid">
+      <button type="button" class="wizard-type-card active" data-type="household">
+        <span class="wt-icon wt-house">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+        </span>
+        <span class="wt-title">Household</span>
+        <span class="wt-sub">Full name only</span>
+      </button>
+      <button type="button" class="wizard-type-card" data-type="meter">
+        <span class="wt-icon wt-meter">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/></svg>
+        </span>
+        <span class="wt-title">Water Meter</span>
+        <span class="wt-sub">Serial &amp; reading</span>
+      </button>
+    </div>
+
+    <button type="button" id="btn-wizard-use-gps" class="wizard-gps-btn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg>
+      <span id="wizard-gps-label">Use my current GPS (where I am standing)</span>
+    </button>
+
+    <div class="wizard-step-label">2 · Which zone is this in?</div>
+    <div class="wizard-zone-grid" id="wizard-zone-grid">
+      <!-- Zone cards populated dynamically -->
+    </div>
+  </div>
+</div>
+
+<!-- Toast host -->
+<div id="toast-host" class="toast-host" aria-live="polite"></div>
+
 <!-- MODAL 4: Drop Pin / Add Location Modal -->
 <div id="modal-drop-pin" class="app-modal">
   <div class="modal-backdrop"></div>
@@ -693,20 +907,24 @@
       </button>
     </div>
     <div class="modal-body">
-      <!-- Pin Type Toggle -->
-      <div style="display: flex; gap: 12px; margin-bottom: 10px;">
-        <label style="display: flex; align-items: center; gap: 5px; font-weight: 700; cursor: pointer; font-size: 13px;">
-          <input type="radio" name="pin-type" value="meter" checked>
-          Water Meter Pin
-        </label>
-        <label style="display: flex; align-items: center; gap: 5px; font-weight: 700; cursor: pointer; font-size: 13px;">
-          <input type="radio" name="pin-type" value="household">
-          Consumer Household Pin
-        </label>
+      <!-- Selected Type + Zone Summary (chosen in the Add-Pin popup) -->
+      <div class="pin-context-bar" id="pin-context-bar">
+        <span class="pin-context-icon" id="pin-context-icon"></span>
+        <div class="pin-context-text">
+          <strong id="pin-context-type">Water Meter</strong>
+          <span id="pin-context-zone">Zone 1</span>
+        </div>
+        <button type="button" id="btn-pin-change-context" class="btn btn-xs btn-outline">Change</button>
       </div>
 
-      <!-- Zone / Purok District Selector (Shared, Dynamic, & Expandable) -->
-      <div class="form-group" style="background: var(--surface-alt); padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 10px;">
+      <!-- Pin Type Toggle (kept for logic; driven by the Add-Pin popup) -->
+      <div style="display: none;">
+        <input type="radio" name="pin-type" value="meter" checked>
+        <input type="radio" name="pin-type" value="household">
+      </div>
+
+      <!-- Zone / Purok District Selector (hidden; driven by the Add-Pin popup) -->
+      <div class="form-group" style="display: none;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
           <label style="font-weight: 700; margin: 0; font-size: 11.5px; color: var(--primary); display: flex; align-items: center; gap: 5px;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
@@ -780,8 +998,8 @@
 
         <div class="form-group">
           <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; background: rgba(76, 105, 114, 0.08); padding: 8px; border-radius: var(--radius-xs); border: 1px dashed var(--primary);">
-            <input type="checkbox" id="pin-meter-link-household" checked>
-            Also link & pin Household for this owner at this location
+            <input type="checkbox" id="pin-meter-link-household">
+            Also pin this owner's Household here (same spot)
           </label>
         </div>
 
@@ -820,41 +1038,22 @@
         </div>
       </div>
 
-      <!-- Household Pin Form -->
+      <!-- Household Pin Form (Full Name only) -->
       <div id="form-pin-household" style="display: none;">
         <div class="form-group">
-          <label>Consumer Full Name:</label>
-          <input type="text" id="pin-house-name" class="form-control" placeholder="e.g. Maria Clara Santos">
+          <label><strong>Consumer Full Name:</strong></label>
+          <input type="text" id="pin-house-name" class="form-control form-control-lg" placeholder="e.g. Maria Clara Santos" autocomplete="off">
         </div>
-        <div class="form-group">
-          <label>Address / Landmark:</label>
-          <input type="text" id="pin-house-address" class="form-control" placeholder="e.g. San Francisco Road, Dicklum">
-        </div>
-        <div class="form-group">
-          <label>Contact Number:</label>
-          <input type="text" id="pin-house-contact" class="form-control" placeholder="0917-000-0000">
-        </div>
-        <div class="form-group">
-          <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; background: rgba(76, 105, 114, 0.08); padding: 8px; border-radius: var(--radius-xs); border: 1px dashed var(--primary);">
-            <input type="checkbox" id="pin-house-link-meter" checked>
-            Also create & link Water Meter at this household
-          </label>
-        </div>
-        <div id="pin-house-meter-fields">
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <div class="form-group">
-              <label>Meter Serial #:</label>
-              <input type="text" id="pin-house-meter-no" class="form-control" placeholder="e.g. WM-2026-001">
-            </div>
-            <div class="form-group">
-              <label>Initial Reading (m³):</label>
-              <input type="number" id="pin-house-meter-initial" class="form-control" value="0" min="0">
-            </div>
+        <!-- Optional fields retained (hidden) for data compatibility -->
+        <div style="display: none;">
+          <input type="text" id="pin-house-address">
+          <input type="text" id="pin-house-contact">
+          <input type="checkbox" id="pin-house-link-meter">
+          <div id="pin-house-meter-fields">
+            <input type="text" id="pin-house-meter-no">
+            <input type="number" id="pin-house-meter-initial" value="0">
           </div>
-        </div>
-        <div class="form-group">
-          <label>Field Notes / Reminders:</label>
-          <input type="text" id="pin-house-notes" class="form-control" placeholder="Near highway curve, blue gate...">
+          <input type="text" id="pin-house-notes">
         </div>
       </div>
     </div>
@@ -999,18 +1198,75 @@
   </div>
 </div>
 
+<!-- 8. Server-Enforced Security PIN Gate & Setup Modal -->
+<div id="modal-security-pin-gate" class="app-modal" style="z-index: 99999;">
+  <div id="pin-gate-backdrop" class="modal-backdrop" style="background: rgba(15, 23, 42, 0.88); backdrop-filter: blur(8px);"></div>
+  <div class="modal-card" style="max-width: 390px; border: 2px solid #0F766E; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);">
+    <div class="modal-header" style="background: linear-gradient(135deg, #042F2E 0%, #0F766E 100%); color: #FFF; border-bottom: none; padding: 14px 16px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <div style="width: 34px; height: 34px; border-radius: 10px; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.3"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div>
+          <h3 id="pin-gate-title" style="color: #FFF; font-size: 14.5px; margin: 0;">Office & Reader Security Gate</h3>
+          <div id="pin-gate-subtitle" style="font-size: 10.5px; color: #99F6E4;">Dicklum Water Association — Exclusive Access</div>
+        </div>
+      </div>
+      <button id="btn-close-pin-gate" type="button" class="icon-btn" style="color: #FFF; background: rgba(255,255,255,0.14); border: none;">✕</button>
+    </div>
+    <div class="modal-body" style="padding: 16px;">
+      <div id="pin-gate-info-banner" style="font-size: 11.5px; color: #0F172A; background: #F0FDFA; border: 1px solid #99F6E4; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; line-height: 1.45;">
+        Enter your secret Office / Meter Reader PIN to unlock the application, map pins, and billing records.
+      </div>
+
+      <!-- Current PIN (shown only when changing existing PIN) -->
+      <div id="pin-gate-current-group" class="form-group" style="display: none; margin-bottom: 10px;">
+        <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Current Secret PIN *</label>
+        <input type="password" id="pin-gate-current-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="Enter current PIN (••••)" style="font-size: 16px; letter-spacing: 4px; text-align: center; font-weight: 800;">
+      </div>
+
+      <!-- Primary PIN Input (Unlock PIN or New PIN) -->
+      <div class="form-group" style="margin-bottom: 10px;">
+        <label id="pin-gate-main-label" style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Enter Secret PIN (4–8 digits) *</label>
+        <input type="password" id="pin-gate-main-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="••••" style="font-size: 18px; letter-spacing: 5px; text-align: center; font-weight: 800; border: 1.5px solid #0F766E;">
+      </div>
+
+      <!-- Confirm PIN + Hint (shown when creating or changing PIN) -->
+      <div id="pin-gate-confirm-group" style="display: none;">
+        <div class="form-group" style="margin-bottom: 10px;">
+          <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Confirm Secret PIN *</label>
+          <input type="password" id="pin-gate-confirm-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="Re-enter PIN (••••)" style="font-size: 16px; letter-spacing: 4px; text-align: center; font-weight: 800;">
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Optional Reminder Hint (Never put the actual PIN)</label>
+          <input type="text" id="pin-gate-hint-input" class="form-control" placeholder="e.g., Association founding year">
+        </div>
+      </div>
+
+      <div id="pin-gate-hint-display" style="display: none; font-size: 11px; color: #64748B; text-align: center; margin-top: 6px;"></div>
+      <div id="pin-gate-error" style="display: none; font-size: 11.5px; color: #DC2626; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 6px; padding: 8px 10px; margin-top: 8px; font-weight: 600; text-align: center;"></div>
+    </div>
+    <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+      <button id="btn-cancel-pin-gate" type="button" class="btn btn-outline">Cancel</button>
+      <button id="btn-submit-pin-gate" type="button" class="btn btn-primary" style="flex: 1; font-weight: 700;">
+        Unlock Application
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Scripts -->
-<script src="js/icons.js"></script>
-<script src="js/db.js"></script>
-<script src="js/sampleData.js"></script>
-<script src="js/billing.js"></script>
-<script src="js/reading.js"></script>
-<script src="js/thermalPrinter.js"></script>
-<script src="js/a4Statement.js"></script>
-<script src="js/reports.js"></script>
-<script src="js/backup.js"></script>
-<script src="js/mapEngine.js"></script>
-<script src="js/app.js"></script>
+<script src="js/icons.js?v=7"></script>
+<script src="js/db.js?v=7"></script>
+<script src="js/sampleData.js?v=7"></script>
+<script src="js/billing.js?v=7"></script>
+<script src="js/reading.js?v=7"></script>
+<script src="js/thermalPrinter.js?v=7"></script>
+<script src="js/a4Statement.js?v=7"></script>
+<script src="js/reports.js?v=7"></script>
+<script src="js/backup.js?v=7"></script>
+<script src="js/mapEngine.js?v=7"></script>
+<script src="js/app.js?v=7"></script>
 
 </body>
 </html>

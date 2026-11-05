@@ -118,10 +118,19 @@ class OfflineTileEngine {
       }
     }
 
-    // 3. Bundled local pack in assets/dicklum-tiles/
-    const ext = layer === 'streets' ? 'png' : 'jpg';
-    const bundledPath = `assets/dicklum-tiles/${layer}/${z}/${x}/${y}.${ext}`;
-    return bundledPath;
+    // 3. Bundled local pack in assets/dicklum-tiles/ (only for valid bundled zoom ranges)
+    if (this.bundledManifest && this.bundledManifest.layers && this.bundledManifest.layers[layer]) {
+      const cfg = this.bundledManifest.layers[layer];
+      if (z >= cfg.minZoom && z <= cfg.maxBundledZoom) {
+        const ext = cfg.ext || (layer === 'streets' ? 'png' : 'jpg');
+        return `assets/dicklum-tiles/${layer}/${z}/${x}/${y}.${ext}`;
+      }
+    } else if (z >= 14 && z <= 17) {
+      const ext = layer === 'streets' ? 'png' : 'jpg';
+      return `assets/dicklum-tiles/${layer}/${z}/${x}/${y}.${ext}`;
+    }
+
+    return null;
   }
 
   async saveTileBlob(layer, z, x, y, blob) {
@@ -361,13 +370,13 @@ class OfflineTileEngine {
           const ext = layerKey === 'streets' ? 'png' : 'jpg';
           const bundledSrc = `assets/dicklum-tiles/${layerKey}/${coords.z}/${coords.x}/${coords.y}.${ext}`;
 
-          if (!tile._hasTriedBundled) {
+          if (!tile._hasTriedBundled && coords.z <= 17) {
             tile._hasTriedBundled = true;
             tile.src = bundledSrc;
             return;
           }
 
-          if (fallbackUrl && !tile._hasFallback) {
+          if (fallbackUrl && !tile._hasFallback && coords.z <= 18) {
             tile._hasFallback = true;
             tile.src = fallbackUrl
               .replace('{z}', coords.z)
@@ -376,14 +385,9 @@ class OfflineTileEngine {
             return;
           }
 
-          // Subtle offline boundary tile if outside cached area
-          tile.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`
-            <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-              <rect width="256" height="256" fill="#1e293b"/>
-              <text x="128" y="132" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" font-size="11" fill="#64748b" text-anchor="middle" font-weight="600">Diclum Area</text>
-            </svg>
-          `);
-          done(null, tile);
+          // Tell Leaflet this specific deep zoom tile is unavailable so Leaflet
+          // automatically retains and hardware-upscales the parent zoom satellite imagery!
+          done(new Error('Tile unavailable offline'), tile);
         };
       }
     });

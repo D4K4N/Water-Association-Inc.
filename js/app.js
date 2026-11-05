@@ -3743,10 +3743,10 @@ class WaterBillingApp {
           btnZoom1x.classList.add('active');
           if (btnZoom05x) btnZoom05x.classList.remove('active');
           if (this.mapEngine.userGps) {
-            this.mapEngine._map.flyTo([this.mapEngine.userGps.lat, this.mapEngine.userGps.lng], 18.5, { animate: true, duration: 0.5 });
+            this.mapEngine._map.flyTo([this.mapEngine.userGps.lat, this.mapEngine.userGps.lng], 18.0, { animate: true, duration: 0.5 });
           } else {
             const center = this.mapEngine._map.getCenter();
-            this.mapEngine._map.flyTo(center, 18.5, { animate: true, duration: 0.5 });
+            this.mapEngine._map.flyTo(center, 18.0, { animate: true, duration: 0.5 });
           }
         }
       });

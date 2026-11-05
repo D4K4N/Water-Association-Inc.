@@ -122,7 +122,7 @@ const LAYER_PROVIDERS = {
       {
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         maxZoom: 22,
-        maxNativeZoom: 20,
+        maxNativeZoom: 18, // Native satellite up to zoom 18; deeper zooms 19-22 smoothly upscale via GPU
         attribution: '© Google Maps'
       },
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
@@ -140,7 +140,7 @@ const LAYER_PROVIDERS = {
       {
         subdomains: ['a', 'b', 'c'],
         maxZoom: 22,
-        maxNativeZoom: 19,
+        maxNativeZoom: 18,
         attribution: '© OpenStreetMap contributors'
       }
     )

@@ -76,6 +76,9 @@ class WaterBillingApp {
           if (this.mapEngine) this.mapEngine.resize();
         }, delay);
       });
+
+      // Restore previous known GPS location in 1ms on startup
+      this.restoreInstantGpsCache();
     }
 
     // 4. Setup Bluetooth printer listener
@@ -825,6 +828,53 @@ class WaterBillingApp {
     }
     if (this.mapEngine) {
       this.mapEngine.clearUserGps();
+    }
+  }
+
+  restoreInstantGpsCache() {
+    try {
+      const cached = localStorage.getItem('dicklum_last_known_gps');
+      if (cached && this.mapEngine) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
+          // Instant 1ms GPS marker restoration on startup
+          this.mapEngine.setUserGps(parsed.lat, parsed.lng, parsed.accuracy || 15, parsed.heading || null);
+          const btn = document.getElementById('btn-gps-my-location');
+          if (btn) {
+            btn.classList.add('active');
+            const acc = Math.round(parsed.accuracy || 15);
+            btn.innerHTML = `${window.AppIcons.crosshair()} ● ±${acc}m (cached)`;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not restore cached GPS:', e);
+    }
+  }
+
+  toggleAllPinsVisibility() {
+    if (!this.mapEngine) return;
+    const isCurrentlyHidden = this.mapEngine.isPinsHidden;
+    const newState = !isCurrentlyHidden;
+    this.mapEngine.setPinsHidden(newState);
+
+    const btnHeader = document.getElementById('btn-toggle-all-pins');
+    const fabBtn = document.getElementById('fab-toggle-pins');
+
+    [btnHeader, fabBtn].forEach(btn => {
+      if (!btn) return;
+      btn.classList.toggle('pins-hidden', newState);
+      if (newState) {
+        btn.title = 'Pins hidden (Search to reveal specific house/meter)';
+      } else {
+        btn.title = 'All pins visible';
+      }
+    });
+
+    if (newState) {
+      this.showToast('All pins hidden. Search consumer or meter to locate.', 2000);
+    } else {
+      this.showToast('All pins visible on map.', 1500);
     }
   }
 
@@ -3059,10 +3109,86 @@ class WaterBillingApp {
     document.getElementById('modal-consumer-history').classList.add('active');
   }
 
-  // --- Map Layer Switcher ---
+  // --- Map Layer Switcher & Offline Diclum Tile Downloader ---
 
   openLayerModal() {
+    this.updateOfflineMapStatsUI();
     document.getElementById('modal-map-layers').classList.add('active');
+  }
+
+  async updateOfflineMapStatsUI() {
+    if (!window.offlineTileEngine) return;
+    try {
+      const stats = await window.offlineTileEngine.getCacheStats();
+      const statsEl = document.getElementById('offline-cache-stats-text');
+      const badgeEl = document.getElementById('offline-cache-badge');
+      const mbSize = (stats.totalBytes / (1024 * 1024)).toFixed(1);
+      if (statsEl) {
+        statsEl.textContent = `Offline Diclum Tile Storage: ${stats.count} tiles cached (${mbSize} MB). Works 100% offline with zero data or Wi-Fi.`;
+      }
+      if (badgeEl) {
+        badgeEl.textContent = stats.count > 0 ? `${stats.count} TILES READY` : 'READY';
+      }
+    } catch (e) {
+      console.warn('Could not read offline tile stats:', e);
+    }
+  }
+
+  async startOfflineDiclumDownload() {
+    if (!window.offlineTileEngine) return;
+    const progressBox = document.getElementById('offline-download-progress-box');
+    const progressBar = document.getElementById('offline-download-bar');
+    const percentEl = document.getElementById('offline-download-percent');
+    const labelEl = document.getElementById('offline-download-label');
+    const btnDownload = document.getElementById('btn-download-offline-diclum');
+    const btnCancel = document.getElementById('btn-cancel-offline-diclum');
+
+    if (progressBox) progressBox.style.display = 'block';
+    if (btnCancel) btnCancel.classList.remove('hidden');
+    if (btnDownload) {
+      btnDownload.disabled = true;
+      btnDownload.textContent = 'Downloading Tiles...';
+    }
+
+    try {
+      this.showToast('Starting Barangay Diclum offline map download...', 2000);
+      const res = await window.offlineTileEngine.downloadDiclumMapPack({
+        minZoom: 14,
+        maxZoom: 18,
+        onProgress: (p) => {
+          if (progressBar) progressBar.style.width = `${p.percent}%`;
+          if (percentEl) percentEl.textContent = `${p.percent}% (${p.current}/${p.total})`;
+          if (labelEl) labelEl.textContent = `Caching Diclum zoom ${p.zoom}...`;
+        }
+      });
+
+      if (labelEl) labelEl.textContent = 'Offline Diclum Map 100% Cached!';
+      this.showToast(`Diclum Map Download Complete! ${res.saved} new tiles saved for 100% offline use.`, 3500);
+      await this.updateOfflineMapStatsUI();
+    } catch (err) {
+      console.error('Offline map download failed:', err);
+      this.showToast('Offline download cancelled or paused: ' + err.message, 3000);
+    } finally {
+      if (btnDownload) {
+        btnDownload.disabled = false;
+        btnDownload.textContent = 'Download Deep Zoom (Zooms 14–18)';
+      }
+      if (btnCancel) btnCancel.classList.add('hidden');
+    }
+  }
+
+  cancelOfflineDiclumDownload() {
+    if (window.offlineTileEngine) {
+      window.offlineTileEngine.cancelDownload();
+      this.showToast('Offline map download cancelled.', 1500);
+    }
+    const btnCancel = document.getElementById('btn-cancel-offline-diclum');
+    if (btnCancel) btnCancel.classList.add('hidden');
+    const btnDownload = document.getElementById('btn-download-offline-diclum');
+    if (btnDownload) {
+      btnDownload.disabled = false;
+      btnDownload.textContent = 'Download Deep Zoom (Zooms 14–18)';
+    }
   }
 
   setMapLayer(layerKey) {
@@ -3303,6 +3429,11 @@ class WaterBillingApp {
       this.switchView('view-map');
     }
 
+    // If pins are currently hidden, isolate this searched pin so ONLY this pin is shown on the map!
+    if (this.mapEngine.isPinsHidden && pinId) {
+      this.mapEngine.isolateSinglePin(pinId, pinType);
+    }
+
     // Ensure active zone/type filters do not hide the searched pin
     if (this.mapEngine._zoneFilter && zone && this.mapEngine._zoneFilter !== zone) {
       this.mapEngine.setZoneFilter(null);
@@ -3413,6 +3544,10 @@ class WaterBillingApp {
           this._lastSearchMatches = [];
           searchResults.classList.add('hidden');
           searchResults.innerHTML = '';
+          // If pins are in hidden mode, clearing search clears any isolated pin
+          if (this.mapEngine && this.mapEngine.isPinsHidden) {
+            this.mapEngine.clearPinIsolation();
+          }
           return;
         }
 
@@ -3653,6 +3788,26 @@ class WaterBillingApp {
     const btnClusterUnpin = document.getElementById('btn-unpin-cluster');
     if (btnClusterUnpin) {
       btnClusterUnpin.addEventListener('click', () => this.unpinActiveCluster());
+    }
+
+    // Toggle All Pins visibility (Header button & Floating FAB button)
+    const btnTogglePins = document.getElementById('btn-toggle-all-pins');
+    if (btnTogglePins) {
+      btnTogglePins.addEventListener('click', () => this.toggleAllPinsVisibility());
+    }
+    const fabTogglePins = document.getElementById('fab-toggle-pins');
+    if (fabTogglePins) {
+      fabTogglePins.addEventListener('click', () => this.toggleAllPinsVisibility());
+    }
+
+    // Offline Diclum Tile Downloader triggers
+    const btnDlOffline = document.getElementById('btn-download-offline-diclum');
+    if (btnDlOffline) {
+      btnDlOffline.addEventListener('click', () => this.startOfflineDiclumDownload());
+    }
+    const btnCancelOffline = document.getElementById('btn-cancel-offline-diclum');
+    if (btnCancelOffline) {
+      btnCancelOffline.addEventListener('click', () => this.cancelOfflineDiclumDownload());
     }
 
     document.getElementById('sheet-btn-read').addEventListener('click', () => {

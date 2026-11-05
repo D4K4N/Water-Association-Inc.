@@ -1,10 +1,14 @@
-const CACHE_NAME = 'dicklum-water-v7';
+const CACHE_NAME = 'dicklum-water-v8';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './css/styles.css',
   './css/print-thermal.css',
   './css/print-a4.css',
+  './vendor/leaflet/leaflet.css',
+  './vendor/leaflet/leaflet.js',
+  './vendor/html2pdf/html2pdf.bundle.min.js',
+  './js/offlineTileEngine.js',
   './js/app.js',
   './js/db.js',
   './js/sampleData.js',

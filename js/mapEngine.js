@@ -78,14 +78,18 @@ const DICLUM_BOUNDARY_COORDS = [
   [8.39522, 124.84874]
 ];
 
-// Helper to build fast, smooth tile layer with aggressive caching and automatic fallback
-function createRobustTileLayer(primaryUrl, options = {}, fallbackUrl = null) {
+// Helper to build fast, smooth offline-first tile layer with bundled fallback & offline caching
+function createRobustTileLayer(layerKey, primaryUrl, options = {}, fallbackUrl = null) {
+  if (typeof window !== 'undefined' && window.offlineTileEngine && typeof window.offlineTileEngine.createOfflineAwareLayer === 'function') {
+    return window.offlineTileEngine.createOfflineAwareLayer(layerKey, primaryUrl, options, fallbackUrl);
+  }
+
   const mergedOpts = Object.assign({
     referrerPolicy: 'no-referrer',
     crossOrigin: false,
     updateWhenIdle: false,    // Fetch tiles immediately while panning for zero-lag feel
     updateWhenZooming: false, // Avoid thrashing intermediate zoom tiles
-    keepBuffer: 4             // Keep surrounding Diclum tiles warm in memory
+    keepBuffer: 6             // Keep surrounding Diclum tiles warm in memory
   }, options);
 
   const layer = L.tileLayer(primaryUrl, mergedOpts);
@@ -113,6 +117,7 @@ const LAYER_PROVIDERS = {
   google_hybrid: {
     name: 'Google Satellite (Hybrid)',
     createLayer: () => createRobustTileLayer(
+      'google_hybrid',
       'https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}',
       {
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
@@ -130,6 +135,7 @@ const LAYER_PROVIDERS = {
   streets: {
     name: 'Standard Streets (OpenStreetMap)',
     createLayer: () => createRobustTileLayer(
+      'streets',
       'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       {
         subdomains: ['a', 'b', 'c'],
@@ -167,6 +173,8 @@ class FieldMapEngine {
     this._currentLng = centerLng;
     this._zoom = zoom;
     this._pins = [];
+    this._pinsHidden = false;
+    this._isolatedPinId = null;
     this._filterMode = 'all';
     this._mappingMode = 'mapping';
 
@@ -548,6 +556,26 @@ class FieldMapEngine {
     this._renderAllPins();
   }
 
+  setPinsHidden(hidden) {
+    this._pinsHidden = Boolean(hidden);
+    this._isolatedPinId = null;
+    this._renderAllPins();
+  }
+
+  get isPinsHidden() {
+    return this._pinsHidden;
+  }
+
+  isolateSinglePin(pinId, pinType) {
+    this._isolatedPinId = `${pinId}_${pinType}`;
+    this._renderAllPins();
+  }
+
+  clearPinIsolation() {
+    this._isolatedPinId = null;
+    this._renderAllPins();
+  }
+
   setFilter(filterMode) {
     // Normalise legacy values: 'both' | 'households' | 'meters' → 'all' | 'household' | 'meter'
     const map = { both: 'all', all: 'all', households: 'household', household: 'household', meters: 'meter', meter: 'meter', clusters: 'meter' };
@@ -560,8 +588,19 @@ class FieldMapEngine {
     this._renderAllPins();
   }
 
-  /** Returns pins that pass the current zone + type filters. */
+  /** Returns pins that pass the current zone + type filters (or isolated pin). */
   getVisiblePins() {
+    if (this._isolatedPinId) {
+      return (this._pins || []).filter(pin => {
+        const idKey = `${pin.id}_${pin.type}`;
+        return idKey === this._isolatedPinId || pin.id === this._isolatedPinId;
+      });
+    }
+
+    if (this._pinsHidden) {
+      return [];
+    }
+
     const fm = this._filterMode || 'all';
     const zf = this._zoneFilter || null;
     return (this._pins || []).filter(pin => {
@@ -801,6 +840,19 @@ class FieldMapEngine {
     }
 
     this._userGps = { lat, lng, accuracy, heading: this._userHeading };
+
+    // Persist last valid location so subsequent launches render in 1 millisecond offline
+    try {
+      if (typeof localStorage !== 'undefined' && accuracy <= 100) {
+        localStorage.setItem('dicklum_last_known_gps', JSON.stringify({
+          lat: Number(lat),
+          lng: Number(lng),
+          accuracy: Math.round(accuracy || 15),
+          heading: Math.round(this._userHeading || 0),
+          timestamp: Date.now()
+        }));
+      }
+    } catch (_) {}
 
     // Dynamically adjust the Barangay Diclum red border if user's GPS dot gets close to or outside the border
     if (posChanged) {

@@ -526,6 +526,19 @@ html, body {
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.map-pins-toggle-btn.pins-hidden {
+  background: #FEF3C7 !important;
+  border-color: #F59E0B !important;
+  color: #B45309 !important;
+}
+
+.map-pins-floating-btn.pins-hidden {
+  background: #FEF3C7 !important;
+  border-color: #F59E0B !important;
+  color: #B45309 !important;
 }
 
 .map-controls-row {

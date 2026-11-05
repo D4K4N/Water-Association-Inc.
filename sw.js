@@ -1,4 +1,6 @@
-const CACHE_NAME = 'dicklum-water-v8';
+const CACHE_NAME = 'dicklum-water-v9';
+const TILE_CACHE_NAME = 'dicklum-tiles-cache-v1';
+
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -22,6 +24,7 @@ const ASSETS_TO_CACHE = [
   './js/backup.js',
   './assets/logo.png',
   './assets/logo.svg',
+  './assets/dicklum-tiles/manifest.json',
   './manifest.webmanifest'
 ];
 
@@ -37,7 +40,7 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys.filter((key) => key !== CACHE_NAME && key !== TILE_CACHE_NAME).map((key) => caches.delete(key))
       );
     }).then(() => self.clients.claim())
   );
@@ -46,33 +49,65 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
+  let url;
   try {
-    const url = new URL(e.request.url);
-    // Never intercept cross-origin tile servers, CDNs, or /api/ endpoints
-    if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
-      return;
-    }
+    url = new URL(e.request.url);
   } catch (err) {
     return;
   }
 
-  // Network-first strategy with offline cache fallback so code updates always apply immediately
-  e.respondWith(
-    fetch(e.request)
-      .then((response) => {
-        if (response && response.status === 200) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(e.request, copy));
+  // Never intercept /api/ sync endpoints
+  if (url.pathname.startsWith('/api/')) return;
+
+  // 1. Intercept and cache Map Tiles (Google Satellite, OpenStreetMap, and bundled tiles)
+  const isMapTile = url.hostname.includes('google.com') ||
+                    url.hostname.includes('openstreetmap.org') ||
+                    url.pathname.includes('/dicklum-tiles/');
+
+  if (isMapTile) {
+    e.respondWith(
+      caches.open(TILE_CACHE_NAME).then(async (tileCache) => {
+        // Cache-first for map tiles: Instant 0ms return if already cached
+        const cached = await tileCache.match(e.request);
+        if (cached) {
+          return cached;
         }
-        return response;
-      })
-      .catch(() => {
-        return caches.match(e.request, { ignoreSearch: true }).then((cached) => {
-          if (cached) return cached;
-          if (e.request.destination === 'document') {
-            return caches.match('./index.html', { ignoreSearch: true });
+
+        // If not in cache, fetch from network and store in tileCache for 100% offline use
+        try {
+          const networkResponse = await fetch(e.request);
+          if (networkResponse) {
+            tileCache.put(e.request, networkResponse.clone());
           }
-        });
+          return networkResponse;
+        } catch (fetchErr) {
+          // If offline and not in cache, return 408 status so Leaflet can handle fallback
+          return cached || new Response('', { status: 408, statusText: 'Offline Tile Unavailable' });
+        }
       })
-  );
+    );
+    return;
+  }
+
+  // 2. Local app assets (HTML, CSS, JS, Vendor files)
+  if (url.origin === self.location.origin) {
+    e.respondWith(
+      fetch(e.request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(e.request, copy));
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(e.request, { ignoreSearch: true }).then((cached) => {
+            if (cached) return cached;
+            if (e.request.destination === 'document') {
+              return caches.match('./index.html', { ignoreSearch: true });
+            }
+          });
+        })
+    );
+  }
 });

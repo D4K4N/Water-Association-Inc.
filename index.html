@@ -372,11 +372,15 @@
           </div>
         </div>
 
-        <!-- Quick Consumer Switcher Dropdown -->
+        <!-- Quick Consumer Switcher Search & Dropdown -->
         <div class="form-group" style="margin-bottom: 8px;">
-          <label for="rdg-quick-consumer-select" style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">
+          <label for="rdg-quick-consumer-search" style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">
             Select / Switch Consumer to Read:
           </label>
+          <div style="position: relative; margin-bottom: 6px;">
+            <input type="text" id="rdg-quick-consumer-search" class="form-control" placeholder="Search consumer name, account #, or meter #" style="font-size: 12px; height: 34px; padding-right: 28px;">
+            <button type="button" id="btn-clear-rdg-search" style="display: none; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xs); width: 20px; height: 20px; font-size: 11px; color: var(--text-secondary); cursor: pointer; align-items: center; justify-content: center;">✕</button>
+          </div>
           <select id="rdg-quick-consumer-select" class="form-control" style="font-size: 12px; height: 36px;">
             <option value="">-- Choose Consumer or Water Meter --</option>
           </select>
@@ -462,19 +466,34 @@
         </div>
 
         <!-- Optional Meter Photo -->
-        <div class="photo-capture-box" onclick="document.getElementById('rdg-photo-input').click()">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
-            <circle cx="12" cy="13" r="3"/>
-          </svg>
-          <div style="font-size: 12px; font-weight: 700; color: var(--primary); margin-top: 2px;">
-            Capture Meter Photo Proof (Optional)
-          </div>
-          <div style="font-size: 10.5px; color: var(--text-muted);">
-            Automatically watermarked with GPS coordinates, timestamp, and meter number
+        <div class="photo-capture-box" id="rdg-photo-capture-box">
+          <div id="rdg-photo-prompt" onclick="document.getElementById('rdg-photo-input').click()">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+              <circle cx="12" cy="13" r="3"/>
+            </svg>
+            <div style="font-size: 12px; font-weight: 700; color: var(--primary); margin-top: 2px;">
+              Capture Meter Photo Proof (Optional)
+            </div>
+            <div style="font-size: 10.5px; color: var(--text-muted);">
+              Automatically watermarked with GPS coordinates, timestamp, and meter number
+            </div>
           </div>
           <input type="file" id="rdg-photo-input" accept="image/*" capture="environment" style="display: none;">
-          <img id="rdg-photo-preview" class="hidden" alt="Meter Proof">
+          
+          <div id="rdg-photo-preview-wrap" class="hidden" style="margin-top: 8px; position: relative;">
+            <img id="rdg-photo-preview" alt="Meter Proof" style="max-width: 100%; max-height: 180px; border-radius: var(--radius-xs); border: 1px solid var(--border); display: block; margin: 0 auto;">
+            <div style="display: flex; gap: 8px; justify-content: center; margin-top: 8px;">
+              <button type="button" id="btn-retake-photo" class="btn btn-xs btn-outline">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                Retake
+              </button>
+              <button type="button" id="btn-delete-photo" class="btn btn-xs btn-outline" style="color: var(--danger-text); border-color: rgba(239, 68, 68, 0.4);">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Delete Photo
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Notes -->
@@ -1536,18 +1555,18 @@
 </div>
 
 <!-- Scripts -->
-<script src="js/icons.js?v=18"></script>
-<script src="js/db.js?v=18"></script>
-<script src="js/sampleData.js?v=18"></script>
-<script src="js/billing.js?v=18"></script>
-<script src="js/reading.js?v=18"></script>
-<script src="js/thermalPrinter.js?v=18"></script>
-<script src="js/a4Statement.js?v=18"></script>
-<script src="js/reports.js?v=18"></script>
-<script src="js/backup.js?v=18"></script>
-<script src="js/offlineTileEngine.js?v=18"></script>
-<script src="js/mapEngine.js?v=18"></script>
-<script src="js/app.js?v=18"></script>
+<script src="js/icons.js?v=19"></script>
+<script src="js/db.js?v=19"></script>
+<script src="js/sampleData.js?v=19"></script>
+<script src="js/billing.js?v=19"></script>
+<script src="js/reading.js?v=19"></script>
+<script src="js/thermalPrinter.js?v=19"></script>
+<script src="js/a4Statement.js?v=19"></script>
+<script src="js/reports.js?v=19"></script>
+<script src="js/backup.js?v=19"></script>
+<script src="js/offlineTileEngine.js?v=19"></script>
+<script src="js/mapEngine.js?v=19"></script>
+<script src="js/app.js?v=19"></script>
 
 </body>
 </html>

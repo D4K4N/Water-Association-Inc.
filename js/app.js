@@ -1314,17 +1314,44 @@ class WaterBillingApp {
     const errorAlert = document.getElementById('rdg-error-alert');
     if (errorAlert) errorAlert.classList.add('hidden');
 
+    this.clearPhotoPreview();
+
     this.updateLiveConsumption();
   }
 
-  populateQuickConsumerSelect() {
+  clearPhotoPreview() {
+    const photoInput = document.getElementById('rdg-photo-input');
+    if (photoInput) photoInput.value = '';
+    const imgPreview = document.getElementById('rdg-photo-preview');
+    if (imgPreview) {
+      imgPreview.src = '';
+      delete imgPreview.dataset.src;
+    }
+    const previewWrap = document.getElementById('rdg-photo-preview-wrap');
+    if (previewWrap) previewWrap.classList.add('hidden');
+    const photoPrompt = document.getElementById('rdg-photo-prompt');
+    if (photoPrompt) photoPrompt.style.display = 'block';
+  }
+
+  populateQuickConsumerSelect(searchFilter = '') {
     const select = document.getElementById('rdg-quick-consumer-select');
     if (!select) return;
 
+    const q = (searchFilter || '').toLowerCase().trim();
     const currentVal = select.value;
     select.innerHTML = '<option value="">-- Choose Consumer or Water Meter --</option>';
 
-    this.cachedConsumers.forEach(c => {
+    const filtered = this.cachedConsumers.filter(c => {
+      if (!q) return true;
+      const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+      const matchName = (c.name || '').toLowerCase().includes(q);
+      const matchAcct = (c.accountNo || '').toLowerCase().includes(q);
+      const matchZone = (c.zone || '').toLowerCase().includes(q);
+      const matchMeter = meter && (meter.meterNo || '').toLowerCase().includes(q);
+      return matchName || matchAcct || matchZone || matchMeter;
+    });
+
+    filtered.forEach(c => {
       const meter = this.cachedMeters.find(m => m.consumerId === c.id);
       const opt = document.createElement('option');
       opt.value = c.id;
@@ -1332,10 +1359,12 @@ class WaterBillingApp {
       select.appendChild(opt);
     });
 
-    if (this.activeConsumer) {
+    if (this.activeConsumer && filtered.some(c => c.id === this.activeConsumer.id)) {
       select.value = this.activeConsumer.id;
-    } else if (currentVal) {
+    } else if (currentVal && filtered.some(c => c.id === currentVal)) {
       select.value = currentVal;
+    } else if (filtered.length === 1) {
+      select.value = filtered[0].id;
     }
   }
 
@@ -4958,6 +4987,35 @@ class WaterBillingApp {
       });
     }
 
+    const rdgSearchInput = document.getElementById('rdg-quick-consumer-search');
+    const btnClearRdgSearch = document.getElementById('btn-clear-rdg-search');
+    if (rdgSearchInput) {
+      rdgSearchInput.addEventListener('input', (e) => {
+        const val = e.target.value || '';
+        if (btnClearRdgSearch) {
+          btnClearRdgSearch.style.display = val.trim() ? 'inline-flex' : 'none';
+        }
+        this.populateQuickConsumerSelect(val);
+      });
+      rdgSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const quickSelect = document.getElementById('rdg-quick-consumer-select');
+          if (quickSelect && quickSelect.value) {
+            this.startReadingForConsumer(quickSelect.value);
+          }
+        }
+      });
+    }
+    if (btnClearRdgSearch && rdgSearchInput) {
+      btnClearRdgSearch.addEventListener('click', () => {
+        rdgSearchInput.value = '';
+        btnClearRdgSearch.style.display = 'none';
+        this.populateQuickConsumerSelect('');
+        rdgSearchInput.focus();
+      });
+    }
+
     const quickConsumerSelect = document.getElementById('rdg-quick-consumer-select');
     if (quickConsumerSelect) {
       quickConsumerSelect.addEventListener('change', (e) => {
@@ -5001,14 +5059,37 @@ class WaterBillingApp {
             });
 
             const imgPreview = document.getElementById('rdg-photo-preview');
+            const previewWrap = document.getElementById('rdg-photo-preview-wrap');
+            const promptBox = document.getElementById('rdg-photo-prompt');
+
             imgPreview.src = watermarked;
             imgPreview.dataset.src = watermarked;
-            imgPreview.classList.remove('hidden');
+            if (previewWrap) previewWrap.classList.remove('hidden');
+            if (promptBox) promptBox.style.display = 'none';
+            this.showToast('Meter photo watermarked and attached.', 2000);
           } catch (err) {
             console.warn('Watermark error:', err);
           }
         };
         reader.readAsDataURL(file);
+      });
+    }
+
+    const btnRetakePhoto = document.getElementById('btn-retake-photo');
+    if (btnRetakePhoto) {
+      btnRetakePhoto.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pInput = document.getElementById('rdg-photo-input');
+        if (pInput) pInput.click();
+      });
+    }
+
+    const btnDeletePhoto = document.getElementById('btn-delete-photo');
+    if (btnDeletePhoto) {
+      btnDeletePhoto.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.clearPhotoPreview();
+        this.showToast('Captured photo removed.', 1800);
       });
     }
 

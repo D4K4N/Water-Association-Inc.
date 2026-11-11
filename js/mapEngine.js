@@ -175,6 +175,7 @@ class FieldMapEngine {
     this._pins = [];
     this._pinsHidden = false;
     this._isolatedPinId = null;
+    this._selectedPinKey = null;
     this._filterMode = 'all';
     this._mappingMode = 'mapping';
 
@@ -251,6 +252,9 @@ class FieldMapEngine {
     // Map Event Listeners
     this._map.on('click', (e) => {
       if (this._suppressMapClickUntil && Date.now() < this._suppressMapClickUntil) return;
+      if (this._selectedPinKey) {
+        this.clearSelectedPin();
+      }
       if (this._mappingMode === 'mapping' && this.dropPinCallback) {
         this.dropPinCallback(e.latlng.lat, e.latlng.lng);
       }
@@ -658,27 +662,32 @@ class FieldMapEngine {
       const customIcon = L.divIcon({
         className: 'custom-map-pin',
         html: html,
-        iconSize: [190, 40],
+        iconSize: [28, 34],
         // A meter sharing a house's exact spot is lifted above it so both stay visible
-        iconAnchor: overlapsHouse ? [95, 76] : [95, 40]
+        iconAnchor: overlapsHouse ? [14, 68] : [14, 34]
       });
 
       const marker = L.marker([lat, lng], {
         icon: customIcon,
-        riseOnHover: true,
+        riseOnHover: false,
         zIndexOffset: type === 'household' ? 400 : (type === 'cluster' ? 200 : 300)
       });
 
       marker.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
-        if (this.selectPinCallback) this.selectPinCallback(pin);
+        this.selectPinById(pin.id, pin.type);
       });
 
       marker._pinData = pin;
       this._pinsLayerGroup.addLayer(marker);
 
-      const key = (pin.id || pin.accountNo || Math.random()) + '_' + type;
+      const key = `${pin.id || pin.accountNo || Math.random()}_${type}`;
       this._pinMarkers.set(key, marker);
+    }
+
+    if (this._selectedPinKey) {
+      const [selId, selType] = this._selectedPinKey.split('_');
+      this._applyPinSelectionDOM(selId, selType, false);
     }
   }
 
@@ -686,25 +695,24 @@ class FieldMapEngine {
     const type = pin.type;
     const d = pin.data || {};
     const colors = {
-      household: '#0F766E',
-      meter:     '#2563EB',
-      cluster:   '#7C3AED'
+      household: '#0D9488',
+      meter:     '#0284C7',
+      cluster:   '#6D28D9'
     };
     const accent = colors[type] || colors.household;
 
     let svgIcon = '';
     if (type === 'household') {
-      svgIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+      svgIcon = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
         <path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>
       </svg>`;
     } else if (type === 'meter') {
-      svgIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round">
+      svgIcon = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/>
       </svg>`;
     } else {
-      svgIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
-        <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+      svgIcon = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="8"/><polyline points="12 8 12 12 15 14"/><path d="M9 2h6"/>
       </svg>`;
     }
 
@@ -715,48 +723,72 @@ class FieldMapEngine {
       const ownerName = (d.name && d.name !== 'Unassigned') ? d.name : (d.ownerName || '');
       label = ownerName || d.meterNo || pin.title || '';
     } else {
-      label = d.name || pin.title || '';
+      label = d.ownerSummary || d.name || pin.title || 'Clustered Meters';
     }
     label = String(label).replace(/^Meter\s+/i, '').replace(/\s*\|\s*WM$/i, '').trim();
-    const maxLen = type === 'meter' ? 18 : 20;
+    const maxLen = type === 'meter' ? 20 : (type === 'cluster' ? 20 : 22);
     const shortLabel = label.length > maxLen ? label.slice(0, maxLen - 1) + '…' : label;
     const safeLabel = shortLabel.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+    const mCount = Number(d.meterCount || (d.meters && d.meters.length) || 0);
     const wmSuffix = type === 'meter'
-      ? `<span class="pin-wm-sep">|</span><span class="pin-wm-tag">WM</span>`
+      ? `<span class="pin-wm-tag">WM</span>`
+      : (type === 'cluster'
+          ? `<span class="pin-cluster-count-tag">${mCount > 0 ? mCount : ''} WM</span>`
+          : '');
+
+    const clusterDotBadge = (type === 'cluster' && mCount > 0)
+      ? `<span class="pin-cluster-dot-count">${mCount}</span>`
       : '';
+
+    const iconClass = type === 'cluster' ? 'pin-icon pin-icon-cluster' : 'pin-icon';
 
     return `
       <div class="map-pin map-pin-${type}" data-pin-id="${pin.id || ''}" data-pin-type="${type}">
-        <div class="pin-body">
-          <span class="pin-icon" style="background:${accent};">${svgIcon}</span>
-          ${safeLabel ? `<span class="pin-label">${safeLabel}</span>` : ''}
+        <div class="pin-popup-label">
+          <span class="pin-label">${safeLabel || 'Pin'}</span>
           ${wmSuffix}
         </div>
-        <div class="pin-tail"></div>
+        <div class="pin-body" style="background:${accent};">
+          <span class="${iconClass}">${svgIcon}</span>
+          ${clusterDotBadge}
+        </div>
+        <div class="pin-tail" style="border-top-color:${accent};"></div>
       </div>
     `;
   }
 
-  selectPinById(id, type) {
-    const pin = this._pins.find(p => String(p.id) === String(id) && (!type || p.type === type));
-    if (pin && this.selectPinCallback) {
-      this.selectPinCallback(pin);
-    }
-
-    // Highlight marker DOM and elevate z-index so hovered pin stands out clearly
+  _applyPinSelectionDOM(id, type, isSearchHighlight = false) {
     document.querySelectorAll('.map-pin').forEach(el => {
       const match = el.dataset.pinId === String(id) && (!type || el.dataset.pinType === type);
       el.classList.toggle('selected', match);
-      el.classList.remove('search-hovered');
+      el.classList.toggle('search-hovered', Boolean(match && isSearchHighlight));
       const wrapper = el.closest('.leaflet-marker-icon');
       if (wrapper) {
         wrapper.style.zIndex = match ? '9500' : '';
       }
-      if (match) {
-        void el.offsetWidth; // trigger reflow for animation restart
-        el.classList.add('search-hovered');
+    });
+  }
+
+  clearSelectedPin() {
+    this._selectedPinKey = null;
+    document.querySelectorAll('.map-pin.selected, .map-pin.search-hovered').forEach(el => {
+      el.classList.remove('selected', 'search-hovered');
+      const wrapper = el.closest('.leaflet-marker-icon');
+      if (wrapper) {
+        wrapper.style.zIndex = '';
       }
     });
+  }
+
+  selectPinById(id, type, isSearchHighlight = true) {
+    const pin = this._pins.find(p => String(p.id) === String(id) && (!type || p.type === type));
+    this._selectedPinKey = `${id}_${type || (pin ? pin.type : '')}`;
+    this._applyPinSelectionDOM(id, type || (pin ? pin.type : ''), isSearchHighlight);
+
+    if (pin && this.selectPinCallback) {
+      this.selectPinCallback(pin);
+    }
   }
 
   // ─── GPS / Real Device Location ───────────────────────────────────────────

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dicklum-water-v9';
+const CACHE_NAME = 'dicklum-water-v18';
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v1';
 
 const ASSETS_TO_CACHE = [

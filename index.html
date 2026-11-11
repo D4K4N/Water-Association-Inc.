@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#4C6972">
+  <meta name="theme-color" content="#0D0F12">
   <meta name="referrer" content="no-referrer">
   <meta name="description" content="Dicklum Water Association, Inc. - Mobile Water Billing, GPS Mapping & Field Operations System">
   <title>Dicklum Water Billing & Field Operations</title>
@@ -24,9 +24,9 @@
   <link rel="dns-prefetch" href="https://mt2.google.com">
   <link rel="dns-prefetch" href="https://mt3.google.com">
   
-  <link rel="stylesheet" href="css/styles.css?v=8">
-  <link rel="stylesheet" href="css/print-thermal.css?v=8">
-  <link rel="stylesheet" href="css/print-a4.css?v=8">
+  <link rel="stylesheet" href="css/styles.css?v=18">
+  <link rel="stylesheet" href="css/print-thermal.css?v=16">
+  <link rel="stylesheet" href="css/print-a4.css?v=16">
   <!-- Local Vendor Libraries — 100% Offline (Zero CDN Dependence) -->
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <script src="vendor/leaflet/leaflet.js"></script>
@@ -259,18 +259,18 @@
           <div class="sheet-handle"></div>
           <div class="sheet-header">
             <div>
-              <strong id="sheet-consumer-name">Juan Carlos Dela Cruz</strong>
-              <span class="acct-pill" id="sheet-account-no">DWA-2026-001</span>
+              <strong id="sheet-consumer-name"></strong>
+              <span class="acct-pill" id="sheet-account-no"></span>
             </div>
             <button id="btn-close-sheet" class="modal-close">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
           <div class="sheet-meta-grid">
-            <div><span class="text-muted">District:</span> <span id="sheet-zone" class="bold">Zone 2 - San Francisco</span></div>
-            <div><span class="text-muted">Meter:</span> <span id="sheet-meter-no" class="bold">WM-2024-001</span></div>
-            <div><span class="text-muted">Address:</span> <span id="sheet-address">Purok 2</span></div>
-            <div><span class="text-muted">Prev Rdg:</span> <span id="sheet-prev-reading" class="bold text-primary">1,954 m³</span></div>
+            <div><span class="text-muted">District:</span> <span id="sheet-zone" class="bold">—</span></div>
+            <div><span class="text-muted">Meter:</span> <span id="sheet-meter-no" class="bold">—</span></div>
+            <div><span class="text-muted">Address:</span> <span id="sheet-address">—</span></div>
+            <div><span class="text-muted">Prev Rdg:</span> <span id="sheet-prev-reading" class="bold text-primary">—</span></div>
           </div>
           <div class="sheet-actions" style="display: flex; gap: 6px; flex-wrap: wrap;">
             <button id="sheet-btn-read" class="btn btn-primary" style="flex: 1.2;">
@@ -288,24 +288,51 @@
           </div>
         </div>
 
-        <!-- Collapsible Cluster Bottom Sheet -->
-        <div id="cluster-bottom-sheet" class="map-bottom-sheet">
+        <!-- Collapsible Clustered Water Meters Dashboard (Frame 5 -> Individual Circle Meter Info & Print Receipt) -->
+        <div id="cluster-bottom-sheet" class="map-bottom-sheet cluster-dashboard-sheet">
           <div class="sheet-handle"></div>
-          <div class="sheet-header">
+          <div class="sheet-header" style="align-items: flex-start; gap: 8px;">
             <div>
-              <strong id="cluster-sheet-name">San Francisco Road Manifold</strong>
-              <span class="badge badge-warning" id="cluster-sheet-count">3 Meters</span>
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span class="cluster-header-badge">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><circle cx="9" cy="7" r="4"/><circle cx="17" cy="9" r="3"/><path d="M3 20v-1a6 6 0 0 1 12 0v1"/><path d="M15 20v-1a4.5 4.5 0 0 1 6-4.2"/></svg>
+                  Clustered Water Meters
+                </span>
+                <span class="acct-pill" id="cluster-sheet-zone"></span>
+                <span class="badge badge-warning" id="cluster-sheet-count"></span>
+              </div>
+              <strong id="cluster-sheet-name" style="font-size: 14.5px; display: block; margin-top: 3px;"></strong>
             </div>
-            <button id="btn-close-cluster-sheet" class="modal-close">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <button type="button" id="btn-cluster-add-meter" class="btn btn-xs btn-outline" style="border-color: var(--primary); color: var(--primary-light); font-weight: 700; padding: 4px 8px;">
+                + Add Meter
+              </button>
+              <button id="btn-close-cluster-sheet" class="modal-close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
           </div>
-          <p id="cluster-sheet-desc" style="font-size: 11px; color: var(--text-secondary); margin: 3px 0;"></p>
-          <div class="cluster-meters-list" id="cluster-meters-list">
-            <!-- Dynamically populated -->
+
+          <p id="cluster-sheet-desc" style="font-size: 11px; color: var(--text-secondary); margin: 2px 0 8px 0;">
+            Tap any circular water meter below to view its owner details, record a reading, or print its individual thermal bill receipt.
+          </p>
+
+          <!-- FRAME 5: Interactive Circle Water Meters Row (Bonifacio, sarah, trix...) -->
+          <div class="cluster-circles-dashboard-stage" id="cluster-sheet-circles-row">
+            <!-- Dynamically populated with animated circular water meter nodes -->
           </div>
-          <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
-            <button type="button" id="btn-unpin-cluster" class="btn btn-xs btn-outline" style="color: var(--danger); border-color: #fca5a5;">
+
+          <!-- Selected Circle Water Meter Detail & Individual Print Receipt Panel -->
+          <div class="cluster-selected-meter-card" id="cluster-selected-meter-panel">
+            <!-- Dynamically populated when clicking a circle water meter -->
+          </div>
+
+          <!-- Legacy list container kept hidden for compatibility -->
+          <div class="cluster-meters-list hidden" id="cluster-meters-list"></div>
+
+          <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <span style="font-size: 10.5px; color: var(--text-muted);">Select a circle above to inspect or print receipt</span>
+            <button type="button" id="btn-unpin-cluster" class="btn btn-xs btn-outline" style="color: #F87171; border-color: rgba(239, 68, 68, 0.4);">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               Delete Cluster Pin
             </button>
@@ -453,7 +480,7 @@
         <!-- Notes -->
         <div class="form-group">
           <label for="rdg-notes-input">Field Notes / Meter Inspection Remarks:</label>
-          <input type="text" id="rdg-notes-input" class="form-control" placeholder="e.g. Normal dial movement, clean glass, no visible pipe leaks...">
+          <input type="text" id="rdg-notes-input" class="form-control" placeholder="Optional remarks">
         </div>
 
         <!-- Submit Actions -->
@@ -469,40 +496,74 @@
       </div>
     </section>
 
-    <!-- VIEW 4: Water Bills & Statements -->
+    <!-- VIEW 4: Consumer Folders, Water Bills & Thermal Receipts Dashboard -->
     <section id="view-billing" class="app-view">
       <div class="view-header">
-        <h2>Water Bills & Receipts</h2>
-        <span class="badge badge-warning">October 2026</span>
+        <div>
+          <h2 style="margin: 0;">Consumer Folders &amp; Water Bills</h2>
+        </div>
+        <span id="billing-folders-count-badge" class="badge badge-success">0 FOLDERS</span>
       </div>
-      <div style="padding: 8px 10px 0 10px; display: flex; gap: 6px; flex-shrink: 0;">
-        <span class="map-filter-chip billing-filter-chip active" data-status="all">All Statements</span>
-        <span class="map-filter-chip billing-filter-chip" data-status="unpaid">Unpaid</span>
-        <span class="map-filter-chip billing-filter-chip" data-status="paid">Paid</span>
+
+      <!-- Dashboard View Mode Toggle: Consumer Folders vs All Bill Notices -->
+      <div style="padding: 8px 12px 6px 12px; flex-shrink: 0; background: var(--surface); border-bottom: 1px solid var(--border);">
+        <div id="billing-view-mode-toggle" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--surface-alt); padding: 2px; border-radius: var(--radius-sm); margin-bottom: 8px; border: 1px solid var(--border);">
+          <button type="button" class="btn btn-xs billing-mode-btn active" data-mode="folders" style="background: var(--primary); color: #FFF; border: none; height: 28px; font-size: 11.5px; font-weight: 600; border-radius: var(--radius-xs); display: flex; align-items: center; justify-content: center; gap: 5px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Consumer Folders
+          </button>
+          <button type="button" class="btn btn-xs billing-mode-btn" data-mode="bills" style="background: transparent; color: var(--text-secondary); border: none; height: 28px; font-size: 11.5px; font-weight: 500; border-radius: var(--radius-xs); display: flex; align-items: center; justify-content: center; gap: 5px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            All Thermal Bills
+          </button>
+        </div>
+
+        <!-- Search Bar: "search: pedro" -->
+        <div style="position: relative; margin-bottom: 6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="billing-folder-search-input" class="form-control" placeholder="Search name, account, meter, or zone" style="padding-left: 32px; padding-right: 28px; font-size: 12px; height: 34px;">
+          <button type="button" id="btn-clear-billing-search" style="display: none; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xs); width: 20px; height: 20px; font-size: 11px; color: var(--text-secondary); cursor: pointer; align-items: center; justify-content: center;">✕</button>
+        </div>
+
+        <!-- Status Filter Chips -->
+        <div style="display: flex; gap: 5px; overflow-x: auto; padding-bottom: 2px;">
+          <span class="map-filter-chip billing-filter-chip active" data-status="all">All Consumers</span>
+          <span class="map-filter-chip billing-filter-chip" data-status="billed">With Saved Bills</span>
+          <span class="map-filter-chip billing-filter-chip" data-status="unpaid">Unpaid Balance</span>
+          <span class="map-filter-chip billing-filter-chip" data-status="paid">Fully Paid</span>
+        </div>
       </div>
+
       <div class="directory-scroll-list" id="billing-list-container">
-        <!-- Dynamically populated -->
+        <!-- Dynamically populated with Consumer Folder Cards or Thermal Bill Cards -->
       </div>
     </section>
 
     <!-- VIEW 5: Records, Reports & Settings -->
     <section id="view-settings" class="app-view">
       <div class="view-header">
-        <h2>Records, Reports & Settings</h2>
+        <div>
+          <h2 style="margin: 0;">Records &amp; Reports</h2>
+        </div>
+        <button type="button" id="btn-open-settings-burger" class="burger-menu-btn" title="Open Settings Menu" aria-label="Open Settings Menu">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+          <span>Settings</span>
+        </button>
       </div>
 
       <div class="settings-content">
         <!-- Master Consumer & Meter Directory Section -->
         <div class="settings-section-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <h3 style="margin: 0;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-              Registered Consumers & Water Meters
-            </h3>
+            <h3 style="margin: 0;">Registered Consumers &amp; Water Meters</h3>
             <span id="consumer-records-count-badge" class="badge badge-success">0 CONSUMERS</span>
           </div>
           <div style="margin-bottom: 8px;">
-            <input type="text" id="consumer-search-input" class="form-control" placeholder="Search consumer name, account #, meter #, or zone..." style="font-size: 11.5px;">
+            <input type="text" id="consumer-search-input" class="form-control" placeholder="Search consumer name, account #, meter #, or zone..." style="font-size: 12px;">
           </div>
           <div id="consumers-list-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto;">
             <!-- Dynamically populated with consumer cards, pin statuses, read meter and delete actions -->
@@ -510,43 +571,40 @@
         </div>
 
         <!-- Zone-Separated & Period-Filtered Records Export (Today vs This Month, PDF & Excel + Office PC Upload) -->
-        <div class="settings-section-card" style="border: 1.5px solid var(--primary); background: linear-gradient(180deg, rgba(15,118,110,0.04) 0%, #FFFFFF 100%);">
+        <div class="settings-section-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <h3 style="margin: 0;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              Office PC Sync &amp; Zone Records Export (PDF / Excel)
-            </h3>
-            <span id="office-sync-status-badge" class="badge badge-success" style="font-size: 9px;">READY</span>
+            <h3 style="margin: 0;">Office PC Sync &amp; Zone Records Export</h3>
+            <span id="office-sync-status-badge" class="badge badge-success">READY</span>
           </div>
-          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 10px;">
-            After reading meters and printing thermal bills in the field, upload all current readings to the Office PC or download arranged tables separated by <strong>Zone 1 – Zone 4</strong> and by <strong>Today</strong> or <strong>This Month</strong>.
+          <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 10px;">
+            Upload field readings to the Office PC or export records separated by zone and billing period.
           </p>
 
           <!-- Step 1: Upload to Office PC / Pull on Office PC -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
-            <button type="button" id="btn-upload-readings-to-pc" class="btn btn-sm btn-primary" style="font-weight: 700;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <button type="button" id="btn-upload-readings-to-pc" class="btn btn-sm btn-primary">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               Upload Readings to PC
             </button>
-            <button type="button" id="btn-pull-readings-from-pc" class="btn btn-sm btn-outline" style="font-weight: 700; color: var(--primary); border-color: var(--primary);">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <button type="button" id="btn-pull-readings-from-pc" class="btn btn-sm btn-outline">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Load PC Office Records
             </button>
           </div>
 
           <!-- Step 2: Filter Options (Records I Made Today | Records of This Month | All) -->
           <div style="margin-bottom: 10px;">
-            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
-              1 · Select Record Period to View / Download:
+            <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
+              1 · Record Period
             </label>
-            <div id="records-period-toggle" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; background: #F1F5F9; padding: 4px; border-radius: 10px;">
-              <button type="button" class="btn btn-xs records-period-btn active" data-period="today" style="background: #0F172A; color: #FFF; font-weight: 700; padding: 6px 4px; border-radius: 7px;">
+            <div id="records-period-toggle" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; background: var(--surface-alt); padding: 2px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+              <button type="button" class="btn btn-xs records-period-btn active" data-period="today" style="background: var(--primary); color: #FFF; font-weight: 600; height: 28px; border-radius: var(--radius-xs);">
                 Records Today
               </button>
-              <button type="button" class="btn btn-xs records-period-btn" data-period="month" style="background: transparent; color: #334155; font-weight: 700; padding: 6px 4px; border-radius: 7px;">
+              <button type="button" class="btn btn-xs records-period-btn" data-period="month" style="background: transparent; color: var(--text-secondary); font-weight: 500; height: 28px; border-radius: var(--radius-xs);">
                 This Month
               </button>
-              <button type="button" class="btn btn-xs records-period-btn" data-period="all" style="background: transparent; color: #334155; font-weight: 700; padding: 6px 4px; border-radius: 7px;">
+              <button type="button" class="btn btn-xs records-period-btn" data-period="all" style="background: transparent; color: var(--text-secondary); font-weight: 500; height: 28px; border-radius: var(--radius-xs);">
                 All Records
               </button>
             </div>
@@ -554,192 +612,47 @@
 
           <!-- Step 3: Zone-Separated Download Cards (Zone 1, Zone 2, Zone 3, Zone 4) -->
           <div style="margin-bottom: 12px;">
-            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 6px;">
-              2 · Separate Data by Zone (Download Current Bills &amp; Readings as PDF or Excel):
+            <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 6px;">
+              2 · Export by Zone (PDF / Excel)
             </label>
-            <div id="zone-export-cards-container" style="display: flex; flex-direction: column; gap: 7px;">
+            <div id="zone-export-cards-container" style="display: flex; flex-direction: column; gap: 6px;">
               <!-- Populated dynamically for Zone 1, Zone 2, Zone 3, Zone 4, and All Zones -->
             </div>
           </div>
 
-          <!-- Step 4: Individual Consumer / Water Meter Owner Reading Ledger (e.g. Mario: Previous -> Current Reading) -->
-          <div style="border-top: 1px dashed var(--border-strong); padding-top: 10px;">
-            <label style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
-              3 · Individual Water Meter Owner Reading Table (Previous → Current Reading):
+          <!-- Step 4: Individual Consumer / Water Meter Owner Reading Ledger -->
+          <div style="border-top: 1px solid var(--border); padding-top: 10px;">
+            <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
+              3 · Individual Consumer Reading Table
             </label>
-            <select id="export-consumer-select" class="form-control" style="margin-bottom: 6px; font-size: 12px; font-weight: 600;">
-              <option value="">-- Select Consumer / Water Meter Owner (e.g. mario) --</option>
+            <select id="export-consumer-select" class="form-control" style="margin-bottom: 6px;">
+              <option value="">-- Select Consumer / Water Meter Owner --</option>
             </select>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
               <button type="button" id="btn-export-consumer-pdf" class="btn btn-sm btn-primary">
-                📄 Consumer PDF Table
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                Consumer PDF Table
               </button>
-              <button type="button" id="btn-export-consumer-excel" class="btn btn-sm btn-success">
-                📊 Consumer Excel (.xls)
+              <button type="button" id="btn-export-consumer-excel" class="btn btn-sm btn-outline">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+                Consumer Excel (.xls)
               </button>
             </div>
           </div>
         </div>
 
-        <!-- Server-Enforced Login Gate & PIN Security Card -->
+        <!-- Official Utility Reports Section -->
         <div class="settings-section-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <h3 style="margin: 0;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              Security Gate &amp; Secret Office PIN
-            </h3>
-            <span id="security-pin-status-badge" class="badge badge-success" style="font-size: 9px;">PROTECTED</span>
-          </div>
-          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
-            Protects your app, household locations, water meter pins, and billing records with your secret Office/Reader PIN.
-          </p>
-          <div style="display: flex; gap: 6px;">
-            <button type="button" id="btn-open-pin-setup" class="btn btn-sm btn-primary" style="flex: 1;">
-              Create / Change Secret PIN
-            </button>
-            <button type="button" id="btn-lock-app-now" class="btn btn-sm btn-outline" style="color: var(--danger); border-color: #FCA5A5;">
-              Lock App Now
-            </button>
-          </div>
-        </div>
-
-        <!-- Official Utility Reports Section (Phase 7, Section 18) -->
-        <div class="settings-section-card">
-          <h3>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-            Official Association Reports (PDF)
-          </h3>
-          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
-            Generate printable A4 summaries and audits based on real persistent records.
+          <h3>Official Association Reports (PDF)</h3>
+          <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">
+            Generate printable A4 billing summaries and master directories.
           </p>
           <div style="display: flex; flex-direction: column; gap: 6px;">
             <button id="btn-report-billing-summary" class="btn btn-sm btn-primary">
               Generate Monthly Billing Summary
             </button>
             <button id="btn-report-consumer-directory" class="btn btn-sm btn-outline">
-              Generate Consumer & Meter Directory
-            </button>
-          </div>
-        </div>
-
-        <!-- Tariff Rules (Phase 5, Section 13) -->
-        <div class="settings-section-card">
-          <h3>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
-            Dicklum Water Association Tariff
-          </h3>
-          <div class="form-group">
-            <label>Minimum Monthly Charge (PHP):</label>
-            <input type="number" id="tariff-min-charge" class="form-control" value="100.00" step="0.5">
-          </div>
-          <div class="form-group">
-            <label>Minimum Consumption Allowance (Cubic Meters included):</label>
-            <input type="number" id="tariff-min-allowance" class="form-control" value="10" step="1">
-          </div>
-          <div class="form-group">
-            <label>Excess Rate per m³ above allowance (Leave blank if unconfigured):</label>
-            <input type="number" id="tariff-excess-rate" class="form-control" placeholder="Not yet provided" step="0.5">
-          </div>
-          <div class="form-group">
-            <label>Active Billing Period:</label>
-            <input type="text" id="tariff-period-name" class="form-control" value="October 2026">
-          </div>
-          <button id="btn-save-tariff" class="btn btn-sm btn-primary">Save Tariff Settings</button>
-        </div>
-
-        <!-- Purok Districts & Manifold Clusters Management -->
-        <div class="settings-section-card">
-          <h3>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-            Purok Districts & Manifold Clusters
-          </h3>
-          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
-            Manage water association Purok zones and grouped meter manifold clusters.
-          </p>
-
-          <div style="margin-bottom: 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <label style="font-size: 11.5px; font-weight: 700; margin: 0;">Active Zones / Puroks:</label>
-              <span id="settings-zones-count" class="badge badge-success" style="font-size: 9px;">4 ZONES</span>
-            </div>
-            <div id="settings-zones-list" style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px;">
-              <!-- Populated dynamically -->
-            </div>
-            <div style="display: flex; gap: 6px; margin-top: 8px;">
-              <input type="text" id="settings-new-zone-input" class="form-control" placeholder="New Zone Name (e.g. Zone 5)" style="font-size: 11.5px;">
-              <button type="button" id="btn-settings-add-zone" class="btn btn-sm btn-primary" style="white-space: nowrap;">+ Add Zone</button>
-            </div>
-          </div>
-
-          <div style="border-top: 1px solid var(--border-color); padding-top: 10px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <label style="font-size: 11.5px; font-weight: 700; margin: 0;">Meter Manifold Clusters (Grouped by Purok/Zone):</label>
-              <button type="button" id="btn-settings-new-cluster-prompt" class="btn btn-xs btn-outline" style="font-weight: 600;">+ New Cluster</button>
-            </div>
-            <div id="settings-clusters-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow-y: auto;">
-              <!-- Populated dynamically -->
-            </div>
-          </div>
-        </div>
-
-        <!-- Bluetooth Printer (Phase 6, Section 15) -->
-        <div class="settings-section-card">
-          <h3>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 7 17 17 12 22 12 2 17 7 7 17"/></svg>
-            Portable Bluetooth Thermal Printer
-          </h3>
-          <div style="margin-bottom: 6px;">
-            <span class="text-muted" style="font-size: 11px;">Status:</span> 
-            <span id="printer-status-pill" class="badge badge-warning">DISCONNECTED</span>
-          </div>
-          <p id="printer-status-details" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
-            Supports 58mm and 80mm ESC/POS Bluetooth printers (Senda PT-210, GOOJPRT, POS-5802).
-          </p>
-          <div class="form-group">
-            <label>Paper Width:</label>
-            <select id="select-paper-width" class="form-control">
-              <option value="58mm" selected>58mm Roll (Standard Mobile)</option>
-              <option value="80mm">80mm Roll (Wide)</option>
-            </select>
-          </div>
-          <div style="display: flex; gap: 6px;">
-            <button id="btn-connect-bluetooth" class="btn btn-sm btn-primary">
-              Connect Bluetooth Printer
-            </button>
-            <button id="btn-test-ticket" class="btn btn-sm btn-outline">
-              Test Ticket
-            </button>
-          </div>
-        </div>
-
-        <!-- Offline Disaster Recovery (Phase 8, Section 21) -->
-        <div class="settings-section-card">
-          <h3>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" y2="3"/></svg>
-            Offline Database & Data Recovery
-          </h3>
-          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
-            Persistent IndexedDB storage ensures full data preservation across reloads and offline field use.
-          </p>
-          <div style="display: flex; flex-direction: column; gap: 6px;">
-            <button id="btn-export-backup" class="btn btn-sm btn-primary">
-              📤 Export JSON Backup File
-            </button>
-            <label class="btn btn-sm btn-outline" style="cursor: pointer; text-align: center; font-weight: 700; color: #0F766E; border-color: #0F766E;">
-              📥 Import JSON Backup File (Restore Pinned Locations)
-              <input type="file" id="input-restore-backup" accept=".json" style="display: none;">
-            </label>
-            <button id="btn-clear-all-pins" class="btn btn-sm btn-outline" style="color: var(--primary); font-weight: 700;">
-              Clear All Pinned GPS Locations (Start Fresh)
-            </button>
-            <button id="btn-clear-all-bills" class="btn btn-sm btn-outline" style="color: #D97706; font-weight: 700;">
-              Clear All Bills & Reading Records (Reset Monthly Reports)
-            </button>
-            <button id="btn-wipe-clean-slate" class="btn btn-sm btn-outline" style="color: var(--danger); font-weight: 700;">
-              Wipe All Data & Start Empty Utility (0 Records)
-            </button>
-            <button id="btn-reset-seed-data" class="btn btn-sm btn-outline" style="color: var(--text-muted);">
-              Reset to Default Dicklum Demo Data
+              Generate Consumer &amp; Meter Directory
             </button>
           </div>
         </div>
@@ -753,8 +666,8 @@
     <button class="nav-item active" data-view="view-map">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
-        <line x1="9" y1="3" y2="18"/>
-        <line x1="15" y1="6" y2="21"/>
+        <line x1="9" y1="3" x2="9" y2="18"/>
+        <line x1="15" y1="6" x2="15" y2="21"/>
       </svg>
       <span>Map</span>
     </button>
@@ -767,10 +680,9 @@
     </button>
     <button class="nav-item" data-view="view-billing">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/>
-        <path d="M14 8H8"/><path d="M16 12H8"/><path d="M13 16H8"/>
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
       </svg>
-      <span>Bills</span>
+      <span>Folders &amp; Bills</span>
     </button>
     <button class="nav-item" data-view="view-settings">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -810,25 +722,25 @@
       </button>
 
       <!-- Offline Diclum Map Pack & Storage Manager -->
-      <div style="margin-top: 10px; padding: 12px; background: #F8FAFC; border: 1.5px solid #CBD5E1; border-radius: 12px;">
+      <div style="margin-top: 10px; padding: 12px; background: var(--surface-alt); border: 1.5px solid var(--border); border-radius: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <strong style="font-size: 12px; color: #0F172A; display: flex; align-items: center; gap: 6px;">
-            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #059669;"></span>
+          <strong style="font-size: 12px; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10B981;"></span>
             Barangay Diclum Offline Map
           </strong>
           <span id="offline-cache-badge" class="badge badge-success" style="font-size: 9.5px;">100% READY</span>
         </div>
-        <p id="offline-cache-stats-text" style="font-size: 11px; color: #475569; margin-bottom: 8px; line-height: 1.4;">
+        <p id="offline-cache-stats-text" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
           The Diclum map pack is bundled into the app. When you are out in the field with zero data/Wi-Fi, the map opens in 1ms with no loading delay.
         </p>
 
         <div id="offline-download-progress-box" style="display: none; margin-bottom: 10px;">
-          <div style="display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 700; color: #0F172A; margin-bottom: 4px;">
+          <div style="display: flex; justify-content: space-between; font-size: 10.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">
             <span id="offline-download-label">Caching Diclum Deep Zoom...</span>
             <span id="offline-download-percent">0%</span>
           </div>
-          <div style="height: 6px; width: 100%; background: #E2E8F0; border-radius: 999px; overflow: hidden;">
-            <div id="offline-download-bar" style="height: 100%; width: 0%; background: #0F766E; transition: width 0.2s;"></div>
+          <div style="height: 6px; width: 100%; background: var(--bg); border-radius: 999px; overflow: hidden;">
+            <div id="offline-download-bar" style="height: 100%; width: 0%; background: var(--primary); transition: width 0.2s;"></div>
           </div>
         </div>
 
@@ -836,7 +748,7 @@
           <button type="button" id="btn-download-offline-diclum" class="btn btn-sm btn-primary" style="flex: 1; font-size: 11px; font-weight: 700;">
             Download Deep Zoom (Zooms 14–18)
           </button>
-          <button type="button" id="btn-cancel-offline-diclum" class="btn btn-sm btn-outline hidden" style="color: #DC2626; border-color: #FECACA; font-size: 11px;">
+          <button type="button" id="btn-cancel-offline-diclum" class="btn btn-sm btn-outline hidden" style="color: var(--danger); border-color: var(--danger); font-size: 11px;">
             Cancel
           </button>
         </div>
@@ -850,7 +762,7 @@
   <div class="modal-backdrop"></div>
   <div class="modal-card">
     <div class="modal-header">
-      <h3>Thermal Receipt Print Preview</h3>
+      <h3>Xprinter XP-P300 Thermal Receipt</h3>
       <button class="modal-close">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
@@ -862,9 +774,10 @@
         </div>
       </div>
     </div>
-    <div class="modal-footer">
-      <button id="btn-browser-thermal-print" class="btn btn-outline">Browser Print</button>
-      <button id="btn-execute-thermal-print" class="btn btn-primary">Print to Bluetooth</button>
+    <div class="modal-footer" style="flex-wrap: wrap;">
+      <button id="btn-modal-feed-paper" type="button" class="btn btn-sm btn-outline">Feed Paper</button>
+      <button id="btn-browser-thermal-print" type="button" class="btn btn-sm btn-outline">USB / Browser Print</button>
+      <button id="btn-execute-thermal-print" type="button" class="btn btn-sm btn-primary" style="flex: 1;">Print to XP-P300</button>
     </div>
   </div>
 </div>
@@ -994,7 +907,7 @@
         <div id="pin-add-zone-box" style="display: none; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color);">
           <div style="font-size: 10.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">Enter New Purok or Zone District Name:</div>
           <div style="display: flex; gap: 6px;">
-            <input type="text" id="input-new-zone-name" class="form-control" placeholder="e.g. Zone 5, Purok 5 - Riverside" style="font-size: 11.5px;">
+            <input type="text" id="input-new-zone-name" class="form-control" placeholder="Zone or purok name" style="font-size: 11.5px;">
             <button type="button" id="btn-save-new-zone" class="btn btn-sm btn-primary" style="white-space: nowrap;">Save Zone</button>
             <button type="button" id="btn-cancel-new-zone" class="btn btn-sm btn-outline">Cancel</button>
           </div>
@@ -1005,96 +918,146 @@
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 6px;">
         <div class="form-group" style="margin: 0;">
           <label style="font-size: 11px;">Latitude:</label>
-          <input type="text" id="pin-lat-input" class="form-control" placeholder="8.368500">
+          <input type="text" id="pin-lat-input" class="form-control" placeholder="Latitude">
         </div>
         <div class="form-group" style="margin: 0;">
           <label style="font-size: 11px;">Longitude:</label>
-          <input type="text" id="pin-lng-input" class="form-control" placeholder="124.862500">
+          <input type="text" id="pin-lng-input" class="form-control" placeholder="Longitude">
         </div>
       </div>
 
       <!-- Quick GPS Autofill Button (Standing Here) -->
-      <button type="button" id="btn-pin-use-gps" class="btn btn-sm btn-outline" style="width: 100%; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; color: var(--primary); border-color: var(--primary);">
+      <button type="button" id="btn-pin-use-gps" class="btn btn-sm btn-outline" style="width: 100%; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
         </svg>
         Use My Current GPS (Where I Am Standing)
       </button>
 
-      <!-- Water Meter Pin Form -->
+      <!-- Water Meter Pin Form (Supports Single or Clustered/Grouped Multi-Owner Water Meters) -->
       <div id="form-pin-meter">
-        <div class="form-group">
-          <label><strong>Water Meter Owner / Consumer Name:</strong></label>
-          <input type="text" id="pin-meter-owner-name" class="form-control" placeholder="e.g. Maria Clara Santos">
-          <div id="pin-meter-existing-consumer-row" class="hidden" style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
-            <span>Or link to existing consumer:</span>
-            <select id="pin-meter-consumer-select" class="form-control" style="font-size: 11px; padding: 4px 6px; margin-top: 2px;"></select>
+        <!-- FRAME 2: Number of Water Meters Stepper Card -->
+        <div class="meter-group-builder-card" id="meter-count-stepper-card">
+          <div class="mgb-top-row">
+            <div>
+              <div class="mgb-title">
+                Number of water meters
+              </div>
+              <div class="mgb-subtitle">
+                Each water meter can have a different owner and account number.
+              </div>
+            </div>
+            <div class="mgb-counter-control" role="group" aria-label="Number of water meters at this location">
+              <button type="button" id="btn-meter-count-minus" class="mgb-step-btn" title="Decrease number of water meters">−</button>
+              <span id="pin-meter-count-display" class="mgb-count-value">1</span>
+              <button type="button" id="btn-meter-count-plus" class="mgb-step-btn" title="Increase number of water meters">+</button>
+            </div>
+          </div>
+
+          <!-- FRAME 3 & FRAME 5: Interactive Circle Water Meters Selector (1, 2, 3 -> Bonifacio, sarah, trix) -->
+          <div class="mgb-circles-stage" id="pin-meter-circles-stage">
+            <!-- Dynamically populated with interactive circular water meter nodes -->
+          </div>
+          <div class="mgb-circles-hint" id="pin-meter-circles-hint">
+            Tap a circle above to enter or edit that water meter's owner and details.
           </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <!-- FRAME 4: Selected Circle Water Meter Editor Card -->
+        <div class="meter-slot-editor-card" id="meter-slot-editor-card">
+          <div class="mse-header">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div class="mse-circle-badge" id="active-meter-circle-badge">1</div>
+              <div>
+                <strong id="active-meter-slot-title" style="font-size: 13px; font-weight: 600; color: var(--text-primary); display: block;">Water Meter #1</strong>
+                <span id="active-meter-slot-subtitle" style="font-size: 11px; color: var(--text-muted);">Enter owner name &amp; meter details below</span>
+              </div>
+            </div>
+            <span class="badge badge-success" id="active-meter-slot-status">Editing #1</span>
+          </div>
+
           <div class="form-group">
-            <label>Meter Serial Number:</label>
-            <input type="text" id="pin-meter-no" class="form-control" placeholder="e.g. WM-2026-001">
+            <label>Water Meter Owner / Consumer Name</label>
+            <input type="text" id="pin-meter-owner-name" class="form-control" placeholder="Full name" autocomplete="off">
+            <div id="pin-meter-existing-consumer-row" class="hidden" style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">
+              <span>Or link to existing consumer:</span>
+              <select id="pin-meter-consumer-select" class="form-control" style="font-size: 11.5px; margin-top: 2px;"></select>
+            </div>
           </div>
+
           <div class="form-group">
-            <label>Initial Reading (m³):</label>
-            <input type="number" id="pin-meter-initial-reading" class="form-control" value="0" min="0" placeholder="0">
+            <label>Address / Purok / Landmark</label>
+            <input type="text" id="pin-meter-address" class="form-control" placeholder="Address, purok, or landmark">
           </div>
-        </div>
 
-        <div class="form-group">
-          <label>Address / Purok / Landmark:</label>
-          <input type="text" id="pin-meter-address" class="form-control" placeholder="e.g. Purok 2, San Francisco Road">
-        </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div class="form-group">
+              <label>Meter Serial Number</label>
+              <input type="text" id="pin-meter-no" class="form-control" placeholder="Meter serial number">
+            </div>
+            <div class="form-group">
+              <label>Initial Reading (m³)</label>
+              <input type="number" id="pin-meter-initial-reading" class="form-control" value="0" min="0" placeholder="0">
+            </div>
+          </div>
 
-        <div class="form-group">
-          <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--primary); cursor: pointer; background: rgba(76, 105, 114, 0.08); padding: 8px; border-radius: var(--radius-xs); border: 1px dashed var(--primary);">
-            <input type="checkbox" id="pin-meter-link-household">
-            Also pin this owner's Household here (same spot)
-          </label>
+          <div class="form-group" style="margin-bottom: 6px;">
+            <label style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 500; color: var(--text-secondary); cursor: pointer; background: var(--surface-alt); padding: 8px 10px; border-radius: var(--radius-xs); border: 1px solid var(--border);">
+              <input type="checkbox" id="pin-meter-link-household">
+              Also pin this owner's Household here (same spot)
+            </label>
+          </div>
+
+          <!-- Quick Slot Save / Next Meter Bar (Shown when adding 2+ Clustered Meters) -->
+          <div id="mse-slot-nav-bar" class="mse-slot-nav-bar hidden">
+            <button type="button" id="btn-mse-prev-slot" class="btn btn-xs btn-outline">
+              ← Prev Meter
+            </button>
+            <button type="button" id="btn-mse-save-next-slot" class="btn btn-xs btn-primary">
+              Save Meter #1 &amp; Next →
+            </button>
+          </div>
         </div>
 
         <!-- Meter Cluster Manifold (Separated by Selected Zone) -->
-        <div class="form-group" style="background: rgba(76, 105, 114, 0.05); padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label style="font-size: 11.5px; font-weight: 700; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 4px;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 6.5h10M7 17.5h10M6.5 7v10M17.5 7v10"/></svg>
-              Meter Cluster (Grouped Manifold in this Zone):
+        <div class="form-group" style="background: var(--surface-alt); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); margin-top: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 11.5px; font-weight: 600; margin: 0; color: var(--text-primary);">
+              Meter Cluster (Grouped Manifold in Zone)
             </label>
-            <button type="button" id="btn-pin-toggle-add-cluster" class="btn btn-xs btn-outline" style="font-size: 10px; padding: 2px 7px; font-weight: 600;">
-              + New Cluster in Zone
+            <button type="button" id="btn-pin-toggle-add-cluster" class="btn btn-xs btn-outline">
+              + New Cluster
             </button>
           </div>
-          <select id="pin-cluster-select" class="form-control" style="font-size: 11.5px;">
-            <option value="">-- Individual Standalone Meter (No Cluster) --</option>
+          <select id="pin-cluster-select" class="form-control" style="font-size: 12px;">
+            <option value="">-- Individual Standalone Meter (Auto-Clustered when 2+ Meters) --</option>
           </select>
-          <div id="pin-cluster-zone-badge" style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">
-            Showing clusters in this Purok/Zone. Standalone meters do not belong to a cluster manifold.
+          <div id="pin-cluster-zone-badge" style="font-size: 10.5px; color: var(--text-muted); margin-top: 4px;">
+            When 2 or more water meters are added above, they are automatically grouped into a Clustered Water Meter pin at this location.
           </div>
 
           <!-- Inline New Cluster Input Box -->
-          <div id="pin-add-cluster-box" style="display: none; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color);">
-            <div style="font-size: 10.5px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">New Cluster Manifold Name (for this Zone):</div>
+          <div id="pin-add-cluster-box" style="display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
+            <div style="font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px;">New Cluster Manifold Name:</div>
             <div style="display: flex; gap: 6px;">
-              <input type="text" id="input-new-cluster-name" class="form-control" placeholder="e.g. Manifold B - Purok Curve" style="font-size: 11.5px;">
+              <input type="text" id="input-new-cluster-name" class="form-control" placeholder="Cluster name" style="font-size: 12px;">
               <button type="button" id="btn-save-new-cluster" class="btn btn-sm btn-primary" style="white-space: nowrap;">Save Cluster</button>
               <button type="button" id="btn-cancel-new-cluster" class="btn btn-sm btn-outline">Cancel</button>
             </div>
           </div>
         </div>
 
-        <div class="form-group">
-          <label>Field Notes / Reminders:</label>
-          <input type="text" id="pin-meter-notes" class="form-control" placeholder="e.g. In front of blue gate, clear dial...">
+        <div class="form-group" style="margin-top: 8px;">
+          <label>Field Notes / Reminders</label>
+          <input type="text" id="pin-meter-notes" class="form-control" placeholder="Optional notes">
         </div>
       </div>
 
       <!-- Household Pin Form (Full Name only) -->
       <div id="form-pin-household" style="display: none;">
         <div class="form-group">
-          <label><strong>Consumer Full Name:</strong></label>
-          <input type="text" id="pin-house-name" class="form-control form-control-lg" placeholder="e.g. Maria Clara Santos" autocomplete="off">
+          <label>Consumer Full Name</label>
+          <input type="text" id="pin-house-name" class="form-control form-control-lg" placeholder="Full name" autocomplete="off">
         </div>
         <!-- Optional fields retained (hidden) for data compatibility -->
         <div style="display: none;">
@@ -1127,21 +1090,21 @@
       </button>
     </div>
     <div class="modal-body">
-      <div style="background: var(--surface-alt); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 10px; font-size: 12px;">
+      <div style="background: var(--surface-alt); border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 10px; font-size: 12px;">
         <div>Bill Reference: <strong id="pay-bill-id">BILL-001</strong></div>
-        <div>Consumer Name: <strong id="pay-consumer-name">Juan Carlos Dela Cruz</strong></div>
+        <div>Consumer Name: <strong id="pay-consumer-name"></strong></div>
         <div>Total Amount Due: <strong id="pay-amount-due" class="text-primary">PHP 100.00</strong></div>
       </div>
       <div class="form-group">
-        <label>Amount Paid (PHP):</label>
+        <label>Amount Paid (PHP)</label>
         <input type="number" id="pay-amount-input" class="form-control" value="100.00" step="0.5">
       </div>
       <div class="form-group">
-        <label>Official Receipt (OR) Number:</label>
+        <label>Official Receipt (OR) Number</label>
         <input type="text" id="pay-or-input" class="form-control" value="OR-991204">
       </div>
       <div class="form-group">
-        <label>Collector / Cashier Name:</label>
+        <label>Collector / Cashier Name</label>
         <input type="text" id="pay-collector-input" class="form-control" value="R. Fernandez">
       </div>
     </div>
@@ -1152,7 +1115,7 @@
   </div>
 </div>
 
-<!-- MODAL 6: Official Utility Report Preview (Phase 7, Section 18) -->
+<!-- MODAL 6: Official Utility Report Preview -->
 <div id="modal-report-preview" class="app-modal">
   <div class="modal-backdrop"></div>
   <div class="modal-card" style="max-width: 900px; width: 95%;">
@@ -1169,138 +1132,403 @@
         </div>
       </div>
     </div>
-    <div class="modal-footer" style="display:flex; justify-content:flex-end; gap:8px;">
+    <div class="modal-footer">
       <button class="modal-close btn btn-outline">Close</button>
-      <button id="btn-download-report-pdf" class="btn btn-primary" style="display:flex; align-items:center; gap:6px;">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <button id="btn-download-report-pdf" class="btn btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Save as PDF
       </button>
-      <button id="btn-print-report-modal" class="btn btn-outline" style="display:flex; align-items:center; gap:6px;">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+      <button id="btn-print-report-modal" class="btn btn-outline">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
         Print
       </button>
     </div>
   </div>
 </div>
 
-<!-- MODAL 7: Individual Consumer History & Payment Ledger -->
+<!-- MODAL 7: Individual Consumer Folder — Thermal Paper Bills & Monthly Payment Ledger -->
 <div id="modal-consumer-history" class="app-modal">
   <div class="modal-backdrop"></div>
-  <div class="modal-card" style="max-width: 700px; width: 95%; max-height: 90dvh; display: flex; flex-direction: column;">
+  <div class="modal-card" style="max-width: 760px; width: 96%; max-height: 92dvh; display: flex; flex-direction: column;">
     <div class="modal-header">
       <div>
-        <h3 id="hist-modal-consumer-name" style="margin: 0; font-size: 15px; color: var(--primary);">Consumer History</h3>
-        <span id="hist-modal-acct-pill" class="acct-pill" style="font-size: 10px;">DWA-2026-001</span>
+        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 600;">Consumer Billing &amp; Receipt Folder</div>
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px;">
+          <h3 id="hist-modal-consumer-name" style="margin: 0; font-size: 14.5px;">Consumer Name</h3>
+          <span id="hist-modal-acct-pill" class="acct-pill">DWA-2026-001</span>
+        </div>
       </div>
-      <button class="modal-close">
+      <button class="modal-close" aria-label="Close">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
     </div>
-    <div class="modal-body" style="padding: 12px; overflow-y: auto; flex: 1;">
+
+    <div id="consumer-folder-printable-area" class="modal-body" style="padding: 12px; overflow-y: auto; flex: 1; background: var(--bg);">
       <!-- Consumer Profile Summary -->
-      <div id="hist-consumer-summary-box" style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 12px; font-size: 11.5px;">
+      <div id="hist-consumer-summary-box" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 10px; font-size: 11.5px;">
         <!-- Populated dynamically -->
       </div>
 
-      <!-- Quick Financial Counters -->
-      <div class="metrics-ribbon" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 14px;">
-        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
-          <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; display: block;">Total Billed</span>
-          <strong id="hist-stat-billed" style="font-size: 13.5px; color: var(--text-primary);">PHP 0.00</strong>
+      <!-- 4 Financial & Consumption Counters -->
+      <div class="metrics-ribbon" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 12px;">
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: left;">
+          <span style="font-size: 9.5px; color: var(--text-muted); text-transform: uppercase; font-weight: 500; display: block;">Consumed</span>
+          <strong id="hist-stat-consumed" style="font-size: 13px; font-weight: 600; font-family: var(--font-mono); color: var(--text-primary);">0 m³</strong>
         </div>
-        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
-          <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; display: block;">Total Paid</span>
-          <strong id="hist-stat-paid" style="font-size: 13.5px; color: #059669;">PHP 0.00</strong>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: left;">
+          <span style="font-size: 9.5px; color: var(--text-muted); text-transform: uppercase; font-weight: 500; display: block;">Total Billed</span>
+          <strong id="hist-stat-billed" style="font-size: 13px; font-weight: 600; font-family: var(--font-mono); color: var(--text-primary);">PHP 0.00</strong>
         </div>
-        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: center;">
-          <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; display: block;">Balance Due</span>
-          <strong id="hist-stat-balance" style="font-size: 13.5px; color: #DC2626;">PHP 0.00</strong>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: left;">
+          <span style="font-size: 9.5px; color: var(--text-muted); text-transform: uppercase; font-weight: 500; display: block;">Total Paid</span>
+          <strong id="hist-stat-paid" style="font-size: 13px; font-weight: 600; font-family: var(--font-mono); color: #34D399;">PHP 0.00</strong>
         </div>
-      </div>
-
-      <!-- Chronological Payment & Billing Records -->
-      <div style="margin-bottom: 14px;">
-        <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
-          <span>Individual Bills & Payment Records</span>
-          <span id="hist-bills-count" class="badge badge-primary">0 Bills</span>
-        </h4>
-        <div id="hist-bills-list-container" style="display: flex; flex-direction: column; gap: 8px;">
-          <!-- Dynamically populated bill cards -->
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; text-align: left;">
+          <span style="font-size: 9.5px; color: var(--text-muted); text-transform: uppercase; font-weight: 500; display: block;">Balance Due</span>
+          <strong id="hist-stat-balance" style="font-size: 13px; font-weight: 600; font-family: var(--font-mono); color: #F87171;">PHP 0.00</strong>
         </div>
       </div>
 
-      <!-- Individual Meter Readings History -->
-      <div>
-        <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
-          <span>Meter Readings Log</span>
-          <span id="hist-readings-count" class="badge badge-warning">0 Readings</span>
-        </h4>
-        <div id="hist-readings-list-container" style="display: flex; flex-direction: column; gap: 6px;">
-          <!-- Dynamically populated reading log -->
+      <!-- Folder Section Switcher Tabs -->
+      <div id="hist-folder-tabs" style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--surface-alt); padding: 2px; border-radius: var(--radius-sm); margin-bottom: 12px; border: 1px solid var(--border);">
+        <button type="button" id="hist-tab-btn-thermal" class="btn btn-xs hist-tab-btn active" data-tab="thermal" style="background: var(--primary); color: #FFF; border: none; height: 28px; font-size: 11.5px; font-weight: 600; border-radius: var(--radius-xs); display: inline-flex; align-items: center; justify-content: center; gap: 5px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Thermal Bills (<span id="hist-bills-count">0</span>)
+        </button>
+        <button type="button" id="hist-tab-btn-ledger" class="btn btn-xs hist-tab-btn" data-tab="ledger" style="background: transparent; color: var(--text-secondary); border: none; height: 28px; font-size: 11.5px; font-weight: 500; border-radius: var(--radius-xs); display: inline-flex; align-items: center; justify-content: center; gap: 5px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          Consumption &amp; Payments (<span id="hist-readings-count">0</span>)
+        </button>
+      </div>
+
+      <!-- TAB 1: Saved Thermal Paper Bill Copies -->
+      <div id="hist-panel-thermal" style="display: block;">
+        <div id="hist-bills-list-container" style="display: flex; flex-direction: column; gap: 12px;">
+          <!-- Dynamically populated with visual Thermal Paper Bill Notices + Payment/Print buttons -->
+        </div>
+      </div>
+
+      <!-- TAB 2: Monthly Water Consumption & Payment History Ledger -->
+      <div id="hist-panel-ledger" style="display: none;">
+        <div id="hist-ledger-table-container" style="margin-bottom: 12px; overflow-x: auto;">
+          <!-- Dynamically populated monthly consumption & payment table -->
+        </div>
+        <div>
+          <h4 style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px;">
+            Meter Reading Log (Previous → Current)
+          </h4>
+          <div id="hist-readings-list-container" style="display: flex; flex-direction: column; gap: 6px;">
+            <!-- Dynamically populated reading log -->
+          </div>
         </div>
       </div>
     </div>
-    <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
-      <button class="modal-close btn btn-outline">Close</button>
-      <button id="hist-btn-print-statement" class="btn btn-primary">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        Print Statement (A4)
+
+    <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <button id="hist-btn-read-meter" type="button" class="btn btn-sm btn-primary">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Read Meter
+        </button>
+        <button id="hist-btn-download-folder-pdf" type="button" class="btn btn-sm btn-outline">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Save Folder PDF
+        </button>
+        <button id="hist-btn-export-folder-excel" type="button" class="btn btn-sm btn-outline">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          Excel (.xls)
+        </button>
+      </div>
+      <div style="display: flex; gap: 6px;">
+        <button id="hist-btn-print-statement" type="button" class="btn btn-sm btn-outline">
+          A4 Statement
+        </button>
+        <button class="modal-close btn btn-sm btn-outline">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL 7B: Settings Burger Menu Drawer (From Records & Reports) -->
+<div id="modal-settings-burger" class="app-modal burger-drawer-modal">
+  <div class="modal-backdrop"></div>
+  <div class="modal-card burger-drawer-card">
+    <div class="modal-header burger-drawer-header">
+      <div>
+        <h3 style="margin: 0; font-size: 14px;">System Settings</h3>
+        <div style="font-size: 11px; color: var(--text-muted);">Device Install, Security PIN, Tariff, Zones, Printer &amp; Backups</div>
+      </div>
+      <button type="button" class="modal-close" aria-label="Close Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
+    </div>
+
+    <div class="modal-body burger-drawer-body">
+      <!-- 1. One-Time Device Install (Office Reader Phone & PC) -->
+      <div class="settings-section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <h3 style="margin: 0;">One-Time Device Install (Phone &amp; PC)</h3>
+          <span id="pwa-install-status-badge" class="badge badge-success">OFFLINE READY</span>
+        </div>
+        <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.45;">
+          Install this application directly on the Meter Reader's phone and the Office PC for 100% offline operation.
+        </p>
+
+        <button type="button" id="btn-install-pwa-device" class="btn btn-sm btn-primary" style="width: 100%; margin-bottom: 8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          Install App on This Device
+        </button>
+
+        <div style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 11px;">
+          <div style="font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">
+            Office PC Local Network Address:
+          </div>
+          <div id="office-lan-ip-display" style="font-family: var(--font-mono); font-size: 11.5px; color: var(--primary-light); font-weight: 600; margin-bottom: 6px;">
+            Detecting Office PC Wi-Fi IP...
+          </div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <input type="text" id="office-pc-target-url-input" class="form-control" placeholder="Office PC address" style="font-size: 11.5px; height: 30px; font-family: var(--font-mono);">
+            <button type="button" id="btn-save-office-pc-url" class="btn btn-xs btn-outline" style="height: 30px;">
+              Save IP
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Security Gate & Secret Office PIN -->
+      <div class="settings-section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <h3 style="margin: 0;">Security Gate &amp; Secret PIN</h3>
+          <span id="security-pin-status-badge" class="badge badge-success">PROTECTED</span>
+        </div>
+        <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">
+          Restricts access to household coordinates, water meter pins, and billing records.
+        </p>
+        <div style="display: flex; gap: 6px;">
+          <button type="button" id="btn-open-pin-setup" class="btn btn-sm btn-primary" style="flex: 1;">
+            Configure Secret PIN
+          </button>
+          <button type="button" id="btn-lock-app-now" class="btn btn-sm btn-outline">
+            Lock App
+          </button>
+        </div>
+      </div>
+
+      <!-- 3. Dicklum Water Association Tariff -->
+      <div class="settings-section-card">
+        <h3>Tariff &amp; Billing Configuration</h3>
+        <div class="form-group">
+          <label>Minimum Monthly Charge (PHP)</label>
+          <input type="number" id="tariff-min-charge" class="form-control" value="100.00" step="0.5">
+        </div>
+        <div class="form-group">
+          <label>Minimum Allowance (m³)</label>
+          <input type="number" id="tariff-min-allowance" class="form-control" value="10" step="1">
+        </div>
+        <div class="form-group">
+          <label>Excess Rate per m³ above allowance</label>
+          <input type="number" id="tariff-excess-rate" class="form-control" placeholder="15.00" step="0.5">
+        </div>
+        <div class="form-group">
+          <label>Active Billing Period</label>
+          <input type="text" id="tariff-period-name" class="form-control" value="October 2026">
+        </div>
+        <button id="btn-save-tariff" class="btn btn-sm btn-primary">Save Tariff Settings</button>
+      </div>
+
+      <!-- 4. Purok Districts & Manifold Clusters -->
+      <div class="settings-section-card">
+        <h3>Purok Districts &amp; Manifold Clusters</h3>
+        <div style="margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 11.5px; font-weight: 500; margin: 0; color: var(--text-secondary);">Active Zones / Puroks</label>
+            <span id="settings-zones-count" class="badge badge-success">4 ZONES</span>
+          </div>
+          <div id="settings-zones-list" style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px;">
+            <!-- Populated dynamically -->
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 8px;">
+            <input type="text" id="settings-new-zone-input" class="form-control" placeholder="New zone name">
+            <button type="button" id="btn-settings-add-zone" class="btn btn-sm btn-primary">+ Add Zone</button>
+          </div>
+        </div>
+
+        <div style="border-top: 1px solid var(--border); padding-top: 10px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 11.5px; font-weight: 500; margin: 0; color: var(--text-secondary);">Meter Manifold Clusters</label>
+            <button type="button" id="btn-settings-new-cluster-prompt" class="btn btn-xs btn-outline">+ New Cluster</button>
+          </div>
+          <div id="settings-clusters-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow-y: auto;">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Portable Bluetooth & USB Thermal Printer (Xprinter XP-P300) -->
+      <div class="settings-section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <h3 style="margin: 0;">Xprinter XP-P300 Configuration</h3>
+          <span id="printer-status-pill" class="badge badge-warning">DISCONNECTED</span>
+        </div>
+        <p id="printer-status-details" style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">
+          Direct Thermal • ESC/POS • 203 DPI • 70 mm/s • Bluetooth &amp; USB • No Ink / No Ribbon
+        </p>
+
+        <!-- Mandatory Chemical Compliance Box -->
+        <div style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 8px 10px; margin-bottom: 10px; font-size: 11px; color: var(--text-secondary); line-height: 1.4;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+            <strong style="color: #34D399; font-size: 11px;">MANDATORY PAPER: 100% PHENOL-FREE</strong>
+            <span class="acct-pill" style="font-size: 9.5px;">0.06–0.08mm • Ø50mm Max</span>
+          </div>
+          <div>Prohibited: BPA (Bisphenol A), BPS (Bisphenol S), and all phenolic developers. <em>BPA-free alone is NOT sufficient.</em></div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1.3fr 1fr; gap: 8px;">
+          <div class="form-group">
+            <label>Paper Roll Width</label>
+            <select id="select-paper-width" class="form-control">
+              <option value="58mm" selected>57.5 ± 0.5 mm (Standard 58mm)</option>
+              <option value="80mm">79.5 ± 0.5 mm (80mm — Verify Hardware)</option>
+              <option value="custom">Custom Width (mm)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Printable Width (mm)</label>
+            <input type="number" id="input-printable-width-mm" class="form-control" value="48" min="32" max="72" step="1">
+          </div>
+        </div>
+        <div style="font-size: 10.5px; color: var(--text-muted); margin-top: -4px; margin-bottom: 8px;">
+          Standard XP-P300 spec: <strong>57.5mm roll / 48mm printable (32 cols)</strong>. Do not assume 80mm unless verified on physical printer using Test Print.
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div class="form-group">
+            <label>Receipt Header Title</label>
+            <input type="text" id="input-printer-custom-header" class="form-control" value="OFFICIAL WATER BILL NOTICE">
+          </div>
+          <div class="form-group">
+            <label>Receipt Footer Message</label>
+            <input type="text" id="input-printer-custom-footer" class="form-control" value="Conserve water for the community.">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; font-size: 11px; color: var(--text-secondary);">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="chk-printer-qr" checked> Print Verification QR Code
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="chk-printer-barcode" checked> Print 1D Barcode (Ref #)
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="chk-printer-logo"> Print Association Logo
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <input type="checkbox" id="chk-printer-cutter"> Auto-Cutter (If Supported)
+          </label>
+        </div>
+
+        <!-- Connection Controls: Bluetooth & USB + Reconnect / Disconnect -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
+          <button type="button" id="btn-connect-bluetooth" class="btn btn-sm btn-primary">
+            Connect Bluetooth
+          </button>
+          <button type="button" id="btn-connect-usb" class="btn btn-sm btn-outline">
+            Connect USB
+          </button>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
+          <button type="button" id="btn-test-ticket" class="btn btn-xs btn-outline">
+            Test Print
+          </button>
+          <button type="button" id="btn-feed-paper" class="btn btn-xs btn-outline">
+            Feed Paper
+          </button>
+          <button type="button" id="btn-reconnect-printer" class="btn btn-xs btn-outline">
+            Reconnect
+          </button>
+        </div>
+      </div>
+
+      <!-- 6. Offline Database & Data Recovery -->
+      <div class="settings-section-card">
+        <h3>Offline Database &amp; Data Recovery</h3>
+        <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">
+          Export or restore full JSON backups including all pinned houses, water meters, and billing history.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <button id="btn-export-backup" class="btn btn-sm btn-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Export JSON Backup File
+          </button>
+          <label class="btn btn-sm btn-outline" style="cursor: pointer; text-align: center;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Import JSON Backup File (Restore Pinned Locations)
+            <input type="file" id="input-restore-backup" accept=".json" style="display: none;">
+          </label>
+          <button id="btn-clear-all-pins" class="btn btn-sm btn-outline">
+            Clear All Pinned GPS Locations
+          </button>
+          <button id="btn-clear-all-bills" class="btn btn-sm btn-outline">
+            Clear All Bills &amp; Reading Records
+          </button>
+          <button id="btn-wipe-clean-slate" class="btn btn-sm btn-outline" style="color: var(--danger);">
+            Wipe All Data (Start Empty Utility)
+          </button>
+          <button id="btn-reset-seed-data" class="btn btn-sm btn-outline" style="color: var(--text-muted);">
+            Reset to Default Demo Data
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- 8. Server-Enforced Security PIN Gate & Setup Modal -->
 <div id="modal-security-pin-gate" class="app-modal" style="z-index: 99999;">
-  <div id="pin-gate-backdrop" class="modal-backdrop" style="background: rgba(15, 23, 42, 0.88); backdrop-filter: blur(8px);"></div>
-  <div class="modal-card" style="max-width: 390px; border: 2px solid #0F766E; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);">
-    <div class="modal-header" style="background: linear-gradient(135deg, #042F2E 0%, #0F766E 100%); color: #FFF; border-bottom: none; padding: 14px 16px;">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <div style="width: 34px; height: 34px; border-radius: 10px; background: rgba(255,255,255,0.16); display: flex; align-items: center; justify-content: center;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.3"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        </div>
-        <div>
-          <h3 id="pin-gate-title" style="color: #FFF; font-size: 14.5px; margin: 0;">Office & Reader Security Gate</h3>
-          <div id="pin-gate-subtitle" style="font-size: 10.5px; color: #99F6E4;">Dicklum Water Association — Exclusive Access</div>
-        </div>
+  <div id="pin-gate-backdrop" class="modal-backdrop" style="background: rgba(5, 8, 14, 0.9);"></div>
+  <div class="modal-card" style="max-width: 380px;">
+    <div class="modal-header">
+      <div>
+        <h3 id="pin-gate-title" style="margin: 0;">Office &amp; Reader Security Gate</h3>
+        <div id="pin-gate-subtitle" style="font-size: 11px; color: var(--text-muted);">Dicklum Water Association</div>
       </div>
-      <button id="btn-close-pin-gate" type="button" class="icon-btn" style="color: #FFF; background: rgba(255,255,255,0.14); border: none;">✕</button>
+      <button id="btn-close-pin-gate" type="button" class="modal-close" aria-label="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="modal-body" style="padding: 16px;">
-      <div id="pin-gate-info-banner" style="font-size: 11.5px; color: #0F172A; background: #F0FDFA; border: 1px solid #99F6E4; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; line-height: 1.45;">
+    <div class="modal-body" style="padding: 14px;">
+      <div id="pin-gate-info-banner" style="font-size: 11.5px; color: var(--text-secondary); background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 12px; line-height: 1.45;">
         Enter your secret Office / Meter Reader PIN to unlock the application, map pins, and billing records.
       </div>
 
       <!-- Current PIN (shown only when changing existing PIN) -->
       <div id="pin-gate-current-group" class="form-group" style="display: none; margin-bottom: 10px;">
-        <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Current Secret PIN *</label>
-        <input type="password" id="pin-gate-current-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="Enter current PIN (••••)" style="font-size: 16px; letter-spacing: 4px; text-align: center; font-weight: 800;">
+        <label>Current Secret PIN</label>
+        <input type="password" id="pin-gate-current-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="••••" style="font-size: 15px; letter-spacing: 3px; text-align: center; font-family: var(--font-mono);">
       </div>
 
       <!-- Primary PIN Input (Unlock PIN or New PIN) -->
       <div class="form-group" style="margin-bottom: 10px;">
-        <label id="pin-gate-main-label" style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Enter Secret PIN (4–8 digits) *</label>
-        <input type="password" id="pin-gate-main-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="••••" style="font-size: 18px; letter-spacing: 5px; text-align: center; font-weight: 800; border: 1.5px solid #0F766E;">
+        <label id="pin-gate-main-label">Secret PIN (4–8 digits)</label>
+        <input type="password" id="pin-gate-main-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="••••" style="font-size: 16px; letter-spacing: 4px; text-align: center; font-family: var(--font-mono);">
       </div>
 
       <!-- Confirm PIN + Hint (shown when creating or changing PIN) -->
       <div id="pin-gate-confirm-group" style="display: none;">
         <div class="form-group" style="margin-bottom: 10px;">
-          <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Confirm Secret PIN *</label>
-          <input type="password" id="pin-gate-confirm-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="Re-enter PIN (••••)" style="font-size: 16px; letter-spacing: 4px; text-align: center; font-weight: 800;">
+          <label>Confirm Secret PIN</label>
+          <input type="password" id="pin-gate-confirm-input" class="form-control" inputmode="numeric" maxlength="12" placeholder="••••" style="font-size: 15px; letter-spacing: 3px; text-align: center; font-family: var(--font-mono);">
         </div>
         <div class="form-group" style="margin-bottom: 8px;">
-          <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary);">Optional Reminder Hint (Never put the actual PIN)</label>
-          <input type="text" id="pin-gate-hint-input" class="form-control" placeholder="e.g., Association founding year">
+          <label>Optional Reminder Hint</label>
+          <input type="text" id="pin-gate-hint-input" class="form-control" placeholder="Optional hint">
         </div>
       </div>
 
-      <div id="pin-gate-hint-display" style="display: none; font-size: 11px; color: #64748B; text-align: center; margin-top: 6px;"></div>
-      <div id="pin-gate-error" style="display: none; font-size: 11.5px; color: #DC2626; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 6px; padding: 8px 10px; margin-top: 8px; font-weight: 600; text-align: center;"></div>
+      <div id="pin-gate-hint-display" style="display: none; font-size: 11px; color: var(--text-muted); text-align: center; margin-top: 6px;"></div>
+      <div id="pin-gate-error" style="display: none; font-size: 11.5px; color: #FECACA; background: var(--danger-tint); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-xs); padding: 8px 10px; margin-top: 8px; text-align: center;"></div>
     </div>
-    <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+    <div class="modal-footer">
       <button id="btn-cancel-pin-gate" type="button" class="btn btn-outline">Cancel</button>
-      <button id="btn-submit-pin-gate" type="button" class="btn btn-primary" style="flex: 1; font-weight: 700;">
+      <button id="btn-submit-pin-gate" type="button" class="btn btn-primary" style="flex: 1;">
         Unlock Application
       </button>
     </div>
@@ -1308,18 +1536,18 @@
 </div>
 
 <!-- Scripts -->
-<script src="js/icons.js?v=8"></script>
-<script src="js/db.js?v=8"></script>
-<script src="js/sampleData.js?v=8"></script>
-<script src="js/billing.js?v=8"></script>
-<script src="js/reading.js?v=8"></script>
-<script src="js/thermalPrinter.js?v=8"></script>
-<script src="js/a4Statement.js?v=8"></script>
-<script src="js/reports.js?v=8"></script>
-<script src="js/backup.js?v=8"></script>
-<script src="js/offlineTileEngine.js?v=8"></script>
-<script src="js/mapEngine.js?v=8"></script>
-<script src="js/app.js?v=8"></script>
+<script src="js/icons.js?v=18"></script>
+<script src="js/db.js?v=18"></script>
+<script src="js/sampleData.js?v=18"></script>
+<script src="js/billing.js?v=18"></script>
+<script src="js/reading.js?v=18"></script>
+<script src="js/thermalPrinter.js?v=18"></script>
+<script src="js/a4Statement.js?v=18"></script>
+<script src="js/reports.js?v=18"></script>
+<script src="js/backup.js?v=18"></script>
+<script src="js/offlineTileEngine.js?v=18"></script>
+<script src="js/mapEngine.js?v=18"></script>
+<script src="js/app.js?v=18"></script>
 
 </body>
 </html>

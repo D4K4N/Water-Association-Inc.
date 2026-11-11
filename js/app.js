@@ -213,6 +213,15 @@ class WaterBillingApp {
 
       for (let i = 1; i < group.length; i++) {
         const dup = group[i];
+        // Data safety: two records with the same name but different household pins are different
+        // households. Merging would discard one pinned location, so keep both untouched.
+        const primaryHasHouse = Boolean(primary.householdLat && primary.householdLng);
+        const dupHasHouse = Boolean(dup.householdLat && dup.householdLng);
+        if (primaryHasHouse && dupHasHouse) {
+          const samePin = Math.abs(Number(primary.householdLat) - Number(dup.householdLat)) < 0.00001
+            && Math.abs(Number(primary.householdLng) - Number(dup.householdLng)) < 0.00001;
+          if (!samePin) continue;
+        }
         if ((!primary.householdLat || !primary.householdLng) && dup.householdLat && dup.householdLng) {
           primary.householdLat = dup.householdLat;
           primary.householdLng = dup.householdLng;
@@ -273,12 +282,18 @@ class WaterBillingApp {
       this.cachedBills = await window.db.getAll('bills');
     }
 
-    // 3. Automatically purge any orphaned consumers/meters whose GPS pins were cleared by legacy unpin behavior
+    // 3. Data safety: never auto-delete clusters or water meters here. Imported backups may contain
+    // clusters without their own GPS (they fall back to member meter coordinates), and empty clusters
+    // are simply not drawn on the map (see syncPinsToMap).
+
+    // 4. Purge only truly empty orphan consumers (no house pin, no pinned/clustered meter at all,
+    // and no billing or reading history). Checks EVERY meter of the consumer, so a pinned meter is never removed.
+    const historyReadings = await window.db.getAll('readings');
     const orphanedConsumers = this.cachedConsumers.filter(c => {
       const hasHousePin = Boolean(c.householdLat && c.householdLng);
-      const meter = this.cachedMeters.find(m => m.consumerId === c.id);
-      const hasMeterPin = Boolean(meter && ((meter.meterLat && meter.meterLng) || meter.isClustered));
-      return !hasHousePin && !hasMeterPin;
+      const hasMeterPin = this.cachedMeters.some(m => m.consumerId === c.id && ((m.meterLat && m.meterLng) || m.isClustered));
+      const hasHistory = this.cachedBills.some(b => b.consumerId === c.id) || historyReadings.some(r => r.consumerId === c.id);
+      return !hasHousePin && !hasMeterPin && !hasHistory;
     });
 
     if (orphanedConsumers.length > 0) {
@@ -445,9 +460,11 @@ class WaterBillingApp {
       }
     }
 
-    // 2. Individual Water Meter Pins
+    // 2. Individual Water Meter Pins (plus fallback if a meter's cluster was deleted)
+    const validClusterIds = new Set((this.cachedClusters || []).map(cl => cl.id));
     for (const m of this.cachedMeters) {
-      if (!m.isClustered && m.meterLat && m.meterLng) {
+      const belongsToValidCluster = Boolean(m.isClustered && m.clusterId && validClusterIds.has(m.clusterId));
+      if (!belongsToValidCluster && m.meterLat && m.meterLng) {
         const consumer = this.cachedConsumers.find(c => c.id === m.consumerId);
         const ownerDisplay = (consumer && consumer.name) ? consumer.name : (m.ownerName || m.meterNo);
         pins.push({
@@ -472,20 +489,38 @@ class WaterBillingApp {
       }
     }
 
-    // 3. Cluster Pins
+    // 3. Clustered / Grouped Water Meter Pins
     for (const cl of this.cachedClusters) {
-      if (cl.lat && cl.lng) {
-        const clusterMeters = this.cachedMeters.filter(m => m.clusterId === cl.id);
+      const clusterMeters = this.cachedMeters.filter(m => m.clusterId === cl.id);
+      if (clusterMeters.length === 0) continue;
+      const firstMeterWithCoords = clusterMeters.find(m => m.meterLat && m.meterLng);
+      const cLat = cl.lat || (firstMeterWithCoords ? firstMeterWithCoords.meterLat : null);
+      const cLng = cl.lng || (firstMeterWithCoords ? firstMeterWithCoords.meterLng : null);
+
+      if (cLat && cLng) {
+        const ownerNames = clusterMeters.map(m => {
+          const con = this.cachedConsumers.find(c => c.id === m.consumerId);
+          return (con && con.name) ? con.name : (m.ownerName || m.meterNo || 'Meter');
+        }).filter(Boolean);
+
+        const ownerSummary = ownerNames.length > 0
+          ? (ownerNames.length <= 2
+              ? ownerNames.join(', ')
+              : `${ownerNames.slice(0, 2).join(', ')} +${ownerNames.length - 2}`)
+          : cl.name;
+
         pins.push({
           id: cl.id,
           type: 'cluster',
-          lat: Number(cl.lat),
-          lng: Number(cl.lng),
-          title: cl.name,
+          lat: Number(cLat),
+          lng: Number(cLng),
+          title: ownerSummary || cl.name,
           data: {
             clusterId: cl.id,
             name: cl.name,
-            zone: cl.zone,
+            ownerSummary: ownerSummary,
+            ownerNames: ownerNames,
+            zone: cl.zone || (firstMeterWithCoords ? firstMeterWithCoords.zone : ''),
             description: cl.description,
             meterCount: clusterMeters.length,
             meters: clusterMeters
@@ -591,48 +626,274 @@ class WaterBillingApp {
   closeConsumerSheet() {
     const sheet = document.getElementById('map-bottom-sheet');
     if (sheet) sheet.classList.remove('visible');
+    if (this.mapEngine && typeof this.mapEngine.clearSelectedPin === 'function') {
+      this.mapEngine.clearSelectedPin();
+    }
   }
 
-  openClusterSheet(clusterId) {
+  openClusterSheet(clusterId, selectedMeterId = null) {
     const cluster = this.cachedClusters.find(c => c.id === clusterId);
     if (!cluster) return;
 
+    this.closeConsumerSheet();
     this.activeCluster = cluster;
+    this.activeClusterId = cluster.id;
     const clusterMeters = this.cachedMeters.filter(m => m.clusterId === clusterId);
 
     const sheet = document.getElementById('cluster-bottom-sheet');
     if (!sheet) return;
 
-    document.getElementById('cluster-sheet-name').textContent = cluster.name;
-    document.getElementById('cluster-sheet-zone').textContent = cluster.zone;
-    document.getElementById('cluster-sheet-count').textContent = `${clusterMeters.length} Meters Grouped`;
-    document.getElementById('cluster-sheet-desc').textContent = cluster.description || '';
+    const cleanZone = this.cleanZoneString(cluster.zone || 'Zone 1');
+    const ownerNames = clusterMeters.map((m, idx) => {
+      const con = this.cachedConsumers.find(c => c.id === m.consumerId)
+        || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (m.ownerName || '').trim().toLowerCase());
+      return (con && con.name) ? con.name : (m.ownerName || m.meterNo || `Meter #${idx + 1}`);
+    }).filter(Boolean);
 
-    const listContainer = document.getElementById('cluster-meters-list');
-    listContainer.innerHTML = '';
+    const shortOwners = ownerNames.slice(0, 3).join(', ') + (ownerNames.length > 3 ? ` +${ownerNames.length - 3}` : '');
+    const dynamicTitle = ownerNames.length > 0
+      ? `${cleanZone} Clustered Meters (${shortOwners})`
+      : (cluster.name || 'Clustered Water Meters');
+    const dynamicDesc = ownerNames.length > 0
+      ? `${clusterMeters.length} grouped water meter${clusterMeters.length === 1 ? '' : 's'} (${ownerNames.join(', ')})`
+      : (cluster.description || 'Tap any circle water meter below to view its owner info, record a reading, or print its individual bill receipt.');
 
-    clusterMeters.forEach(m => {
-      const consumer = this.cachedConsumers.find(c => c.id === m.consumerId);
-      const row = document.createElement('div');
-      row.className = 'cluster-meter-item';
-      row.innerHTML = `
-        <div class="c-info">
-          <strong>${consumer ? consumer.name : 'Unassigned'}</strong>
-          <span class="sub">${m.meterNo} • ${consumer ? consumer.accountNo : ''}</span>
-        </div>
-        <button class="btn btn-sm btn-primary" onclick="window.app.startReadingForConsumer('${m.consumerId}')">
-          Read Meter
-        </button>
-      `;
-      listContainer.appendChild(row);
-    });
+    const nameEl = document.getElementById('cluster-sheet-name');
+    const zoneEl = document.getElementById('cluster-sheet-zone');
+    const countEl = document.getElementById('cluster-sheet-count');
+    const descEl = document.getElementById('cluster-sheet-desc');
+
+    if (nameEl) nameEl.textContent = dynamicTitle;
+    if (zoneEl) zoneEl.textContent = cleanZone;
+    if (countEl) countEl.textContent = `${clusterMeters.length} Water Meter${clusterMeters.length === 1 ? '' : 's'}`;
+    if (descEl) descEl.textContent = dynamicDesc;
+
+    const activeMeterId = selectedMeterId
+      || (this._activeClusterMeterId && clusterMeters.some(m => m.id === this._activeClusterMeterId) ? this._activeClusterMeterId : null)
+      || (clusterMeters[0] ? clusterMeters[0].id : null);
+
+    this._activeClusterMeterId = activeMeterId;
+    this.renderClusterDashboardCircles(cluster, clusterMeters, activeMeterId);
 
     sheet.classList.add('visible');
+  }
+
+  renderClusterDashboardCircles(cluster, clusterMeters, activeMeterId) {
+    const stageEl = document.getElementById('cluster-sheet-circles-row');
+    const detailPanel = document.getElementById('cluster-selected-meter-panel');
+    if (!stageEl || !detailPanel) return;
+
+    if (clusterMeters.length === 0) {
+      stageEl.innerHTML = `
+        <div style="text-align: center; padding: 12px; color: var(--text-muted); font-size: 11.5px;">
+          No water meters linked to this cluster yet. Tap <strong>"+ Add Meter"</strong> above to add water meters here.
+        </div>
+      `;
+      detailPanel.innerHTML = '';
+      return;
+    }
+
+    // FRAME 5: Render Interactive Circle Water Meters with Owner Names above each circle (Bonifacio, sarah, trix...)
+    stageEl.innerHTML = clusterMeters.map((m, idx) => {
+      const consumer = this.cachedConsumers.find(c => c.id === m.consumerId)
+        || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (m.ownerName || '').trim().toLowerCase());
+      const ownerName = (consumer && consumer.name) ? consumer.name : (m.ownerName || `Meter #${idx + 1}`);
+      const isSelected = m.id === activeMeterId;
+      const consumerBills = consumer
+        ? (this.cachedBills || []).filter(b => b.consumerId === consumer.id)
+        : [];
+      const hasBill = consumerBills.length > 0;
+
+      return `
+        <div class="cluster-dash-circle-item ${isSelected ? 'active' : ''} ${hasBill ? 'is-billed' : ''}" data-meter-id="${m.id}">
+          <span class="cluster-dash-owner-name" title="${ownerName}">${ownerName}</span>
+          <button type="button" class="cluster-dash-circle-btn" aria-label="Select water meter for ${ownerName}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/>
+            </svg>
+            <span style="font-size: 11px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;">#${idx + 1}</span>
+            ${hasBill ? `<span class="mgb-circle-check" title="Bill Receipt Ready">✓</span>` : ''}
+          </button>
+          <span class="cluster-dash-serial">${m.meterNo || ''}</span>
+        </div>
+      `;
+    }).join('');
+
+    // Bind click on each circle water meter
+    stageEl.querySelectorAll('.cluster-dash-circle-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const mId = item.dataset.meterId;
+        this._activeClusterMeterId = mId;
+        this.renderClusterDashboardCircles(cluster, clusterMeters, mId);
+      });
+    });
+
+    // Render Selected Circle Water Meter Information & Individual Print Receipt Card
+    const selectedIndex = Math.max(0, clusterMeters.findIndex(m => m.id === activeMeterId));
+    const selectedMeter = clusterMeters[selectedIndex] || clusterMeters[0];
+    if (!selectedMeter) {
+      detailPanel.innerHTML = '';
+      return;
+    }
+
+    const consumer = this.cachedConsumers.find(c => c.id === selectedMeter.consumerId)
+      || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (selectedMeter.ownerName || '').trim().toLowerCase())
+      || null;
+    const ownerName = (consumer && consumer.name) ? consumer.name : (selectedMeter.ownerName || `Meter ${selectedMeter.meterNo}`);
+    const accountNo = consumer ? consumer.accountNo : 'UNASSIGNED';
+    const zone = this.cleanZoneString((selectedMeter && selectedMeter.zone) || (consumer && consumer.zone) || cluster.zone || 'Zone 1');
+    const address = this.cleanAddressString((consumer && consumer.address) || `${zone}, Diclum`, zone);
+
+    const consumerBills = consumer
+      ? (this.cachedBills || [])
+          .filter(b => b.consumerId === consumer.id)
+          .sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0))
+      : [];
+    const latestBill = consumerBills[0] || null;
+    const prevRdg = latestBill ? latestBill.previousReading : (selectedMeter.initialReading ?? 0);
+    const currRdg = latestBill ? latestBill.currentReading : (selectedMeter.initialReading ?? 0);
+    const consumption = latestBill ? latestBill.consumption : 0;
+    const totalDue = latestBill ? Number(latestBill.totalAmountDue || 0) : 100.00;
+    const statusLabel = latestBill ? (latestBill.paymentStatus || 'UNPAID') : 'READY TO READ';
+    const statusBadgeClass = latestBill
+      ? (latestBill.paymentStatus === 'PAID' ? 'badge-success' : 'badge-warning')
+      : 'badge-success';
+
+    detailPanel.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div class="mse-circle-badge" style="width: 28px; height: 28px; font-size: 12px;">${selectedIndex + 1}</div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <strong style="font-size: 13.5px; font-weight: 600; color: var(--text-primary);">${ownerName}</strong>
+              <span class="acct-pill">${accountNo}</span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 1px;">
+              Meter: <strong style="color: var(--primary-light); font-weight: 600;">${selectedMeter.meterNo}</strong> • ${address}
+            </div>
+          </div>
+        </div>
+        <span class="badge ${statusBadgeClass}">${statusLabel}</span>
+      </div>
+
+      <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 10px;">
+        <div class="r-cell">
+          <span class="lbl">Prev Rdg</span>
+          <span class="val">${Number(prevRdg).toLocaleString()} m³</span>
+        </div>
+        <div class="r-cell">
+          <span class="lbl">Curr Rdg</span>
+          <span class="val">${Number(currRdg).toLocaleString()} m³</span>
+        </div>
+        <div class="r-cell">
+          <span class="lbl">Consumed</span>
+          <span class="val" style="color: var(--primary-light);">${Number(consumption).toLocaleString()} m³</span>
+        </div>
+        <div class="r-cell highlight">
+          <span class="lbl">${latestBill ? 'Bill Amount' : 'Min Tariff'}</span>
+          <span class="val" style="color: var(--success-text);">PHP ${totalDue.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <button type="button" class="btn btn-sm btn-primary" style="flex: 1.3;" onclick="window.app.handleClusterMeterPrintReceipt('${consumer ? consumer.id : ''}', '${selectedMeter.id}')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+          ${latestBill ? 'Print Bill Receipt' : 'Read & Print Receipt'}
+        </button>
+        ${consumer ? `
+          <button type="button" class="btn btn-sm btn-outline" style="flex: 1;" onclick="window.app.startReadingForConsumer('${consumer.id}')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Read Meter
+          </button>
+          <button type="button" class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${consumer.id}')" title="Open ${ownerName}'s Folder & Receipts">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Folder (${consumerBills.length})
+          </button>
+        ` : ''}
+        <button type="button" class="btn btn-sm btn-outline" style="color: var(--danger-text); border-color: rgba(239,68,68,0.35);" onclick="window.app.removeSingleMeterFromCluster('${selectedMeter.id}')" title="Remove this water meter from the cluster">
+          Remove
+        </button>
+      </div>
+    `;
+  }
+
+  async handleClusterMeterPrintReceipt(consumerId, meterId) {
+    const consumer = consumerId ? this.cachedConsumers.find(c => c.id === consumerId) : null;
+    if (!consumer) {
+      alert('This water meter does not have a linked consumer record yet.');
+      return;
+    }
+
+    const consumerBills = (this.cachedBills || [])
+      .filter(b => b.consumerId === consumer.id)
+      .sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+
+    if (consumerBills.length > 0) {
+      // Immediately open the Thermal Paper Bill Receipt preview & print modal for this consumer!
+      await this.openThermalReceiptModal(consumerBills[0].id);
+      return;
+    }
+
+    // If no bill exists yet for this consumer, open Meter Reading & Computation for them so the reader can enter the reading and print the receipt
+    this.showToast(`Opening Meter Reading for ${consumer.name} to generate & print receipt...`, 2400);
+    await this.startReadingForConsumer(consumer.id);
+  }
+
+  async removeSingleMeterFromCluster(meterId) {
+    const meter = this.cachedMeters.find(m => m.id === meterId);
+    if (!meter) return;
+    const consumer = this.cachedConsumers.find(c => c.id === meter.consumerId);
+    const ownerName = consumer ? consumer.name : (meter.ownerName || meter.meterNo);
+
+    if (!confirm(`Delete Water Meter "${meter.meterNo}" (${ownerName}) from this cluster?`)) {
+      return;
+    }
+
+    const clusterId = meter.clusterId;
+    await window.db.delete('meters', meter.id);
+
+    const remainingInCluster = this.cachedMeters.filter(m => m.id !== meter.id && m.clusterId === clusterId);
+    if (clusterId && remainingInCluster.length === 0) {
+      await window.db.delete('clusters', clusterId);
+    } else if (clusterId && remainingInCluster.length > 0) {
+      const cluster = this.cachedClusters.find(c => c.id === clusterId);
+      if (cluster) {
+        const cleanZone = this.cleanZoneString(cluster.zone || 'Zone 1');
+        const remOwners = remainingInCluster.map((m, idx) => {
+          const con = this.cachedConsumers.find(c => c.id === m.consumerId);
+          return (con && con.name) ? con.name : (m.ownerName || m.meterNo || `Meter #${idx + 1}`);
+        }).filter(Boolean);
+        const shortOwners = remOwners.slice(0, 3).join(', ') + (remOwners.length > 3 ? ` +${remOwners.length - 3}` : '');
+        cluster.name = `${cleanZone} Clustered Meters (${shortOwners})`;
+        cluster.description = `${remainingInCluster.length} grouped water meter${remainingInCluster.length === 1 ? '' : 's'} (${remOwners.join(', ')})`;
+        await window.db.put('clusters', cluster);
+      }
+    }
+
+    await this.refreshDataCache();
+    await this.populateZoneDropdowns();
+    this.syncPinsToMap();
+    this.renderConsumerList();
+    this.renderBillingList();
+    this.populateQuickConsumerSelect();
+    this.renderStats();
+    try { await this.renderZoneExportCenter(); } catch (_) {}
+    this.autoSyncToOfficePcSilent();
+
+    if (clusterId && remainingInCluster.length > 0) {
+      this.openClusterSheet(clusterId);
+    } else {
+      this.closeClusterSheet();
+    }
+    this.showToast(`Removed water meter for ${ownerName}.`, 2400);
   }
 
   closeClusterSheet() {
     const sheet = document.getElementById('cluster-bottom-sheet');
     if (sheet) sheet.classList.remove('visible');
+    if (this.mapEngine && typeof this.mapEngine.clearSelectedPin === 'function') {
+      this.mapEngine.clearSelectedPin();
+    }
   }
 
   // --- Real-Time Geolocation & Compass Heading Tracking (Phase 2, Section 5) ---
@@ -948,7 +1209,7 @@ class WaterBillingApp {
     }
 
     const defaultName = `Route ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-    const routeName = prompt('Enter a name for this walking route (e.g., San Francisco Purok 2 Route):', defaultName);
+    const routeName = prompt('Enter a name for this walking route:', defaultName);
     if (!routeName) return;
 
     let dist = 0;
@@ -1044,7 +1305,7 @@ class WaterBillingApp {
 
     const historyContainer = document.getElementById('consumer-reading-history-list');
     if (historyContainer) {
-      historyContainer.innerHTML = '<div style="font-size: 11px; color: #64748B; padding: 6px 0;">No consumer selected.</div>';
+      historyContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); padding: 6px 0;">No consumer selected.</div>';
     }
 
     const dupAlert = document.getElementById('rdg-duplicate-alert');
@@ -1133,14 +1394,14 @@ class WaterBillingApp {
     if (!container) return;
 
     if (!history || history.length === 0) {
-      container.innerHTML = '<div style="font-size: 11px; color: #64748B; padding: 6px 0;">No prior historical readings recorded.</div>';
+      container.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); padding: 6px 0;">No prior historical readings recorded.</div>';
       return;
     }
 
     container.innerHTML = history.slice(0, 5).map(h => `
-      <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #E2E8F0; font-size: 11px;">
-        <span><strong>${h.billingPeriod}</strong> (${new Date(h.readingDate).toLocaleDateString()})</span>
-        <span>${h.previousReading} → <strong>${h.currentReading} m³</strong> (<span style="color: var(--primary); font-weight:700;">${h.consumption} m³</span>)</span>
+      <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-secondary);">
+        <span><strong style="color: var(--text-primary);">${h.billingPeriod}</strong> (${new Date(h.readingDate).toLocaleDateString()})</span>
+        <span>${h.previousReading} → <strong style="color: var(--text-primary);">${h.currentReading} m³</strong> (<span style="color: var(--primary-light); font-weight:700;">${h.consumption} m³</span>)</span>
       </div>
     `).join('');
   }
@@ -1265,7 +1526,114 @@ class WaterBillingApp {
     }
   }
 
-  // --- Printing Modals (Phase 6) ---
+  // --- Printing Modals & Thermal Receipt Builder (Phase 6) ---
+
+  buildThermalReceiptHtml(bill, consumer, meter) {
+    const tp = window.thermalPrinter;
+    const is80 = tp && tp.paperWidth === '80mm';
+    const lineChars = tp && typeof tp.getLineCharacterWidth === 'function'
+      ? tp.getLineCharacterWidth()
+      : (is80 ? 44 : 32);
+    const printableMm = tp ? (tp.printableWidthMm || (is80 ? 72 : 48)) : 48;
+    const divider = '-'.repeat(lineChars);
+    const doubleDivider = '='.repeat(lineChars);
+
+    const cName = (consumer && consumer.name) || bill.consumerName || 'Consumer';
+    const cAcct = (consumer && consumer.accountNo) || bill.accountNo || 'N/A';
+    const cZone = (consumer && consumer.zone) || bill.zone || 'Dicklum';
+    const mNo = (meter && meter.meterNo && meter.meterNo !== 'Unassigned') ? meter.meterNo : (bill.meterNo || 'N/A');
+    const prevRdg = Number(bill.previousReading || 0);
+    const currRdg = Number(bill.currentReading || 0);
+    const consRdg = Number(bill.consumption || 0);
+    const minCharge = Number(bill.minimumCharge ?? 100);
+    const excessM3 = Number(bill.excessCubicMeters || 0);
+    const excessRate = Number(bill.excessRate || 15);
+    const excessAmt = Number(bill.excessAmount || 0);
+    const maintFee = Number(bill.maintenanceFee || 0);
+    const discountAmt = Number(bill.discount || 0);
+    const taxAmt = Number(bill.taxAmount || 0);
+    const subtotalAmt = minCharge + excessAmt + maintFee;
+    const totalDue = Number(bill.totalAmountDue ?? (subtotalAmt - discountAmt + taxAmt));
+    const paidAmt = Number(bill.amountPaid || 0);
+    const isPaid = bill.paymentStatus === 'PAID';
+    const orNo = bill.orNumber || bill.officialReceiptNo || '';
+    const paidDate = bill.paidDate || bill.paidAt || '';
+
+    const customHeader = (tp && tp.customHeader) ? tp.customHeader : 'OFFICIAL WATER BILL NOTICE';
+    const customFooter = (tp && tp.customFooter) ? tp.customFooter : 'Conserve water for the community.';
+    const showLogo = Boolean(tp && tp.printLogo);
+    const showBarcode = tp ? Boolean(tp.printBarcode) : true;
+    const showQr = tp ? Boolean(tp.printQrCode) : true;
+
+    return `
+      <div class="thermal-receipt ${is80 ? 'w-80' : 'w-58'}" data-printable-mm="${printableMm}" style="margin: 0 auto;">
+        ${showLogo ? `<div class="t-center" style="margin-bottom:4px;"><img src="assets/logo.png" alt="Logo" style="width:38px; height:38px; filter:grayscale(1) contrast(1.8);"></div>` : ''}
+        <div class="t-center t-bold t-large">DICKLUM WATER</div>
+        <div class="t-center t-bold">ASSOCIATION, INC.</div>
+        <div class="t-center t-small">Dicklum, Manolo Fortich, Bukidnon</div>
+        <div class="t-center t-small">SEC Reg. CN2014-99120 | TIN: 008-721-432</div>
+        <div class="t-center t-bold">${customHeader}</div>
+        <div class="t-divider">${doubleDivider}</div>
+
+        <div class="t-row"><span>Bill Ref :</span><span>${bill.id}</span></div>
+        <div class="t-row"><span>Date     :</span><span>${bill.billDate || ''}</span></div>
+        <div class="t-row"><span>Period   :</span><span>${bill.billingPeriod || ''}</span></div>
+        <div class="t-row"><span>Due Date :</span><span class="t-bold text-danger">${bill.dueDate || ''}</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <div class="t-row"><span>Consumer :</span><span class="t-bold">${cName}</span></div>
+        <div class="t-row"><span>Acct No  :</span><span>${cAcct}</span></div>
+        <div class="t-row"><span>Zone     :</span><span>${cZone}</span></div>
+        <div class="t-row"><span>Meter No :</span><span>${mNo}</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <div class="t-row t-bold"><span>METER READING</span><span>CUBIC METERS</span></div>
+        <div class="t-row"><span>Previous Reading:</span><span>${prevRdg.toLocaleString()} m³</span></div>
+        <div class="t-row"><span>Current Reading:</span><span>${currRdg.toLocaleString()} m³</span></div>
+        <div class="t-row t-bold text-primary"><span>Consumption:</span><span>${consRdg.toLocaleString()} m³</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <div class="t-row t-bold"><span>DESCRIPTION / QTY</span><span>AMOUNT</span></div>
+        <div class="t-row"><span>Min Charge (10 m³):</span><span>PHP ${minCharge.toFixed(2)}</span></div>
+        ${excessM3 > 0 ? `<div class="t-row"><span>Excess (${excessM3}m³ @ PHP ${excessRate}):</span><span>PHP ${excessAmt.toFixed(2)}</span></div>` : ''}
+        ${maintFee > 0 ? `<div class="t-row"><span>Maintenance Fee (1):</span><span>PHP ${maintFee.toFixed(2)}</span></div>` : ''}
+        <div class="t-divider">${divider}</div>
+        <div class="t-row"><span>Subtotal :</span><span>PHP ${subtotalAmt.toFixed(2)}</span></div>
+        ${discountAmt > 0 ? `<div class="t-row"><span>Discount :</span><span>-PHP ${discountAmt.toFixed(2)}</span></div>` : ''}
+        ${taxAmt > 0 ? `<div class="t-row"><span>Tax / VAT:</span><span>PHP ${taxAmt.toFixed(2)}</span></div>` : ''}
+        <div class="t-divider">${doubleDivider}</div>
+
+        <div class="t-center t-bold t-total">TOTAL DUE: PHP ${totalDue.toFixed(2)}</div>
+        <div class="t-divider">${doubleDivider}</div>
+
+        <div class="t-center t-small">Reader: ${bill.readerName || 'R. Fernandez'}</div>
+        <div class="t-center t-small">Payment Status: <strong style="color:${isPaid ? '#059669' : '#0F172A'};">${bill.paymentStatus || 'UNPAID'}</strong></div>
+        ${paidAmt > 0 ? `<div class="t-center t-small" style="color:#059669; font-weight:700; margin-top:2px;">PAID: PHP ${paidAmt.toFixed(2)} ${orNo ? `| OR#: ${orNo}` : ''} ${paidDate ? `(${paidDate})` : ''}</div>` : ''}
+
+        ${showBarcode ? `
+          <div class="t-center" style="margin: 6px 0 2px 0;">
+            <svg width="160" height="32" viewBox="0 0 160 32" style="display:inline-block;">
+              <path d="M4 2h2v26H4zm4 0h1v26H8zm3 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h2v26h-2z" fill="#000"/>
+            </svg>
+            <div style="font-size:8.5px; letter-spacing:1px;">${bill.id}</div>
+          </div>
+        ` : ''}
+
+        ${showQr ? `
+          <div class="t-center" style="margin: 4px 0;">
+            <svg width="56" height="56" viewBox="0 0 29 29" shape-rendering="crispEdges" style="display:inline-block; border:1px solid #000; padding:2px; background:#fff;">
+              <path d="M1 1h7v7H1V1zm1 1v5h5V2H2zm1 1h3v3H3V3zm18-2h7v7h-7V1zm1 1v5h5V2h-5zm1 1h3v3h-3V3zM1 21h7v7H1v-7zm1 1v5h5v-5H2zm1 1h3v3H3v-3zM10 1h2v2h-2V1zm4 0h1v3h-1V1zm3 1h2v2h-2V2zM10 5h3v2h-3V5zm5 0h2v3h-2V5zM1 10h3v2H1v-2zm5 0h2v3H6v-3zm4 0h4v2h-4v-2zm6 0h2v4h-2v-4zm4 0h3v2h-3v-2zm5 1h3v2h-3v-2zM2 14h2v3H2v-3zm4 1h3v2H6v-2zm5-1h2v4h-2v-4zm4 1h3v3h-3v-3zm5 0h2v2h-2v-2zm4 1h3v3h-3v-3zM10 21h3v2h-3v-2zm5 0h2v3h-2v-3zm4 1h4v2h-4v-2zm6 0h2v4h-2v-4zM10 25h2v3h-2v-3zm4 1h3v2h-3v-2zm5 0h3v2h-3v-2zm5 1h3v1h-3v-1z" fill="#000"/>
+            </svg>
+          </div>
+        ` : ''}
+
+        <div class="t-center t-warning t-small">*** THIS BILL IS NOT A PAYMENT RECEIPT ***</div>
+        <div class="t-center t-small">Please settle on or before due date to avoid service disconnection.</div>
+        <div class="t-center t-small">${customFooter}</div>
+        <div class="t-center t-small" style="font-size:8.5px; margin-top:3px; color:#475569;">[Xprinter XP-P300 • ${printableMm}mm • 100% Phenol-Free Paper]</div>
+      </div>
+    `;
+  }
 
   async openThermalReceiptModal(billId) {
     const bill = await window.db.get('bills', billId);
@@ -1275,54 +1643,8 @@ class WaterBillingApp {
     const meter = bill.meterId ? await window.db.get('meters', bill.meterId) : null;
     this.activeBill = bill;
 
-    const is58 = window.thermalPrinter.paperWidth === '58mm';
     const paper = document.getElementById('thermal-paper-content');
-
-    const divider = '-'.repeat(is58 ? 32 : 44);
-    const doubleDivider = '='.repeat(is58 ? 32 : 44);
-
-    paper.innerHTML = `
-      <div class="thermal-receipt ${is58 ? 'w-58' : 'w-80'}">
-        <div class="t-center t-bold t-large">DICKLUM WATER</div>
-        <div class="t-center t-bold">ASSOCIATION, INC.</div>
-        <div class="t-center t-small">Dicklum, Manolo Fortich, Bukidnon</div>
-        <div class="t-center t-small">SEC Reg. CN2014-99120 | TIN: 008-721-432</div>
-        <div class="t-center t-bold">OFFICIAL WATER BILL NOTICE</div>
-        <div class="t-divider">${doubleDivider}</div>
-
-        <div class="t-row"><span>Bill Ref :</span><span>${bill.id}</span></div>
-        <div class="t-row"><span>Date     :</span><span>${bill.billDate}</span></div>
-        <div class="t-row"><span>Period   :</span><span>${bill.billingPeriod}</span></div>
-        <div class="t-row"><span>Due Date :</span><span class="t-bold text-danger">${bill.dueDate}</span></div>
-        <div class="t-divider">${divider}</div>
-
-        <div class="t-row"><span>Consumer :</span><span class="t-bold">${consumer.name}</span></div>
-        <div class="t-row"><span>Acct No  :</span><span>${consumer.accountNo}</span></div>
-        <div class="t-row"><span>Zone     :</span><span>${consumer.zone}</span></div>
-        <div class="t-row"><span>Meter No :</span><span>${meter ? meter.meterNo : 'N/A'}</span></div>
-        <div class="t-divider">${divider}</div>
-
-        <div class="t-row t-bold"><span>DESCRIPTION</span><span>AMOUNT</span></div>
-        <div class="t-row"><span>Previous Reading:</span><span>${bill.previousReading.toLocaleString()} m³</span></div>
-        <div class="t-row"><span>Current Reading:</span><span>${bill.currentReading.toLocaleString()} m³</span></div>
-        <div class="t-row t-bold text-primary"><span>Consumption:</span><span>${bill.consumption.toLocaleString()} m³</span></div>
-        <div class="t-divider">${divider}</div>
-
-        <div class="t-row"><span>Min Charge (10 m³):</span><span>PHP ${bill.minimumCharge.toFixed(2)}</span></div>
-        ${bill.excessCubicMeters > 0 ? `<div class="t-row"><span>Excess (${bill.excessCubicMeters}m³@PHP ${bill.excessRate}):</span><span>PHP ${bill.excessAmount.toFixed(2)}</span></div>` : ''}
-        ${bill.maintenanceFee > 0 ? `<div class="t-row"><span>Maintenance Fee:</span><span>PHP ${bill.maintenanceFee.toFixed(2)}</span></div>` : ''}
-        <div class="t-divider">${doubleDivider}</div>
-
-        <div class="t-center t-bold t-total">TOTAL DUE: PHP ${bill.totalAmountDue.toFixed(2)}</div>
-        <div class="t-divider">${doubleDivider}</div>
-
-        <div class="t-center t-small">Reader: ${bill.readerName || 'R. Fernandez'}</div>
-        <div class="t-center t-small">Payment Status: <strong>${bill.paymentStatus}</strong></div>
-        <div class="t-center t-warning t-small">*** THIS BILL IS NOT A PAYMENT RECEIPT ***</div>
-        <div class="t-center t-small">Please settle on or before due date to avoid service disconnection.</div>
-        <div class="t-center t-small">Conserve water for the community.</div>
-      </div>
-    `;
+    paper.innerHTML = this.buildThermalReceiptHtml(bill, consumer, meter);
 
     document.getElementById('modal-thermal-preview').classList.add('active');
   }
@@ -1414,20 +1736,21 @@ class WaterBillingApp {
     }
 
     try {
+      const targetBill = this.cachedBills.find(b => b.id === billId);
+      const targetConsumerId = (targetBill && targetBill.consumerId) || this.activeHistoryConsumerId || (this.activeConsumer && this.activeConsumer.id);
       await window.db.delete('bills', billId);
       await this.refreshDataCache();
       this.renderBillingList();
       this.renderStats();
+      this.autoSyncToOfficePcSilent();
 
-      // If consumer history modal is open, refresh it
-      if (this.activeConsumer) {
-        const historyModal = document.getElementById('modal-consumer-history');
-        if (historyModal && historyModal.classList.contains('active')) {
-          await this.openConsumerHistoryModal(this.activeConsumer.id);
-        }
+      // If consumer folder modal is open, refresh it
+      const historyModal = document.getElementById('modal-consumer-history');
+      if (historyModal && historyModal.classList.contains('active') && targetConsumerId) {
+        await this.openConsumerHistoryModal(targetConsumerId);
       }
 
-      alert(`Billing statement #${billId} deleted.`);
+      this.showToast(`Billing statement #${billId} deleted.`, 2200);
     } catch (err) {
       console.error('Error deleting bill:', err);
       alert(`Failed to delete billing record: ${err.message}`);
@@ -1551,28 +1874,64 @@ class WaterBillingApp {
     }
   }
 
-  async unpinActiveCluster() {
-    if (!this.activeCluster) return;
-    const name = this.activeCluster.name;
-    if (!confirm(`Remove pinned GPS location for cluster manifold "${name}"?\n\nThe cluster manifold definition stays saved; only the map pin is cleared.`)) {
+  async unpinActiveCluster(clusterIdParam = null) {
+    const targetClusterId = clusterIdParam || (this.activeCluster && this.activeCluster.id) || this.activeClusterId;
+    const cluster = (targetClusterId && this.cachedClusters.find(c => c.id === targetClusterId)) || this.activeCluster;
+    if (!cluster) return;
+
+    const clusterMeters = this.cachedMeters.filter(m => m.clusterId === cluster.id);
+    const ownerNames = clusterMeters.map((m, idx) => {
+      const con = this.cachedConsumers.find(c => c.id === m.consumerId)
+        || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (m.ownerName || '').trim().toLowerCase());
+      return (con && con.name) ? con.name : (m.ownerName || m.meterNo || `Meter #${idx + 1}`);
+    }).filter(Boolean);
+
+    const cleanZone = this.cleanZoneString(cluster.zone || 'Zone 1');
+    const shortOwners = ownerNames.slice(0, 3).join(', ') + (ownerNames.length > 3 ? ` +${ownerNames.length - 3}` : '');
+    const displayName = ownerNames.length > 0
+      ? `${cleanZone} Clustered Meters (${shortOwners})`
+      : (cluster.name || 'Clustered Water Meters');
+
+    const confirmMsg = clusterMeters.length > 0
+      ? `Delete Cluster Pin "${displayName}" (${clusterMeters.length} water meter${clusterMeters.length === 1 ? '' : 's'}: ${ownerNames.join(', ')})?\n\nThis cluster pin and its grouped water meters will be deleted from the map (any separate Household pins on the map will remain intact).`
+      : `Delete Cluster Pin "${displayName}"?`;
+
+    if (!confirm(confirmMsg)) {
       return;
     }
 
     try {
-      this.activeCluster.lat = null;
-      this.activeCluster.lng = null;
-      await window.db.put('clusters', this.activeCluster);
+      // 1. Delete all water meters belonging to this cluster pin
+      for (const m of clusterMeters) {
+        await window.db.delete('meters', m.id);
+      }
 
+      // 2. Delete the cluster record itself
+      await window.db.delete('clusters', cluster.id);
+
+      this.activeCluster = null;
+      this.activeClusterId = null;
+      this._activeClusterMeterId = null;
       this.closeClusterSheet();
-      this.cachedClusters = await window.db.getAll('clusters');
+
+      // 3. Refresh cache (which also cleans up any orphaned consumers without a Household pin) and update all views
+      await this.refreshDataCache();
+      await this.populateZoneDropdowns();
       this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      this.populateQuickConsumerSelect();
+      this.renderStats();
+      try { await this.renderZoneExportCenter(); } catch (_) {}
       if (this.activeView === 'view-settings') {
         await this.renderSettingsZonesAndClusters();
       }
-      alert(`GPS pin for cluster manifold "${name}" has been removed.`);
+      this.autoSyncToOfficePcSilent();
+
+      this.showToast(`Cluster pin "${displayName}" deleted from map.`, 2800);
     } catch (err) {
-      console.error('Error unpinning cluster:', err);
-      alert(`Failed to remove cluster pin: ${err.message}`);
+      console.error('Error deleting cluster pin:', err);
+      alert(`Failed to delete cluster pin: ${err.message}`);
     }
   }
 
@@ -1653,8 +2012,13 @@ class WaterBillingApp {
 
     const result = await window.thermalPrinter.printBill(this.activeBill, consumer, meter, this.cachedSettings);
     if (result.success) {
+      this.showToast(`Receipt ${this.activeBill.id} printed on Xprinter XP-P300!`, 2600);
       await this.refreshDataCache();
       this.renderBillingList();
+    } else if (result.error) {
+      if (confirm(`${result.error}\n\nWould you like to open USB / System Browser Print instead?`)) {
+        this.executeBrowserThermalPrint();
+      }
     }
   }
 
@@ -1716,8 +2080,17 @@ class WaterBillingApp {
 
       await this.refreshDataCache();
       this.renderBillingList();
+      this.autoSyncToOfficePcSilent();
       document.getElementById('modal-record-payment').classList.remove('active');
-      alert(`Payment of PHP ${amount.toFixed(2)} recorded under Official Receipt ${orNumber}.`);
+
+      // Refresh Consumer Folder modal if currently open
+      const historyModal = document.getElementById('modal-consumer-history');
+      const targetConsumerId = this.activeBill.consumerId || this.activeHistoryConsumerId;
+      if (historyModal && historyModal.classList.contains('active') && targetConsumerId) {
+        await this.openConsumerHistoryModal(targetConsumerId);
+      }
+
+      this.showToast(`Payment of PHP ${amount.toFixed(2)} recorded (OR# ${orNumber})`, 2800);
     } catch (err) {
       alert(`Error recording payment: ${err.message}`);
     }
@@ -2030,8 +2403,11 @@ class WaterBillingApp {
     }
   }
 
-  getNextMeterNo() {
+  getNextMeterNo(extraUsedSet = null) {
     const existing = new Set((this.cachedMeters || []).map(m => (m.meterNo || '').trim().toUpperCase()));
+    if (extraUsedSet) {
+      extraUsedSet.forEach(v => existing.add(String(v).trim().toUpperCase()));
+    }
     let num = (this.cachedMeters ? this.cachedMeters.length : 0) + 1;
     while (existing.has(`WM-2026-${String(num).padStart(3, '0')}`)) {
       num++;
@@ -2039,13 +2415,247 @@ class WaterBillingApp {
     return `WM-2026-${String(num).padStart(3, '0')}`;
   }
 
-  getNextAccountNo() {
+  getNextAccountNo(extraUsedSet = null) {
     const existing = new Set((this.cachedConsumers || []).map(c => (c.accountNo || '').trim().toUpperCase()));
+    if (extraUsedSet) {
+      extraUsedSet.forEach(v => existing.add(String(v).trim().toUpperCase()));
+    }
     let num = (this.cachedConsumers ? this.cachedConsumers.length : 0) + 1;
     while (existing.has(`DWA-2026-${String(num).padStart(3, '0')}`)) {
       num++;
     }
     return `DWA-2026-${String(num).padStart(3, '0')}`;
+  }
+
+  _createBlankMeterSlot(slotIndex, defaultZone = '') {
+    const usedSerials = new Set((this._meterSlots || []).map(s => (s && s.meterNo) || '').filter(Boolean));
+    const meterNo = this.getNextMeterNo(usedSerials);
+    return {
+      ownerName: '',
+      existingConsumerId: '',
+      meterNo: meterNo,
+      initialReading: 0,
+      address: defaultZone || '',
+      linkHousehold: false,
+      notes: '',
+      saved: false
+    };
+  }
+
+  syncCurrentFormToActiveMeterSlot() {
+    if (!this._meterSlots || !this._meterSlots.length) return;
+    const idx = Math.min(Math.max(0, this._activeMeterSlotIdx || 0), this._meterSlots.length - 1);
+    const slot = this._meterSlots[idx];
+    if (!slot) return;
+
+    const ownerInput = document.getElementById('pin-meter-owner-name');
+    const selectConsumer = document.getElementById('pin-meter-consumer-select');
+    const meterNoInput = document.getElementById('pin-meter-no');
+    const initRdgInput = document.getElementById('pin-meter-initial-reading');
+    const meterAddrInput = document.getElementById('pin-meter-address');
+    const linkHouseCheckbox = document.getElementById('pin-meter-link-household');
+    const meterNotesInput = document.getElementById('pin-meter-notes');
+
+    if (ownerInput) slot.ownerName = ownerInput.value;
+    if (selectConsumer) {
+      slot.existingConsumerId = selectConsumer.value;
+      if (selectConsumer.value && (!slot.ownerName || !slot.ownerName.trim())) {
+        const c = this.cachedConsumers.find(con => con.id === selectConsumer.value);
+        if (c) slot.ownerName = c.name;
+      }
+    }
+    if (meterNoInput) slot.meterNo = meterNoInput.value;
+    if (initRdgInput) slot.initialReading = Number(initRdgInput.value) || 0;
+    if (meterAddrInput) slot.address = meterAddrInput.value;
+    if (linkHouseCheckbox) slot.linkHousehold = Boolean(linkHouseCheckbox.checked);
+    if (meterNotesInput) slot.notes = meterNotesInput.value;
+  }
+
+  loadMeterSlotIntoForm(slotIndex, animate = false) {
+    if (!this._meterSlots || !this._meterSlots.length) return;
+    const idx = Math.min(Math.max(0, slotIndex), this._meterSlots.length - 1);
+    this._activeMeterSlotIdx = idx;
+    const slot = this._meterSlots[idx];
+    const total = this._meterSlots.length;
+
+    const ownerInput = document.getElementById('pin-meter-owner-name');
+    const selectConsumer = document.getElementById('pin-meter-consumer-select');
+    const meterNoInput = document.getElementById('pin-meter-no');
+    const initRdgInput = document.getElementById('pin-meter-initial-reading');
+    const meterAddrInput = document.getElementById('pin-meter-address');
+    const linkHouseCheckbox = document.getElementById('pin-meter-link-household');
+    const meterNotesInput = document.getElementById('pin-meter-notes');
+
+    if (ownerInput) ownerInput.value = slot.ownerName || '';
+    if (selectConsumer) selectConsumer.value = slot.existingConsumerId || '';
+    if (meterNoInput) meterNoInput.value = slot.meterNo || this.getNextMeterNo();
+    if (initRdgInput) initRdgInput.value = slot.initialReading ?? 0;
+    if (meterAddrInput) meterAddrInput.value = slot.address || '';
+    if (linkHouseCheckbox) linkHouseCheckbox.checked = Boolean(slot.linkHousehold);
+    if (meterNotesInput) meterNotesInput.value = slot.notes || '';
+
+    const circleBadge = document.getElementById('active-meter-circle-badge');
+    const slotTitle = document.getElementById('active-meter-slot-title');
+    const slotSub = document.getElementById('active-meter-slot-subtitle');
+    const slotStatus = document.getElementById('active-meter-slot-status');
+    const navBar = document.getElementById('mse-slot-nav-bar');
+    const btnPrev = document.getElementById('btn-mse-prev-slot');
+    const btnNext = document.getElementById('btn-mse-save-next-slot');
+    const btnSaveFooter = document.getElementById('btn-save-drop-pin');
+
+    if (circleBadge) circleBadge.textContent = String(idx + 1);
+    const hasOwner = Boolean((slot.ownerName || '').trim() || slot.existingConsumerId);
+    if (slotTitle) {
+      slotTitle.textContent = total > 1
+        ? `Water Meter #${idx + 1} of ${total}${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`
+        : `Water Meter #1${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`;
+    }
+    if (slotSub) {
+      slotSub.textContent = total > 1
+        ? `Enter owner name & details for Circle #${idx + 1}`
+        : `Enter water meter owner name & details below`;
+    }
+    if (slotStatus) {
+      slotStatus.textContent = hasOwner ? `Ready (#${idx + 1})` : `Editing #${idx + 1}`;
+      slotStatus.className = `badge ${hasOwner ? 'badge-success' : 'badge-warning'}`;
+    }
+
+    if (navBar) {
+      navBar.classList.toggle('hidden', total <= 1);
+    }
+    if (btnPrev) {
+      btnPrev.disabled = idx === 0;
+      btnPrev.style.opacity = idx === 0 ? '0.45' : '1';
+    }
+    if (btnNext) {
+      btnNext.textContent = idx < total - 1
+        ? `Save Meter #${idx + 1} & Next →`
+        : `✓ Confirm Meter #${idx + 1}`;
+    }
+    if (btnSaveFooter) {
+      const checkedRadio = document.querySelector('input[name="pin-type"]:checked');
+      const isMeterMode = !checkedRadio || checkedRadio.value === 'meter';
+      btnSaveFooter.textContent = (isMeterMode && total > 1)
+        ? `Save ${total} Clustered Meters`
+        : 'Save Pin';
+    }
+
+    if (animate) {
+      const editorCard = document.getElementById('meter-slot-editor-card');
+      if (editorCard) {
+        editorCard.classList.remove('slot-switch-anim');
+        void editorCard.offsetWidth;
+        editorCard.classList.add('slot-switch-anim');
+      }
+    }
+
+    this.renderPinMeterCirclesStage();
+  }
+
+  renderPinMeterCirclesStage() {
+    const stageEl = document.getElementById('pin-meter-circles-stage');
+    const countEl = document.getElementById('pin-meter-count-display');
+    const hintEl = document.getElementById('pin-meter-circles-hint');
+    if (!stageEl || !this._meterSlots) return;
+
+    const total = this._meterSlots.length;
+    if (countEl) countEl.textContent = String(total);
+
+    if (hintEl) {
+      const configuredCount = this._meterSlots.filter(s => (s.ownerName || '').trim() || s.existingConsumerId).length;
+      hintEl.innerHTML = total > 1
+        ? `<strong>${configuredCount} of ${total}</strong> clustered water meters configured. Tap any circle above to inspect or edit.`
+        : `Tap <strong>+</strong> above to group multiple water meters at this location (each with its own owner).`;
+    }
+
+    stageEl.innerHTML = this._meterSlots.map((slot, idx) => {
+      const isActive = idx === this._activeMeterSlotIdx;
+      const rawOwner = (slot.ownerName || '').trim();
+      const isConfigured = Boolean(rawOwner || slot.existingConsumerId);
+      const topLabel = rawOwner || String(idx + 1);
+
+      return `
+        <div class="mgb-circle-item ${isActive ? 'active' : ''} ${isConfigured ? 'configured' : ''}" data-slot-idx="${idx}">
+          <span class="mgb-circle-owner-label" title="${rawOwner || `Water Meter #${idx + 1}`}">${topLabel}</span>
+          <button type="button" class="mgb-circle-btn" aria-label="Water Meter Circle ${idx + 1}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="margin-bottom: 1px;">
+              <path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/>
+            </svg>
+            <span class="mgb-circle-num">${idx + 1}</span>
+            ${isConfigured ? `<span class="mgb-circle-check">✓</span>` : ''}
+          </button>
+          <span class="mgb-circle-serial">${slot.meterNo || ''}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  setPinMeterCount(newCount) {
+    this.syncCurrentFormToActiveMeterSlot();
+    const clamped = Math.min(20, Math.max(1, Number(newCount) || 1));
+    const activeZone = this.cleanZoneString(
+      (document.getElementById('pin-zone-select') && document.getElementById('pin-zone-select').value)
+        || this._lastSelectedZone
+        || 'Zone 1'
+    );
+
+    if (!this._meterSlots || !this._meterSlots.length) {
+      this._meterSlots = [this._createBlankMeterSlot(0, activeZone)];
+    }
+
+    while (this._meterSlots.length < clamped) {
+      this._meterSlots.push(this._createBlankMeterSlot(this._meterSlots.length, activeZone));
+    }
+    if (this._meterSlots.length > clamped) {
+      this._meterSlots.length = clamped;
+    }
+
+    const countEl = document.getElementById('pin-meter-count-display');
+    if (countEl) {
+      countEl.classList.remove('pulse');
+      void countEl.offsetWidth;
+      countEl.classList.add('pulse');
+    }
+
+    if (this._activeMeterSlotIdx >= clamped) {
+      this._activeMeterSlotIdx = clamped - 1;
+    }
+
+    this.loadMeterSlotIntoForm(this._activeMeterSlotIdx, false);
+  }
+
+  selectPinMeterSlot(slotIdx) {
+    this.syncCurrentFormToActiveMeterSlot();
+    this.loadMeterSlotIntoForm(slotIdx, true);
+    setTimeout(() => {
+      const ownerInput = document.getElementById('pin-meter-owner-name');
+      if (ownerInput) ownerInput.focus();
+    }, 50);
+  }
+
+  saveCurrentMeterSlotAndAdvance() {
+    this.syncCurrentFormToActiveMeterSlot();
+    const idx = this._activeMeterSlotIdx || 0;
+    const slot = this._meterSlots[idx];
+    if (!slot) return;
+
+    if (!(slot.ownerName || '').trim() && !slot.existingConsumerId) {
+      alert(`Please enter the Water Meter Owner / Consumer Name for Circle #${idx + 1}.`);
+      const ownerInput = document.getElementById('pin-meter-owner-name');
+      if (ownerInput) ownerInput.focus();
+      return;
+    }
+
+    slot.saved = true;
+    this.renderPinMeterCirclesStage();
+
+    if (idx + 1 < this._meterSlots.length) {
+      this.selectPinMeterSlot(idx + 1);
+      this.showToast(`Meter #${idx + 1} (${slot.ownerName.trim()}) ready — now enter Meter #${idx + 2}`, 1800);
+    } else {
+      this.loadMeterSlotIntoForm(idx, false);
+      this.showToast(`All ${this._meterSlots.length} water meters configured! Tap "Save ${this._meterSlots.length} Clustered Meters" below.`, 2400);
+    }
   }
 
   _isLocalOfficeServer() {
@@ -2103,20 +2713,22 @@ class WaterBillingApp {
 
     // Reset fields when opening fresh (preserve typed name if returning from GPS re-zone)
     if (!opts.preserveInputs) {
-      const ownerInput = document.getElementById('pin-meter-owner-name');
-      const meterNoInput = document.getElementById('pin-meter-no');
-      const initRdgInput = document.getElementById('pin-meter-initial-reading');
-      const meterAddrInput = document.getElementById('pin-meter-address');
-      const meterNotesInput = document.getElementById('pin-meter-notes');
-      const linkHouseCheckbox = document.getElementById('pin-meter-link-household');
-
       const nextMeterNo = this.getNextMeterNo();
-      if (ownerInput) ownerInput.value = '';
-      if (meterNoInput) meterNoInput.value = nextMeterNo;
-      if (initRdgInput) initRdgInput.value = 0;
-      if (meterAddrInput) meterAddrInput.value = '';
-      if (meterNotesInput) meterNotesInput.value = '';
-      if (linkHouseCheckbox) linkHouseCheckbox.checked = false;
+      this._targetClusterIdForPin = opts.targetClusterId || null;
+
+      this._meterSlots = [
+        {
+          ownerName: '',
+          existingConsumerId: '',
+          meterNo: nextMeterNo,
+          initialReading: 0,
+          address: activeZone,
+          linkHousehold: false,
+          notes: '',
+          saved: false
+        }
+      ];
+      this._activeMeterSlotIdx = 0;
 
       const houseNameInput = document.getElementById('pin-house-name');
       const houseAddrInput = document.getElementById('pin-house-address');
@@ -2134,6 +2746,15 @@ class WaterBillingApp {
       if (houseMeterNoInput) houseMeterNoInput.value = nextMeterNo;
       if (houseMeterInitInput) houseMeterInitInput.value = 0;
     }
+
+    if (this._targetClusterIdForPin) {
+      const selectCluster = document.getElementById('pin-cluster-select');
+      if (selectCluster) {
+        selectCluster.value = this._targetClusterIdForPin;
+      }
+    }
+
+    this.loadMeterSlotIntoForm(this._activeMeterSlotIdx || 0, false);
 
     // Existing consumers dropdown
     const selectConsumer = document.getElementById('pin-meter-consumer-select');
@@ -2194,94 +2815,182 @@ class WaterBillingApp {
     let targetConsumerName = '';
     let savedMeterNo = '';
     let autoLinkedExisting = false;
+    let savedClusterId = null;
+    let savedClusterOwners = [];
 
     if (pinType === 'meter') {
-      const ownerName = document.getElementById('pin-meter-owner-name').value.trim();
-      const existingConsumerId = document.getElementById('pin-meter-consumer-select').value;
-      const meterNo = document.getElementById('pin-meter-no').value.trim();
-      const initialReading = Number(document.getElementById('pin-meter-initial-reading').value) || 0;
-      const address = document.getElementById('pin-meter-address').value.trim();
-      const linkHousehold = document.getElementById('pin-meter-link-household').checked;
-      const clusterId = document.getElementById('pin-cluster-select').value || null;
-      const notes = document.getElementById('pin-meter-notes').value.trim();
+      this.syncCurrentFormToActiveMeterSlot();
+      const slots = (this._meterSlots && this._meterSlots.length > 0) ? this._meterSlots : [];
+      const selectedClusterId = document.getElementById('pin-cluster-select')?.value || this._targetClusterIdForPin || null;
+      const isClusteredGroup = slots.length > 1 || Boolean(selectedClusterId);
 
-      if (!meterNo) {
-        alert('Please enter Meter Serial Number (e.g. WM-2026-001).');
-        return;
-      }
+      // Validate all circles/slots
+      const seenSerialsInBatch = new Set();
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const sOwner = (s.ownerName || '').trim();
+        const sSerial = (s.meterNo || '').trim();
 
-      if (!existingConsumerId && !ownerName) {
-        alert('Please enter the Water Meter Owner / Consumer Full Name.');
-        return;
-      }
-
-      // Check if an existing consumer matches either by dropdown ID OR by the same Owner Full Name (e.g., "paula")
-      const matchedConsumer = existingConsumerId
-        ? this.cachedConsumers.find(c => c.id === existingConsumerId)
-        : this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === ownerName.toLowerCase());
-
-      // Check duplicate meter serial (allow updating if the duplicate meter already belongs to this same consumer)
-      const dupMeter = await window.db.findDuplicateMeterNo(meterNo);
-      if (dupMeter && (!matchedConsumer || dupMeter.consumerId !== matchedConsumer.id)) {
-        alert(`Water meter serial number "${meterNo}" is already registered.`);
-        return;
-      }
-
-      if (matchedConsumer) {
-        targetConsumerId = matchedConsumer.id;
-        targetConsumerName = matchedConsumer.name;
-        autoLinkedExisting = true;
-
-        matchedConsumer.zone = zone;
-        matchedConsumer.address = address ? `${address}, ${zone}, Diclum` : `${zone}, Diclum`;
-        if (linkHousehold && (!matchedConsumer.householdLat || !matchedConsumer.householdLng)) {
-          matchedConsumer.householdLat = lat;
-          matchedConsumer.householdLng = lng;
+        if (!s.existingConsumerId && !sOwner) {
+          this.selectPinMeterSlot(i);
+          alert(
+            slots.length > 1
+              ? `Please enter the Water Meter Owner / Consumer Name for Circle #${i + 1}.`
+              : 'Please enter the Water Meter Owner / Consumer Full Name.'
+          );
+          return;
         }
-        await window.db.put('consumers', matchedConsumer);
-      } else {
-        // Register new consumer
-        targetConsumerId = `c-${Date.now().toString().slice(-5)}`;
-        targetConsumerName = ownerName;
-        const accountNo = this.getNextAccountNo();
 
-        const newConsumer = {
-          id: targetConsumerId,
-          accountNo: accountNo,
-          name: ownerName,
-          zone: zone,
-          address: address ? `${address}, ${zone}, Diclum` : `${zone}, Diclum`,
-          contact: '',
-          status: 'Active',
-          householdLat: linkHousehold ? lat : null,
-          householdLng: linkHousehold ? lng : null,
-          notes: notes,
-          createdAt: new Date().toISOString()
-        };
-        await window.db.put('consumers', newConsumer);
+        if (!sSerial) {
+          this.selectPinMeterSlot(i);
+          alert(`Please enter the Meter Serial Number for Circle #${i + 1}.`);
+          return;
+        }
+
+        const upperSerial = sSerial.toUpperCase();
+        if (seenSerialsInBatch.has(upperSerial)) {
+          this.selectPinMeterSlot(i);
+          alert(`Duplicate Meter Serial Number "${sSerial}" in Circle #${i + 1}. Each water meter must have its own serial number.`);
+          return;
+        }
+        seenSerialsInBatch.add(upperSerial);
+
+        const matchedC = s.existingConsumerId
+          ? this.cachedConsumers.find(c => c.id === s.existingConsumerId)
+          : this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === sOwner.toLowerCase());
+
+        const dupMeter = await window.db.findDuplicateMeterNo(sSerial);
+        if (dupMeter && (!matchedC || dupMeter.consumerId !== matchedC.id)) {
+          this.selectPinMeterSlot(i);
+          alert(`Water meter serial number "${sSerial}" (Circle #${i + 1}) is already registered to another consumer.`);
+          return;
+        }
       }
 
-      // Register or update the consumer's water meter
-      const existingConsumerMeter = this.cachedMeters.find(m => m.consumerId === targetConsumerId);
-      const meterId = existingConsumerMeter ? existingConsumerMeter.id : `m-${Date.now().toString().slice(-5)}`;
-      savedMeterNo = meterNo;
-      const newMeter = {
-        id: meterId,
-        meterNo: meterNo,
-        consumerId: targetConsumerId,
-        ownerName: targetConsumerName,
-        zone: zone,
-        meterLat: lat,
-        meterLng: lng,
-        isClustered: Boolean(clusterId),
-        clusterId: clusterId,
-        installDate: new Date().toISOString().split('T')[0],
-        initialReading: initialReading,
-        status: 'Operational',
-        notes: notes
-      };
-      await window.db.put('meters', newMeter);
+      // Resolve or create the Cluster Manifold if 2+ meters or a cluster was selected
+      let activeClusterId = selectedClusterId;
+      if (isClusteredGroup) {
+        const ownerPreviewList = slots.map((s, idx) => {
+          if (s.existingConsumerId) {
+            const c = this.cachedConsumers.find(con => con.id === s.existingConsumerId);
+            if (c) return c.name;
+          }
+          return (s.ownerName || '').trim() || `Meter #${idx + 1}`;
+        });
 
+        if (activeClusterId) {
+          const existingCl = this.cachedClusters.find(cl => cl.id === activeClusterId);
+          if (existingCl) {
+            if (!existingCl.lat || !existingCl.lng) {
+              existingCl.lat = lat;
+              existingCl.lng = lng;
+            }
+            if (!existingCl.zone) existingCl.zone = zone;
+            const prevMeters = this.cachedMeters.filter(m => m.clusterId === existingCl.id);
+            const prevOwners = prevMeters.map(m => {
+              const c = this.cachedConsumers.find(con => con.id === m.consumerId);
+              return (c && c.name) ? c.name : (m.ownerName || m.meterNo);
+            }).filter(Boolean);
+            const combinedOwners = [...prevOwners, ...ownerPreviewList];
+            const shortOwners = combinedOwners.slice(0, 3).join(', ') + (combinedOwners.length > 3 ? ` +${combinedOwners.length - 3}` : '');
+            existingCl.name = `${zone} Clustered Meters (${shortOwners})`;
+            existingCl.description = `${combinedOwners.length} grouped water meters (${combinedOwners.join(', ')})`;
+            await window.db.put('clusters', existingCl);
+          }
+        } else {
+          const shortOwners = ownerPreviewList.slice(0, 3).join(', ') + (ownerPreviewList.length > 3 ? ` +${ownerPreviewList.length - 3}` : '');
+          const newCluster = await window.db.saveCluster({
+            name: `${zone} Clustered Meters (${shortOwners})`,
+            zone: zone,
+            description: `${slots.length} grouped water meters (${ownerPreviewList.join(', ')})`,
+            lat: lat,
+            lng: lng,
+            createdAt: new Date().toISOString()
+          });
+          activeClusterId = newCluster.id;
+        }
+        savedClusterId = activeClusterId;
+      }
+
+      const batchAccountNos = new Set();
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const ownerName = (s.ownerName || '').trim();
+        const existingConsumerId = s.existingConsumerId || '';
+        const meterNo = (s.meterNo || '').trim();
+        const initialReading = Number(s.initialReading) || 0;
+        const address = (s.address || '').trim();
+        const linkHousehold = Boolean(s.linkHousehold);
+        const notes = (s.notes || '').trim();
+
+        const matchedConsumer = existingConsumerId
+          ? this.cachedConsumers.find(c => c.id === existingConsumerId)
+          : this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === ownerName.toLowerCase());
+
+        let slotConsumerId = null;
+        let slotConsumerName = '';
+
+        if (matchedConsumer) {
+          slotConsumerId = matchedConsumer.id;
+          slotConsumerName = matchedConsumer.name;
+          autoLinkedExisting = true;
+
+          matchedConsumer.zone = zone;
+          matchedConsumer.address = address ? (address.toLowerCase().includes(zone.toLowerCase()) ? `${address}, Diclum` : `${address}, ${zone}, Diclum`) : `${zone}, Diclum`;
+          if (linkHousehold && (!matchedConsumer.householdLat || !matchedConsumer.householdLng)) {
+            matchedConsumer.householdLat = lat;
+            matchedConsumer.householdLng = lng;
+          }
+          await window.db.put('consumers', matchedConsumer);
+        } else {
+          slotConsumerId = `c-${Date.now().toString().slice(-5)}-${i + 1}`;
+          slotConsumerName = ownerName;
+          const accountNo = this.getNextAccountNo(batchAccountNos);
+          batchAccountNos.add(accountNo);
+
+          const newConsumer = {
+            id: slotConsumerId,
+            accountNo: accountNo,
+            name: ownerName,
+            zone: zone,
+            address: address ? (address.toLowerCase().includes(zone.toLowerCase()) ? `${address}, Diclum` : `${address}, ${zone}, Diclum`) : `${zone}, Diclum`,
+            contact: '',
+            status: 'Active',
+            householdLat: linkHousehold ? lat : null,
+            householdLng: linkHousehold ? lng : null,
+            notes: notes,
+            createdAt: new Date().toISOString()
+          };
+          await window.db.put('consumers', newConsumer);
+          this.cachedConsumers.push(newConsumer);
+        }
+
+        const existingConsumerMeter = this.cachedMeters.find(m => m.consumerId === slotConsumerId);
+        const meterId = existingConsumerMeter ? existingConsumerMeter.id : `m-${Date.now().toString().slice(-5)}-${i + 1}`;
+        const newMeter = {
+          id: meterId,
+          meterNo: meterNo,
+          consumerId: slotConsumerId,
+          ownerName: slotConsumerName,
+          zone: zone,
+          meterLat: lat,
+          meterLng: lng,
+          isClustered: Boolean(activeClusterId),
+          clusterId: activeClusterId || null,
+          installDate: new Date().toISOString().split('T')[0],
+          initialReading: initialReading,
+          status: 'Operational',
+          notes: notes
+        };
+        await window.db.put('meters', newMeter);
+
+        targetConsumerId = slotConsumerId;
+        targetConsumerName = slotConsumerName;
+        savedMeterNo = meterNo;
+        savedClusterOwners.push(slotConsumerName);
+      }
+
+      this._targetClusterIdForPin = null;
     } else {
       // Consumer Household Pin — requires Full Name; automatically links if a Water Meter or Consumer with the same name already exists
       const name = document.getElementById('pin-house-name').value.trim();
@@ -2366,6 +3075,9 @@ class WaterBillingApp {
       } else {
         this.showToast(`Household pin added for ${targetConsumerName} (${zone})`);
       }
+    } else if (savedClusterId) {
+      this.showToast(`Saved ${savedClusterOwners.length} Clustered Water Meter${savedClusterOwners.length === 1 ? '' : 's'} (${savedClusterOwners.join(', ')}) in ${zone}!`, 3800);
+      this.openClusterSheet(savedClusterId);
     } else {
       const meterText = savedMeterNo ? ` (${savedMeterNo})` : '';
       if (autoLinkedExisting) {
@@ -2452,29 +3164,26 @@ class WaterBillingApp {
         const readCount = rows.filter(r => r.readingDate !== '—' || Number(r.totalAmountDue) > 0 || Number(r.consumption) > 0).length;
         const totalM3 = rows.reduce((acc, r) => acc + (Number(r.consumption) || 0), 0);
         const totalBilled = rows.reduce((acc, r) => acc + (Number(r.totalAmountDue ?? r.billAmount) || 0), 0);
-        const badgeColor = isAll ? '#1E40AF' : '#0F766E';
-        const cardBg = isAll ? '#EFF6FF' : '#F8FAFC';
-        const borderCol = isAll ? '#BFDBFE' : '#E2E8F0';
         const displayTitle = isAll ? 'All Zones (Combined Master Sheet)' : z;
 
         return `
-          <div style="background: ${cardBg}; border: 1px solid ${borderCol}; border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <div style="background: var(--surface-alt); border: 1px solid ${isAll ? 'var(--primary)' : 'var(--border)'}; border-radius: 6px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
             <div>
               <div style="display: flex; align-items: center; gap: 6px;">
-                <strong style="font-size: 12.5px; color: #0F172A;">${displayTitle}</strong>
-                <span style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: ${badgeColor}18; color: ${badgeColor};">
+                <strong style="font-size: 12.5px; font-weight: 600; color: var(--text-primary);">${displayTitle}</strong>
+                <span class="acct-pill">
                   ${readCount} Read / ${totalConsumersInZone} Total
                 </span>
               </div>
-              <div style="font-size: 10.5px; color: #475569; margin-top: 2px;">
-                Consumption: <strong>${totalM3.toLocaleString()} m³</strong> • Total Billed: <strong style="color: #0F766E;">PHP ${totalBilled.toFixed(2)}</strong>
+              <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums;">
+                Consumption: <strong style="color: var(--text-primary); font-weight: 600;">${totalM3.toLocaleString()} m³</strong> • Total Billed: <strong style="color: var(--primary-light); font-weight: 600;">PHP ${totalBilled.toFixed(2)}</strong>
               </div>
             </div>
             <div style="display: flex; gap: 6px;">
-              <button type="button" class="btn btn-xs btn-primary btn-zone-export" data-zone="${z}" data-format="pdf" style="padding: 5px 10px; font-size: 11px; font-weight: 700;">
+              <button type="button" class="btn btn-xs btn-primary btn-zone-export" data-zone="${z}" data-format="pdf">
                 PDF Table
               </button>
-              <button type="button" class="btn btn-xs btn-outline btn-zone-export" data-zone="${z}" data-format="excel" style="padding: 5px 10px; font-size: 11px; font-weight: 700; border-color: #059669; color: #059669; background: #FFF;">
+              <button type="button" class="btn btn-xs btn-outline btn-zone-export" data-zone="${z}" data-format="excel">
                 Excel (.xls)
               </button>
             </div>
@@ -2535,8 +3244,16 @@ class WaterBillingApp {
     document.getElementById('modal-report-preview').classList.add('active');
   }
 
+  getOfficePcSyncEndpoint() {
+    const savedBase = (localStorage.getItem('dicklum_office_pc_url') || '').trim().replace(/\/+$/, '');
+    if (savedBase && !this._isLocalOfficeServer()) {
+      return `${savedBase}/api/sync`;
+    }
+    return '/api/sync';
+  }
+
   async uploadReadingsToOfficePc() {
-    const statusBadge = document.getElementById('pc-sync-status-badge');
+    const statusBadge = document.getElementById('pc-sync-status-badge') || document.getElementById('office-sync-status-badge');
     const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
     try {
       const readings = await window.db.getAll('readings');
@@ -2551,7 +3268,8 @@ class WaterBillingApp {
         settings: await window.db.getAll('settings')
       };
 
-      const resp = await fetch('/api/sync', {
+      const syncUrl = this.getOfficePcSyncEndpoint();
+      const resp = await fetch(syncUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -2568,11 +3286,12 @@ class WaterBillingApp {
         if (lastSyncEl) {
           lastSyncEl.innerHTML = `Last synced to Office PC (<code>data/dicklum_master_db.json</code>): <strong>${stamp}</strong> (${result.counts.consumers} consumers, ${result.counts.readings} readings, ${result.counts.bills} bills)`;
         }
-        this.showToast('Uploaded all current readings & bills to Office PC!', 3200);
+        this.showToast('Uploaded all current readings & consumer folders to Office PC!', 3200);
         alert(
           `Successfully uploaded all current readings & bills to the Office PC!\n\n` +
           `Saved on PC Hard Drive:\n` +
           `• Master DB: data/dicklum_master_db.json\n` +
+          `• Consumer Folders: data/consumer_folders/ (${result.consumerFoldersUpdated || result.counts.consumers} folders)\n` +
           `• Daily Backup: data/backups/\n\n` +
           `Records Uploaded:\n` +
           `• ${result.counts.consumers} Consumers\n` +
@@ -2593,10 +3312,11 @@ class WaterBillingApp {
   }
 
   async pullReadingsFromOfficePc() {
-    const statusBadge = document.getElementById('pc-sync-status-badge');
+    const statusBadge = document.getElementById('pc-sync-status-badge') || document.getElementById('office-sync-status-badge');
     const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
     try {
-      const resp = await fetch('/api/sync', { method: 'GET' });
+      const syncUrl = this.getOfficePcSyncEndpoint();
+      const resp = await fetch(syncUrl, { method: 'GET' });
       if (!resp.ok) throw new Error(`Server status ${resp.status}`);
       const json = await resp.json();
       if (!json.success || !json.data) {
@@ -2968,16 +3688,36 @@ class WaterBillingApp {
     this.openPinGateModal('unlock');
   }
 
-  // --- Individual Consumer Billing & Payment History Ledger ---
+  // --- Individual Consumer Folder: Saved Thermal Paper Bills & Monthly Payment Ledger ---
+
+  switchConsumerFolderTab(tabName = 'thermal') {
+    const btnThermal = document.getElementById('hist-tab-btn-thermal');
+    const btnLedger = document.getElementById('hist-tab-btn-ledger');
+    const panelThermal = document.getElementById('hist-panel-thermal');
+    const panelLedger = document.getElementById('hist-panel-ledger');
+
+    const isThermal = tabName === 'thermal';
+    if (btnThermal) {
+      btnThermal.classList.toggle('active', isThermal);
+      btnThermal.style.background = isThermal ? 'var(--primary)' : 'transparent';
+      btnThermal.style.color = isThermal ? '#FFFFFF' : 'var(--text-secondary)';
+    }
+    if (btnLedger) {
+      btnLedger.classList.toggle('active', !isThermal);
+      btnLedger.style.background = !isThermal ? 'var(--primary)' : 'transparent';
+      btnLedger.style.color = !isThermal ? '#FFFFFF' : 'var(--text-secondary)';
+    }
+    if (panelThermal) panelThermal.style.display = isThermal ? 'block' : 'none';
+    if (panelLedger) panelLedger.style.display = !isThermal ? 'block' : 'none';
+  }
 
   async openConsumerHistoryModal(consumerId) {
     const consumer = this.cachedConsumers.find(c => c.id === consumerId);
     if (!consumer) return;
+    this.activeHistoryConsumerId = consumerId;
 
     const meter = this.cachedMeters.find(m => m.consumerId === consumerId) || { meterNo: 'Unassigned', isClustered: false };
     const cluster = meter.clusterId ? this.cachedClusters.find(cl => cl.id === meter.clusterId) : null;
-    const bills = (this.cachedBills || []).filter(b => b.consumerId === consumerId);
-    bills.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
     let readings = [];
     try {
@@ -2987,112 +3727,236 @@ class WaterBillingApp {
       readings = [];
     }
 
+    // Ensure every finished reading for this consumer has a saved Bill record in their folder
+    let bills = (this.cachedBills || []).filter(b => b.consumerId === consumerId);
+    let recoveredAnyBill = false;
+    for (const r of readings) {
+      const hasMatchingBill = bills.some(b =>
+        b.readingId === r.id ||
+        (b.billingPeriod === r.billingPeriod && Number(b.currentReading) === Number(r.currentReading) && Number(b.previousReading) === Number(r.previousReading))
+      );
+      if (!hasMatchingBill && window.billingEngine) {
+        try {
+          const newBill = await window.billingEngine.generateBillRecord(r, consumer);
+          bills.push(newBill);
+          recoveredAnyBill = true;
+        } catch (_) {}
+      }
+    }
+    if (recoveredAnyBill) {
+      this.cachedBills = await window.db.getAll('bills');
+      bills = (this.cachedBills || []).filter(b => b.consumerId === consumerId);
+    }
+
+    bills.sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+
     document.getElementById('hist-modal-consumer-name').textContent = consumer.name;
     document.getElementById('hist-modal-acct-pill').textContent = consumer.accountNo;
 
-    const totalBilled = bills.reduce((acc, b) => acc + (b.totalAmountDue || 0), 0);
-    const totalPaid = bills.reduce((acc, b) => acc + (b.amountPaid || 0), 0);
+    const totalConsumedFromBills = bills.reduce((acc, b) => acc + (Number(b.consumption) || 0), 0);
+    const totalConsumedFromReadings = readings.reduce((acc, r) => acc + (Number(r.consumption) || 0), 0);
+    const totalConsumed = Math.max(totalConsumedFromBills, totalConsumedFromReadings);
+
+    const totalBilled = bills.reduce((acc, b) => acc + (Number(b.totalAmountDue) || 0), 0);
+    const totalPaid = bills.reduce((acc, b) => acc + (Number(b.amountPaid) || 0), 0);
     const balanceDue = Math.max(0, totalBilled - totalPaid);
 
+    const elConsumed = document.getElementById('hist-stat-consumed');
+    if (elConsumed) elConsumed.textContent = `${totalConsumed.toLocaleString()} m³`;
     document.getElementById('hist-stat-billed').textContent = `PHP ${totalBilled.toFixed(2)}`;
     document.getElementById('hist-stat-paid').textContent = `PHP ${totalPaid.toFixed(2)}`;
     document.getElementById('hist-stat-balance').textContent = `PHP ${balanceDue.toFixed(2)}`;
-    document.getElementById('hist-stat-balance').style.color = balanceDue > 0 ? '#DC2626' : '#059669';
+    document.getElementById('hist-stat-balance').style.color = balanceDue > 0 ? '#F87171' : '#34D399';
 
     const summaryBox = document.getElementById('hist-consumer-summary-box');
     const hasHouseGps = Boolean(consumer.householdLat && consumer.householdLng);
     const hasMeterGps = Boolean(meter.meterLat && meter.meterLng);
 
     summaryBox.innerHTML = `
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px;">
-        <div><strong style="color:var(--text-muted); font-size:10px; text-transform:uppercase;">District / Zone:</strong><br>${consumer.zone}</div>
-        <div><strong style="color:var(--text-muted); font-size:10px; text-transform:uppercase;">Address:</strong><br>${consumer.address}</div>
-        <div><strong style="color:var(--text-muted); font-size:10px; text-transform:uppercase;">Water Meter:</strong><br>${meter.meterNo} ${cluster ? `(${cluster.name})` : ''}</div>
-        <div><strong style="color:var(--text-muted); font-size:10px; text-transform:uppercase;">GPS Pin Status:</strong><br>
-          <span style="color:${hasHouseGps ? '#059669' : '#DC2626'}; font-weight:600;">House: ${hasHouseGps ? 'Pinned' : 'Unpinned'}</span> • 
-          <span style="color:${hasMeterGps ? '#059669' : '#DC2626'}; font-weight:600;">Meter: ${hasMeterGps ? 'Pinned' : 'Unpinned'}</span>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; color: var(--text-secondary);">
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">Consumer / Owner:</strong><br><strong style="color:var(--text-primary);">${consumer.name}</strong></div>
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">District / Zone:</strong><br><span style="color:var(--text-primary);">${consumer.zone || 'Dicklum'}</span></div>
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">Water Meter No:</strong><br><strong style="color:var(--text-primary);">${meter.meterNo}</strong> ${cluster ? `(${cluster.name})` : ''}</div>
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">GPS Pin Status:</strong><br>
+          <span style="color:${hasHouseGps ? '#34D399' : '#F87171'}; font-weight:700;">House: ${hasHouseGps ? 'Pinned' : 'Unpinned'}</span> • 
+          <span style="color:${hasMeterGps ? '#34D399' : '#F87171'}; font-weight:700;">Meter: ${hasMeterGps ? 'Pinned' : 'Unpinned'}</span>
         </div>
       </div>
     `;
 
+    // TAB 1: Saved Thermal Paper Bill Notices (Visual copies matching thermal paper receipt)
     const billsContainer = document.getElementById('hist-bills-list-container');
-    document.getElementById('hist-bills-count').textContent = `${bills.length} Bill${bills.length === 1 ? '' : 's'}`;
+    const billsCountEl = document.getElementById('hist-bills-count');
+    if (billsCountEl) billsCountEl.textContent = `${bills.length}`;
 
     if (bills.length === 0) {
-      billsContainer.innerHTML = '<div style="padding:14px; text-align:center; color:#64748B; font-size:12px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm);">No billing records recorded yet. Record a reading to generate this consumer\'s first bill.</div>';
+      billsContainer.innerHTML = `
+        <div style="padding:18px; text-align:center; color:var(--text-secondary); font-size:12px; background:var(--surface); border:1px dashed var(--border); border-radius:10px;">
+          <div style="margin-bottom:6px; color:var(--primary-light);">${window.AppIcons.receipt('', 24)}</div>
+          <strong style="color:var(--text-primary);">No Thermal Paper Water Bills recorded in ${consumer.name}'s folder yet.</strong>
+          <div style="font-size:11px; margin-top:4px; color:var(--text-muted);">Tap <strong style="color:var(--text-primary);">"+ Read Meter"</strong> below to record a water meter reading and generate their official thermal paper water bill notice.</div>
+        </div>
+      `;
     } else {
-      billsContainer.innerHTML = bills.map(b => {
+      billsContainer.innerHTML = bills.map((b, idx) => {
         const isPaid = b.paymentStatus === 'PAID';
         const isPartial = b.paymentStatus === 'PARTIAL';
-        const unpaidAmount = Math.max(0, (b.totalAmountDue || 0) - (b.amountPaid || 0));
+        const unpaidAmount = Math.max(0, (Number(b.totalAmountDue) || 0) - (Number(b.amountPaid) || 0));
         const statusBadgeClass = isPaid ? 'badge-success' : (isPartial ? 'badge-warning' : 'badge-danger');
+        const orNo = b.orNumber || b.officialReceiptNo || '';
+        const paidDate = b.paidDate || b.paidAt || '';
 
         return `
-          <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px;">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+          <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px;">
+            <!-- Folder Receipt Header Bar -->
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:10px; background:var(--surface-alt); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
               <div>
-                <strong style="font-size:13px; color:var(--primary);">${b.billingPeriod || 'Utility Bill'}</strong>
-                <span style="font-size:10px; color:var(--text-muted); font-family:var(--font-mono); margin-left:6px;">#${b.id}</span>
+                <span style="font-size:10px; font-weight:600; color:var(--primary-light); text-transform:uppercase;">Receipt #${bills.length - idx}</span>
+                <strong style="font-size:12.5px; font-weight:600; color:var(--text-primary); margin-left:6px;">Period: ${b.billingPeriod || b.billDate}</strong>
+                <span style="font-size:10.5px; color:var(--text-muted); margin-left:6px;">(${b.billDate || ''})</span>
               </div>
-              <span class="badge ${statusBadgeClass}" style="font-size:10px;">${b.paymentStatus || 'UNPAID'}</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="badge ${statusBadgeClass}">${b.paymentStatus || 'UNPAID'}</span>
+                ${unpaidAmount > 0
+                  ? `<span style="font-size:11px; font-weight:600; color:var(--danger-text); font-variant-numeric:tabular-nums;">Due: PHP ${unpaidAmount.toFixed(2)}</span>`
+                  : `<span style="font-size:11px; font-weight:600; color:var(--success-text);">Settled${orNo ? ` (${orNo})` : ''}</span>`}
+              </div>
             </div>
 
-            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(110px, 1fr)); gap:6px; font-size:11px; margin-bottom:8px; background:var(--surface-alt); padding:6px 8px; border-radius:var(--radius-xs);">
-              <div><span style="color:var(--text-muted);">Consumption:</span> <strong>${b.consumption || 0} m³</strong></div>
-              <div><span style="color:var(--text-muted);">Amount Due:</span> <strong>PHP ${(b.totalAmountDue || 0).toFixed(2)}</strong></div>
-              <div><span style="color:var(--text-muted);">Amount Paid:</span> <strong style="color:#059669;">PHP ${(b.amountPaid || 0).toFixed(2)}</strong></div>
-              <div><span style="color:var(--text-muted);">Balance:</span> <strong style="color:${unpaidAmount > 0 ? '#DC2626' : '#64748B'};">PHP ${unpaidAmount.toFixed(2)}</strong></div>
+            <!-- Visual Thermal Paper Receipt Copy (Exact match to physical thermal roll) -->
+            <div style="padding: 4px 0 10px 0;">
+              ${this.buildThermalReceiptHtml(b, consumer, meter)}
             </div>
 
-            ${isPaid || b.amountPaid > 0 ? `
-              <div style="font-size:10.5px; color:#059669; margin-bottom:8px; display:flex; align-items:center; gap:4px;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                <span>Paid OR: <strong>${b.officialReceiptNo || 'OR-PENDING'}</strong> • Collector: ${b.collectorName || 'Office'} ${b.paidAt ? `(${new Date(b.paidAt).toLocaleDateString()})` : ''}</span>
+            ${isPaid || Number(b.amountPaid) > 0 ? `
+              <div style="background:var(--success-bg); border:1px solid rgba(16, 185, 129, 0.3); color:var(--success-text); border-radius:6px; padding:7px 10px; font-size:11px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px;">
+                <span><strong>Official Payment Recorded:</strong> PHP ${Number(b.amountPaid || 0).toFixed(2)}</span>
+                <span>OR #: <strong>${orNo || 'Recorded'}</strong> • Collector: <strong>${b.collectorName || 'Office'}</strong> ${paidDate ? `(${paidDate})` : ''}</span>
               </div>
             ` : ''}
 
-            <div style="display:flex; gap:6px; flex-wrap:wrap;">
-              <button class="btn btn-sm btn-outline" onclick="window.app.openThermalReceipt('${b.id}')" style="padding:4px 8px; font-size:11px;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
-                Print Receipt
-              </button>
-              <button class="btn btn-sm btn-outline" onclick="window.app.openA4Statement('${b.id}')" style="padding:4px 8px; font-size:11px;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                A4 Statement
-              </button>
-              <button class="btn btn-sm btn-outline" onclick="window.app.deleteBillRecord('${b.id}')" style="color:var(--danger); border-color:#fca5a5; padding:4px 8px; font-size:11px;" title="Delete this billing record">
-                Delete
+            <!-- Action Buttons on this Thermal Bill Copy -->
+            <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center; background:var(--surface-alt); padding:8px; border-radius:6px; border:1px solid var(--border);">
+              <button class="btn btn-sm btn-primary" onclick="window.app.openThermalReceipt('${b.id}')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+                Print Thermal Bill
               </button>
               ${!isPaid ? `
-                <button class="btn btn-sm btn-success" onclick="window.app.openPaymentModal('${b.id}')" style="padding:4px 8px; font-size:11px;">
-                  Record Payment
+                <button class="btn btn-sm btn-success" onclick="window.app.openPaymentModal('${b.id}')">
+                  ${window.AppIcons.creditCard('', 13)} Record Payment
                 </button>
               ` : ''}
+              <button class="btn btn-sm btn-outline" onclick="window.app.openA4Statement('${b.id}')">
+                ${window.AppIcons.fileText('', 13)} A4 Copy
+              </button>
+              <button class="btn btn-sm btn-outline" onclick="window.app.deleteBillRecord('${b.id}')" style="color:var(--danger-text); border-color:rgba(239,68,68,0.35);" title="Delete this billing record">
+                Delete
+              </button>
             </div>
           </div>
         `;
       }).join('');
     }
 
+    // TAB 2: Monthly Consumption & Payment History Ledger Table + Raw Readings Log
+    const ledgerTableContainer = document.getElementById('hist-ledger-table-container');
     const readingsContainer = document.getElementById('hist-readings-list-container');
-    document.getElementById('hist-readings-count').textContent = `${readings.length} Reading${readings.length === 1 ? '' : 's'}`;
+    const readingsCountEl = document.getElementById('hist-readings-count');
+    if (readingsCountEl) readingsCountEl.textContent = `${ Math.max(bills.length, readings.length) }`;
 
-    if (readings.length === 0) {
-      readingsContainer.innerHTML = '<div style="padding:10px; text-align:center; color:#64748B; font-size:11px;">No meter readings recorded.</div>';
-    } else {
-      readingsContainer.innerHTML = readings.map(r => `
-        <div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-xs); padding:6px 10px; font-size:11.5px;">
-          <div>
-            <strong>${r.readingDate ? new Date(r.readingDate).toLocaleDateString() : 'N/A'}</strong>
-            <span style="color:var(--text-muted); margin-left:6px; font-size:10px;">${r.billingPeriod || ''}</span>
+    if (ledgerTableContainer) {
+      if (bills.length === 0) {
+        ledgerTableContainer.innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-muted); font-size:11.5px; background:var(--surface); border:1px solid var(--border); border-radius:8px;">No monthly billing or payment ledger entries yet.</div>';
+      } else {
+        ledgerTableContainer.innerHTML = `
+          <table style="width:100%; border-collapse:collapse; background:var(--surface); color:var(--text-primary); border:1px solid var(--border); border-radius:8px; overflow:hidden; font-size:11px;">
+            <thead>
+              <tr style="background:var(--surface-muted); color:#FFFFFF; text-align:left; border-bottom:1px solid var(--border);">
+                <th style="padding:7px 8px;">Period / Date</th>
+                <th style="padding:7px 8px;">Prev → Curr</th>
+                <th style="padding:7px 8px;">Consumed</th>
+                <th style="padding:7px 8px;">Billed</th>
+                <th style="padding:7px 8px;">Paid</th>
+                <th style="padding:7px 8px;">OR # / Date</th>
+                <th style="padding:7px 8px;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${bills.map(b => {
+                const isPaid = b.paymentStatus === 'PAID';
+                const orNo = b.orNumber || b.officialReceiptNo || '-';
+                const pDate = b.paidDate || b.paidAt || '';
+                return `
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px 8px;"><strong>${b.billingPeriod || ''}</strong><br><span style="font-size:9.5px;color:var(--text-muted);">${b.billDate || ''}</span></td>
+                    <td style="padding:6px 8px; font-family:var(--font-mono); color:var(--text-secondary);">${Number(b.previousReading || 0).toLocaleString()} → ${Number(b.currentReading || 0).toLocaleString()} m³</td>
+                    <td style="padding:6px 8px; font-weight:800; color:#38BDF8;">${Number(b.consumption || 0).toLocaleString()} m³</td>
+                    <td style="padding:6px 8px; font-weight:700; color:var(--text-primary);">PHP ${Number(b.totalAmountDue || 0).toFixed(2)}</td>
+                    <td style="padding:6px 8px; font-weight:700; color:#34D399;">PHP ${Number(b.amountPaid || 0).toFixed(2)}</td>
+                    <td style="padding:6px 8px; font-size:10px;"><strong>${orNo}</strong>${pDate ? `<br><span style="color:var(--text-muted);">${pDate}</span>` : ''}</td>
+                    <td style="padding:6px 8px;">
+                      <span class="badge ${isPaid ? 'badge-success' : 'badge-danger'}" style="font-size:9px;">${b.paymentStatus || 'UNPAID'}</span>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+    }
+
+    if (readingsContainer) {
+      if (readings.length === 0) {
+        readingsContainer.innerHTML = '<div style="padding:10px; text-align:center; color:var(--text-muted); font-size:11px; background:var(--surface); border:1px solid var(--border); border-radius:6px;">No meter readings recorded yet.</div>';
+      } else {
+        readingsContainer.innerHTML = readings.map(r => `
+          <div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface); color:var(--text-primary); border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:11.5px;">
+            <div>
+              <strong>${r.readingDate ? new Date(r.readingDate).toLocaleDateString() : 'N/A'}</strong>
+              <span style="color:var(--text-muted); margin-left:6px; font-size:10px;">Period: ${r.billingPeriod || ''} • Reader: ${r.readerName || 'R. Fernandez'}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted); font-size:10.5px;">Prev ${Number(r.previousReading || 0).toLocaleString()} → Curr</span>
+              <strong style="color:#38BDF8; font-size:12.5px;">${Number(r.currentReading || 0).toLocaleString()} m³</strong>
+              ${r.consumption != null ? `<span style="color:#34D399; font-weight:800; margin-left:4px;">(${r.consumption} m³)</span>` : ''}
+            </div>
           </div>
-          <div>
-            <span style="color:var(--text-muted); font-size:10.5px;">Dial:</span>
-            <strong style="color:var(--primary); font-size:12.5px;">${r.currentReading} m³</strong>
-            ${r.consumption != null ? `<span style="color:#059669; font-weight:700; margin-left:4px;">(+${r.consumption} m³)</span>` : ''}
-          </div>
-        </div>
-      `).join('');
+        `).join('');
+      }
+    }
+
+    // Wire Folder Modal Tabs & Footer Buttons
+    const btnTabThermal = document.getElementById('hist-tab-btn-thermal');
+    const btnTabLedger = document.getElementById('hist-tab-btn-ledger');
+    if (btnTabThermal) btnTabThermal.onclick = () => this.switchConsumerFolderTab('thermal');
+    if (btnTabLedger) btnTabLedger.onclick = () => this.switchConsumerFolderTab('ledger');
+    this.switchConsumerFolderTab('thermal');
+
+    const btnReadNow = document.getElementById('hist-btn-read-meter');
+    if (btnReadNow) {
+      btnReadNow.onclick = () => {
+        document.getElementById('modal-consumer-history')?.classList.remove('active');
+        this.startReadingForConsumer(consumer.id);
+      };
+    }
+
+    const btnSaveFolderPdf = document.getElementById('hist-btn-download-folder-pdf');
+    if (btnSaveFolderPdf) {
+      btnSaveFolderPdf.onclick = () => {
+        const printable = document.getElementById('consumer-folder-printable-area');
+        const safeName = String(consumer.name || 'Consumer').replace(/[^a-zA-Z0-9_-]/g, '_');
+        if (printable) {
+          this.downloadElementAsPdf(printable, `Consumer_Folder_${safeName}_${consumer.accountNo}.pdf`);
+        }
+      };
+    }
+
+    const btnExportFolderExcel = document.getElementById('hist-btn-export-folder-excel');
+    if (btnExportFolderExcel) {
+      btnExportFolderExcel.onclick = () => {
+        this.exportZoneOrConsumerReport({ zone: 'ALL', consumerId: consumer.id, format: 'excel' });
+      };
     }
 
     const btnA4 = document.getElementById('hist-btn-print-statement');
@@ -3101,7 +3965,7 @@ class WaterBillingApp {
         if (bills.length > 0) {
           this.openA4Statement(bills[0].id);
         } else {
-          alert('No bills recorded for this consumer yet.');
+          alert('No bills recorded for this consumer yet. Tap "+ Read Meter" to record their first reading.');
         }
       };
     }
@@ -3224,7 +4088,7 @@ class WaterBillingApp {
 
     list.innerHTML = '';
     if (filtered.length === 0) {
-      list.innerHTML = '<div style="padding: 14px; text-align: center; color: #64748B; font-size: 11.5px;">No consumers registered. Tap any spot on the Map to add water meters or consumers.</div>';
+      list.innerHTML = '<div style="padding: 14px; text-align: center; color: var(--text-muted); font-size: 11.5px;">No consumers registered. Tap any spot on the Map to add water meters or consumers.</div>';
       return;
     }
 
@@ -3243,7 +4107,7 @@ class WaterBillingApp {
           </div>
           <div style="display: flex; gap: 4px; align-items: center;">
             <span class="badge ${c.status === 'Active' ? 'badge-success' : 'badge-danger'}">${c.status}</span>
-            <button class="btn btn-xs btn-outline" onclick="window.app.deleteConsumerRecord('${c.id}')" style="color: var(--danger); border-color: #fca5a5; padding: 2px 6px;" title="Delete consumer record">
+            <button class="btn btn-xs btn-outline" onclick="window.app.deleteConsumerRecord('${c.id}')" style="color: #F87171; border-color: rgba(239,68,68,0.4); padding: 2px 6px;" title="Delete consumer record">
               Delete
             </button>
           </div>
@@ -3266,8 +4130,8 @@ class WaterBillingApp {
         </div>
         <div class="c-actions">
           <button class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${c.id}')">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
-            History & Bills
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Folder &amp; Bills
           </button>
           <button class="btn btn-sm btn-outline" onclick="window.app.focusConsumerOnMap('${c.id}')">
             ${window.AppIcons.mapPin('', 13)} View on Map
@@ -3292,28 +4156,196 @@ class WaterBillingApp {
     } else {
       const meter = this.cachedMeters.find(m => m.consumerId === consumerId);
       if (meter && meter.meterLat) {
-        this.mapEngine.panTo(meter.meterLat, meter.meterLng, 17.5);
-        this.mapEngine.selectPinById(meter.id, 'meter');
+        this.mapEngine.panTo(meter.meterLat, meter.meterLng, 18.2);
+        if (meter.isClustered && meter.clusterId) {
+          this._activeClusterMeterId = meter.id;
+          this.mapEngine.selectPinById(meter.clusterId, 'cluster');
+        } else {
+          this.mapEngine.selectPinById(meter.id, 'meter');
+        }
       }
     }
   }
 
-  renderBillingList(filterStatus = 'all') {
+  renderBillingList(filterStatus, searchQuery) {
     const list = document.getElementById('billing-list-container');
     if (!list) return;
 
-    const filtered = this.cachedBills.filter(b => {
-      if (filterStatus === 'all') return true;
-      return b.paymentStatus.toLowerCase() === filterStatus.toLowerCase();
-    });
+    this.billingViewMode = this.billingViewMode || 'folders';
+    if (filterStatus !== undefined) this.billingFilterStatus = filterStatus;
+    if (searchQuery !== undefined) this.billingSearchQuery = searchQuery;
 
-    list.innerHTML = '';
-    if (filtered.length === 0) {
-      list.innerHTML = '<div style="padding: 20px; text-align: center; color: #64748B;">No billing records found.</div>';
+    const status = (this.billingFilterStatus || 'all').toLowerCase();
+    const q = (this.billingSearchQuery || '').toLowerCase().trim();
+    const countBadge = document.getElementById('billing-folders-count-badge');
+
+    // MODE 1: SEPARATED CONSUMER FOLDERS DASHBOARD (Default)
+    if (this.billingViewMode === 'folders') {
+      const folderItems = this.cachedConsumers.map(c => {
+        const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+        const cBills = (this.cachedBills || [])
+          .filter(b => b.consumerId === c.id)
+          .sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+        const totalConsumed = cBills.reduce((s, b) => s + (Number(b.consumption) || 0), 0);
+        const totalBilled = cBills.reduce((s, b) => s + (Number(b.totalAmountDue) || 0), 0);
+        const totalPaid = cBills.reduce((s, b) => s + (Number(b.amountPaid) || 0), 0);
+        const balanceDue = Math.max(0, totalBilled - totalPaid);
+        return {
+          consumer: c,
+          meter,
+          bills: cBills,
+          latestBill: cBills[0] || null,
+          totalConsumed,
+          totalBilled,
+          totalPaid,
+          balanceDue
+        };
+      }).filter(item => {
+        const c = item.consumer;
+        const m = item.meter;
+        if (q) {
+          const matchName = (c.name || '').toLowerCase().includes(q);
+          const matchAcct = (c.accountNo || '').toLowerCase().includes(q);
+          const matchZone = (c.zone || '').toLowerCase().includes(q);
+          const matchAddr = (c.address || '').toLowerCase().includes(q);
+          const matchMeter = m && (m.meterNo || '').toLowerCase().includes(q);
+          if (!matchName && !matchAcct && !matchZone && !matchAddr && !matchMeter) return false;
+        }
+        if (status === 'billed') return item.bills.length > 0;
+        if (status === 'unpaid') return item.balanceDue > 0;
+        if (status === 'paid') return item.bills.length > 0 && item.balanceDue <= 0;
+        return true;
+      });
+
+      // Sort: consumers with bills first (most recent bill on top), then alphabetically by name
+      folderItems.sort((a, b) => {
+        if (a.bills.length > 0 && b.bills.length === 0) return -1;
+        if (a.bills.length === 0 && b.bills.length > 0) return 1;
+        if (a.latestBill && b.latestBill) {
+          const tA = new Date(a.latestBill.createdAt || a.latestBill.billDate || 0).getTime();
+          const tB = new Date(b.latestBill.createdAt || b.latestBill.billDate || 0).getTime();
+          if (tB !== tA) return tB - tA;
+        }
+        return String(a.consumer.name || '').localeCompare(String(b.consumer.name || ''));
+      });
+
+      if (countBadge) {
+        countBadge.textContent = `${folderItems.length} FOLDER${folderItems.length === 1 ? '' : 'S'}`;
+      }
+
+      list.innerHTML = '';
+      if (folderItems.length === 0) {
+        list.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-secondary); background: var(--surface); border: 1px dashed var(--border); border-radius: 12px; margin: 8px 0;">
+            <div style="margin-bottom: 6px; color: var(--primary-light);">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <strong style="color: var(--text-primary);">No matching consumer folder found${q ? ` for "${this.billingSearchQuery}"` : ''}.</strong>
+            <div style="font-size: 11.5px; margin-top: 4px; color: var(--text-muted);">Try another name, account number, or switch the filter above to "All Consumers".</div>
+          </div>
+        `;
+        return;
+      }
+
+      folderItems.forEach(item => {
+        const c = item.consumer;
+        const m = item.meter;
+        const bCount = item.bills.length;
+        const hasUnpaid = item.balanceDue > 0;
+        const latest = item.latestBill;
+
+        let badgeHtml = `<span class="badge" style="background:var(--surface-alt); color:var(--text-secondary); border:1px solid var(--border);">0 Bills</span>`;
+        if (bCount > 0) {
+          badgeHtml = hasUnpaid
+            ? `<span class="badge badge-danger">${bCount} Bill${bCount === 1 ? '' : 's'} • Unpaid</span>`
+            : `<span class="badge badge-success">${bCount} Bill${bCount === 1 ? '' : 's'} • Settled</span>`;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'bill-card';
+        card.innerHTML = `
+          <div class="b-header" style="cursor:pointer;" onclick="window.app.openConsumerHistoryModal('${c.id}')">
+            <div>
+              <strong style="font-size:13.5px; font-weight:600; color:var(--text-primary); display:block;">${c.name}</strong>
+              <span class="acct-pill" style="margin-left:0; margin-top:3px;">${c.accountNo} • ${c.zone || 'Dicklum'} • Meter: ${m ? m.meterNo : 'N/A'}</span>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:3px;">
+              ${badgeHtml}
+            </div>
+          </div>
+
+          <div class="b-body" style="cursor:pointer;" onclick="window.app.openConsumerHistoryModal('${c.id}')">
+            <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr);">
+              <div class="r-cell">
+                <span class="lbl">Saved Bills</span>
+                <span class="val">${bCount}</span>
+              </div>
+              <div class="r-cell">
+                <span class="lbl">Consumed</span>
+                <span class="val" style="color:var(--primary-light);">${item.totalConsumed.toLocaleString()} m³</span>
+              </div>
+              <div class="r-cell">
+                <span class="lbl">Total Paid</span>
+                <span class="val" style="color:var(--success-text);">PHP ${item.totalPaid.toFixed(2)}</span>
+              </div>
+              <div class="r-cell ${hasUnpaid ? 'highlight' : ''}">
+                <span class="lbl">Balance Due</span>
+                <span class="val" style="color:${hasUnpaid ? 'var(--danger-text)' : 'var(--text-primary)'};">PHP ${item.balanceDue.toFixed(2)}</span>
+              </div>
+            </div>
+
+            ${latest ? `
+              <div style="margin-top:6px; padding:6px 8px; background:var(--surface-alt); border:1px solid var(--border); color:var(--text-secondary); border-radius:6px; font-size:11px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; font-variant-numeric:tabular-nums;">
+                <span><strong style="color:var(--text-primary); font-weight:600;">Latest Bill:</strong> ${latest.billingPeriod} (${Number(latest.previousReading || 0).toLocaleString()} → ${Number(latest.currentReading || 0).toLocaleString()} m³ = <strong style="color:var(--primary-light); font-weight:600;">${Number(latest.consumption || 0)} m³</strong>)</span>
+                <strong style="color:var(--primary-light); font-weight:600;">PHP ${Number(latest.totalAmountDue || 0).toFixed(2)} (${latest.paymentStatus})</strong>
+              </div>
+            ` : ''}
+          </div>
+
+          <div class="b-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-sm btn-primary" onclick="window.app.openConsumerHistoryModal('${c.id}')" style="flex:1;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Open Folder (${bCount} Receipt${bCount === 1 ? '' : 's'})
+            </button>
+            <button class="btn btn-sm btn-outline" onclick="window.app.startReadingForConsumer('${c.id}')">
+              ${window.AppIcons.reading('', 13)} Read Meter
+            </button>
+          </div>
+        `;
+        list.appendChild(card);
+      });
       return;
     }
 
-    filtered.forEach(b => {
+    // MODE 2: ALL THERMAL BILL NOTICES STREAM
+    const filteredBills = (this.cachedBills || []).filter(b => {
+      const consumer = this.cachedConsumers.find(c => c.id === b.consumerId);
+      const meter = this.cachedMeters.find(m => m.consumerId === b.consumerId);
+      if (q) {
+        const cName = ((consumer && consumer.name) || b.consumerName || '').toLowerCase();
+        const cAcct = ((consumer && consumer.accountNo) || b.accountNo || '').toLowerCase();
+        const cZone = ((consumer && consumer.zone) || b.zone || '').toLowerCase();
+        const mNo = ((meter && meter.meterNo) || b.meterNo || '').toLowerCase();
+        const bId = (b.id || '').toLowerCase();
+        if (!cName.includes(q) && !cAcct.includes(q) && !cZone.includes(q) && !mNo.includes(q) && !bId.includes(q)) {
+          return false;
+        }
+      }
+      if (status === 'all' || status === 'billed') return true;
+      return (b.paymentStatus || '').toLowerCase() === status;
+    }).sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+
+    if (countBadge) {
+      countBadge.textContent = `${filteredBills.length} BILL${filteredBills.length === 1 ? '' : 'S'}`;
+    }
+
+    list.innerHTML = '';
+    if (filteredBills.length === 0) {
+      list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No thermal billing records found matching your filter.</div>';
+      return;
+    }
+
+    filteredBills.forEach(b => {
       const consumer = this.cachedConsumers.find(c => c.id === b.consumerId);
       const isPaid = b.paymentStatus === 'PAID';
 
@@ -3322,14 +4354,14 @@ class WaterBillingApp {
       card.innerHTML = `
         <div class="b-header">
           <div>
-            <strong>${consumer ? consumer.name : 'Unknown'}</strong>
+            <strong>${consumer ? consumer.name : (b.consumerName || 'Unknown')}</strong>
             <span class="acct-pill">${b.id} • ${b.billingPeriod}</span>
           </div>
           <div style="display: flex; gap: 4px; align-items: center;">
             <span class="badge ${isPaid ? 'badge-success' : 'badge-danger'}">
               ${b.paymentStatus}
             </span>
-            <button class="btn btn-xs btn-outline" onclick="window.app.deleteBillRecord('${b.id}')" style="color: var(--danger); border-color: #fca5a5; padding: 2px 6px;" title="Delete this billing statement">
+            <button class="btn btn-xs btn-outline" onclick="window.app.deleteBillRecord('${b.id}')" style="color: #F87171; border-color: rgba(239,68,68,0.4); padding: 2px 6px;" title="Delete this billing statement">
               Delete
             </button>
           </div>
@@ -3338,35 +4370,39 @@ class WaterBillingApp {
           <div class="b-readings-grid">
             <div class="r-cell">
               <span class="lbl">Previous</span>
-              <span class="val">${b.previousReading.toLocaleString()} m³</span>
+              <span class="val">${Number(b.previousReading || 0).toLocaleString()} m³</span>
             </div>
             <div class="r-cell">
               <span class="lbl">Current</span>
-              <span class="val">${b.currentReading.toLocaleString()} m³</span>
+              <span class="val">${Number(b.currentReading || 0).toLocaleString()} m³</span>
             </div>
             <div class="r-cell highlight">
               <span class="lbl">Consumption</span>
-              <span class="val">${b.consumption.toLocaleString()} m³</span>
+              <span class="val">${Number(b.consumption || 0).toLocaleString()} m³</span>
             </div>
           </div>
           <div class="b-summary-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-            <span style="font-size: 11px; color: #64748B;">Due: <strong>${b.dueDate}</strong></span>
-            <span style="font-size: 13px; color: var(--primary);">Total Due: <strong>PHP ${b.totalAmountDue.toFixed(2)}</strong></span>
+            <span style="font-size: 11px; color: var(--text-muted);">Due: <strong style="color: var(--text-secondary);">${b.dueDate}</strong></span>
+            <span style="font-size: 13px; color: #38BDF8;">Total Due: <strong>PHP ${Number(b.totalAmountDue || 0).toFixed(2)}</strong></span>
           </div>
         </div>
         <div class="b-actions">
+          <button class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${b.consumerId}')" style="border-color:var(--primary); color:#38BDF8; font-weight:700;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Folder
+          </button>
           <button class="btn btn-sm btn-outline" onclick="window.app.openThermalReceiptModal('${b.id}')">
-            ${window.AppIcons.printer('', 13)} Thermal Receipt
+            ${window.AppIcons.printer('', 13)} Thermal Bill
           </button>
           <button class="btn btn-sm btn-outline" onclick="window.app.openA4StatementModal('${b.id}')">
-            ${window.AppIcons.fileText('', 13)} A4 Statement
+            ${window.AppIcons.fileText('', 13)} A4 Copy
           </button>
           ${!isPaid ? `
             <button class="btn btn-sm btn-success" onclick="window.app.openPaymentModal('${b.id}')">
-              ${window.AppIcons.creditCard('', 13)} Receive Payment
+              ${window.AppIcons.creditCard('', 13)} Pay
             </button>
           ` : `
-            <span style="font-size: 10.5px; color: #059669; font-weight: 600;">OR: ${b.orNumber || 'N/A'}</span>
+            <span style="font-size: 10.5px; color: #34D399; font-weight: 600;">OR: ${b.orNumber || b.officialReceiptNo || 'N/A'}</span>
           `}
         </div>
       `;
@@ -3461,6 +4497,9 @@ class WaterBillingApp {
 
     // Highlight / hover the pin on the map and open its bottom sheet
     setTimeout(() => {
+      if (pinType === 'cluster' && meterId) {
+        this._activeClusterMeterId = meterId;
+      }
       if (pinId && pinType) {
         this.mapEngine.selectPinById(pinId, pinType);
       } else if (consumerId) {
@@ -3497,8 +4536,9 @@ class WaterBillingApp {
             const hasMeterCoords = Boolean(meter && meter.meterLat && meter.meterLng);
             // Prefer household pin when searching by owner name unless only meter is pinned or query matched meterNo specifically
             const preferMeter = (!hasHouseCoords && hasMeterCoords) || (meterMatch && !nameMatch && hasMeterCoords);
-            const pinType = preferMeter ? 'meter' : 'household';
-            const pinId = preferMeter && meter ? meter.id : c.id;
+            const isClusteredMeter = Boolean(preferMeter && meter && meter.isClustered && meter.clusterId);
+            const pinType = isClusteredMeter ? 'cluster' : (preferMeter ? 'meter' : 'household');
+            const pinId = isClusteredMeter ? meter.clusterId : (preferMeter && meter ? meter.id : c.id);
             const lat = preferMeter ? Number(meter.meterLat) : Number(c.householdLat || (meter && meter.meterLat) || 0);
             const lng = preferMeter ? Number(meter.meterLng) : Number(c.householdLng || (meter && meter.meterLng) || 0);
 
@@ -3982,6 +5022,59 @@ class WaterBillingApp {
   }
 
   bindBillingEvents() {
+    // Consumer Folders vs All Thermal Bills Mode Toggle
+    const modeToggle = document.getElementById('billing-view-mode-toggle');
+    if (modeToggle) {
+      modeToggle.addEventListener('click', (e) => {
+        const btn = e.target.closest('.billing-mode-btn');
+        if (!btn) return;
+        const mode = btn.dataset.mode || 'folders';
+        this.billingViewMode = mode;
+        modeToggle.querySelectorAll('.billing-mode-btn').forEach(b => {
+          const isAct = b.dataset.mode === mode;
+          b.classList.toggle('active', isAct);
+          b.style.background = isAct ? 'var(--primary)' : 'transparent';
+          b.style.color = isAct ? '#FFF' : 'var(--text-secondary)';
+        });
+        this.renderBillingList();
+      });
+    }
+
+    // Consumer Folder Search Bar ("search: pedro")
+    const folderSearchInput = document.getElementById('billing-folder-search-input');
+    const btnClearSearch = document.getElementById('btn-clear-billing-search');
+    if (folderSearchInput) {
+      folderSearchInput.addEventListener('input', (e) => {
+        const val = e.target.value || '';
+        if (btnClearSearch) {
+          btnClearSearch.style.display = val.trim() ? 'inline-flex' : 'none';
+        }
+        this.renderBillingList(undefined, val);
+      });
+      folderSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const q = (folderSearchInput.value || '').toLowerCase().trim();
+          if (!q) return;
+          const match = this.cachedConsumers.find(c =>
+            (c.name || '').toLowerCase().includes(q) ||
+            (c.accountNo || '').toLowerCase().includes(q)
+          );
+          if (match) {
+            this.openConsumerHistoryModal(match.id);
+          }
+        }
+      });
+    }
+    if (btnClearSearch && folderSearchInput) {
+      btnClearSearch.addEventListener('click', () => {
+        folderSearchInput.value = '';
+        btnClearSearch.style.display = 'none';
+        this.renderBillingList(undefined, '');
+        folderSearchInput.focus();
+      });
+    }
+
     document.querySelectorAll('.billing-filter-chip').forEach(chip => {
       chip.addEventListener('click', (e) => {
         document.querySelectorAll('.billing-filter-chip').forEach(c => c.classList.remove('active'));
@@ -3997,6 +5090,16 @@ class WaterBillingApp {
     document.getElementById('btn-browser-thermal-print').addEventListener('click', () => {
       this.executeBrowserThermalPrint();
     });
+
+    const btnModalFeed = document.getElementById('btn-modal-feed-paper');
+    if (btnModalFeed) {
+      btnModalFeed.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.feedPaper(3);
+        if (!res.success && res.error) {
+          this.showToast(res.error, 2600);
+        }
+      });
+    }
 
     const btnDownloadA4 = document.getElementById('btn-download-a4-pdf');
     if (btnDownloadA4) {
@@ -4026,6 +5129,20 @@ class WaterBillingApp {
   }
 
   bindSettingsAndReportEvents() {
+    // Burger Menu Slide-Over Drawer in Records & Reports
+    const btnOpenSettingsBurger = document.getElementById('btn-open-settings-burger');
+    if (btnOpenSettingsBurger) {
+      btnOpenSettingsBurger.addEventListener('click', async () => {
+        const drawerModal = document.getElementById('modal-settings-burger');
+        if (drawerModal) {
+          drawerModal.classList.add('active');
+          try {
+            await this.renderSettingsZonesAndClusters();
+          } catch (_) {}
+        }
+      });
+    }
+
     // Tariff Configuration Save (Phase 5, Section 13)
     document.getElementById('btn-save-tariff').addEventListener('click', async () => {
       const minCharge = Number(document.getElementById('tariff-min-charge').value) || 100.00;
@@ -4080,21 +5197,121 @@ class WaterBillingApp {
       });
     }
 
-    // Bluetooth Printer
-    document.getElementById('btn-connect-bluetooth').addEventListener('click', async () => {
-      const res = await window.thermalPrinter.connect();
-      if (!res.success) {
-        alert(res.error || 'Could not connect to Bluetooth printer. Operating in direct browser print mode.');
-      }
+    // Xprinter XP-P300 Bluetooth & USB Printer Controls + Configurable Paper Width & Formatting
+    const tp = window.thermalPrinter;
+    const selWidth = document.getElementById('select-paper-width');
+    const inpPrintableMm = document.getElementById('input-printable-width-mm');
+    const inpHeader = document.getElementById('input-printer-custom-header');
+    const inpFooter = document.getElementById('input-printer-custom-footer');
+    const chkQr = document.getElementById('chk-printer-qr');
+    const chkBarcode = document.getElementById('chk-printer-barcode');
+    const chkLogo = document.getElementById('chk-printer-logo');
+    const chkCutter = document.getElementById('chk-printer-cutter');
+
+    if (tp) {
+      if (selWidth) selWidth.value = tp.paperWidth || '58mm';
+      if (inpPrintableMm) inpPrintableMm.value = tp.printableWidthMm || 48;
+      if (inpHeader) inpHeader.value = tp.customHeader || 'OFFICIAL WATER BILL NOTICE';
+      if (inpFooter) inpFooter.value = tp.customFooter || 'Conserve water for the community.';
+      if (chkQr) chkQr.checked = Boolean(tp.printQrCode);
+      if (chkBarcode) chkBarcode.checked = Boolean(tp.printBarcode);
+      if (chkLogo) chkLogo.checked = Boolean(tp.printLogo);
+      if (chkCutter) chkCutter.checked = Boolean(tp.hasAutoCutter);
+    }
+
+    const syncPrinterSettingsFromUI = () => {
+      if (!tp) return;
+      tp.saveConfig({
+        paperWidth: selWidth ? selWidth.value : '58mm',
+        printableWidthMm: inpPrintableMm ? Number(inpPrintableMm.value) : 48,
+        customHeader: inpHeader ? inpHeader.value : 'OFFICIAL WATER BILL NOTICE',
+        customFooter: inpFooter ? inpFooter.value : 'Conserve water for the community.',
+        printQrCode: chkQr ? chkQr.checked : true,
+        printBarcode: chkBarcode ? chkBarcode.checked : true,
+        printLogo: chkLogo ? chkLogo.checked : false,
+        hasAutoCutter: chkCutter ? chkCutter.checked : false
+      });
+    };
+
+    if (selWidth) {
+      selWidth.addEventListener('change', (e) => {
+        const mode = e.target.value;
+        if (mode === '80mm') {
+          if (inpPrintableMm) inpPrintableMm.value = 72;
+          this.showToast('80mm selected (72mm printable). Verify physical XP-P300 roll width with Test Print first.', 3200);
+        } else if (mode === '58mm') {
+          if (inpPrintableMm) inpPrintableMm.value = 48;
+        }
+        syncPrinterSettingsFromUI();
+      });
+    }
+
+    [inpPrintableMm, inpHeader, inpFooter, chkQr, chkBarcode, chkLogo, chkCutter].forEach(el => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        if (el === inpPrintableMm && selWidth) {
+          const mm = Number(inpPrintableMm.value);
+          if (mm !== 48 && mm !== 72) selWidth.value = 'custom';
+        }
+        syncPrinterSettingsFromUI();
+      });
     });
 
-    document.getElementById('btn-test-ticket').addEventListener('click', async () => {
-      await window.thermalPrinter.printTestTicket();
-    });
+    const btnConnectBt = document.getElementById('btn-connect-bluetooth');
+    if (btnConnectBt) {
+      btnConnectBt.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.connectBluetooth();
+        if (!res.success && res.error) {
+          alert(res.error);
+        } else if (res.success) {
+          this.showToast(`Connected to ${res.deviceName} via Bluetooth`, 2500);
+        }
+      });
+    }
 
-    document.getElementById('select-paper-width').addEventListener('change', (e) => {
-      window.thermalPrinter.setPaperWidth(e.target.value);
-    });
+    const btnConnectUsb = document.getElementById('btn-connect-usb');
+    if (btnConnectUsb) {
+      btnConnectUsb.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.connectUsb();
+        if (!res.success && res.error) {
+          alert(res.error);
+        } else if (res.success) {
+          this.showToast(`Connected to ${res.deviceName} via USB`, 2500);
+        }
+      });
+    }
+
+    const btnReconnectPrinter = document.getElementById('btn-reconnect-printer');
+    if (btnReconnectPrinter) {
+      btnReconnectPrinter.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.reconnect();
+        if (!res.success && res.error) {
+          alert(res.error);
+        } else if (res.success) {
+          this.showToast(`Reconnected to ${res.deviceName}`, 2400);
+        }
+      });
+    }
+
+    const btnFeedPaper = document.getElementById('btn-feed-paper');
+    if (btnFeedPaper) {
+      btnFeedPaper.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.feedPaper(3);
+        if (!res.success && res.error) {
+          alert(res.error);
+        }
+      });
+    }
+
+    const btnTestTicket = document.getElementById('btn-test-ticket');
+    if (btnTestTicket) {
+      btnTestTicket.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.printTestTicket();
+        if (!res.success && res.error) {
+          alert(res.error);
+        }
+      });
+    }
 
     // Backup Export & Restore (Phase 8, Section 21)
     document.getElementById('btn-export-backup').addEventListener('click', async () => {
@@ -4117,28 +5334,35 @@ class WaterBillingApp {
         reader.onload = async (evt) => {
           try {
             const parsed = JSON.parse(evt.target.result);
-            if (!parsed.appName || !parsed.data) {
+            const innerData = parsed.data || ((Array.isArray(parsed.consumers) || Array.isArray(parsed.meters)) ? parsed : null);
+            if (!innerData) {
               alert('Invalid backup file. Missing Dicklum Water Association data signature.');
               return;
             }
 
-            const cCount = (parsed.data.consumers || []).length;
-            const mCount = (parsed.data.meters || []).length;
-            const rCount = (parsed.data.readings || []).length;
-            const bCount = (parsed.data.bills || []).length;
-            const rtCount = (parsed.data.routes || []).length;
+            const cCount = (innerData.consumers || []).length;
+            const mCount = (innerData.meters || []).length;
+            const rCount = (innerData.readings || []).length;
+            const bCount = (innerData.bills || []).length;
+            const rtCount = (innerData.routes || []).length;
 
-            const confirmMsg = `Backup verification successful.\n\nFile contains:\n• ${cCount} Consumers\n• ${mCount} Water Meters\n• ${rCount} Readings\n• ${bCount} Bills\n• ${rtCount} Walking Routes\n\nAre you sure you want to restore? Current records will be replaced.`;
+            const confirmMsg = `Backup verification successful.\n\nFile contains:\n• ${cCount} Consumers (Folders & House Pins)\n• ${mCount} Water Meters\n• ${rCount} Meter Readings\n• ${bCount} Water Bills\n• ${rtCount} Walking Routes\n\nClick OK to restore all pinned locations and consumer folders.`;
             
             if (!confirm(confirmMsg)) return;
 
             await window.backupEngine.restoreBackup(file);
             await this.refreshDataCache();
+            await this.populateZoneDropdowns();
             this.syncPinsToMap();
             this.syncRoutesToMap();
             this.renderConsumerList();
             this.renderBillingList();
-            alert('Database restored successfully from backup.');
+            this.populateQuickConsumerSelect();
+            this.renderStats();
+            try { await this.renderZoneExportCenter(); } catch (_) {}
+            this.autoSyncToOfficePcSilent();
+            fileInput.value = '';
+            alert(`Database restored 100% intact (${cCount} Consumers, ${mCount} Water Meters, ${bCount} Bills). All pinned locations and consumer folders are ready!`);
           } catch (err) {
             alert(`Restore validation failed: ${err.message}`);
           }
@@ -4216,7 +5440,7 @@ class WaterBillingApp {
         const input = document.getElementById('settings-new-zone-input');
         const name = input ? input.value.trim() : '';
         if (!name) {
-          alert('Please enter a zone name (e.g. Zone 5).');
+          alert('Please enter a zone name.');
           return;
         }
         await window.db.addZone(name);
@@ -4245,7 +5469,7 @@ class WaterBillingApp {
     const btnNewClusterPrompt = document.getElementById('btn-settings-new-cluster-prompt');
     if (btnNewClusterPrompt) {
       btnNewClusterPrompt.addEventListener('click', async () => {
-        const clusterName = prompt('Enter name for the new meter cluster manifold (e.g. Purok 2 Center Manifold):');
+        const clusterName = prompt('Enter a name for the new meter cluster:');
         if (!clusterName || !clusterName.trim()) return;
         const zones = await window.db.getZones();
         const zoneChoice = prompt(`Enter Zone / Purok for this cluster manifold:\nAvailable: ${zones.join(', ')}`, zones[0] || 'Zone 1 - Dicklum Central');
@@ -4329,7 +5553,7 @@ class WaterBillingApp {
         const sel = document.getElementById('export-consumer-select');
         const cId = sel ? sel.value : '';
         if (!cId) {
-          alert('Please select a Consumer / Water Meter Owner first (e.g., mario).');
+          alert('Please select a consumer first.');
           return;
         }
         this.exportZoneOrConsumerReport({ zone: 'ALL', consumerId: cId, format: 'pdf' });
@@ -4342,7 +5566,7 @@ class WaterBillingApp {
         const sel = document.getElementById('export-consumer-select');
         const cId = sel ? sel.value : '';
         if (!cId) {
-          alert('Please select a Consumer / Water Meter Owner first (e.g., mario).');
+          alert('Please select a consumer first.');
           return;
         }
         this.exportZoneOrConsumerReport({ zone: 'ALL', consumerId: cId, format: 'excel' });
@@ -4353,6 +5577,73 @@ class WaterBillingApp {
     const btnOpenPinSetup = document.getElementById('btn-open-pin-setup');
     if (btnOpenPinSetup) {
       btnOpenPinSetup.addEventListener('click', () => this.openPinGateModal('auto'));
+    }
+
+    // One-Time Device Install (PWA Standalone Install + Office LAN IP Detection)
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this._deferredInstallPrompt = e;
+      const badge = document.getElementById('pwa-install-status-badge');
+      if (badge) badge.textContent = 'READY TO INSTALL';
+    });
+
+    const btnInstallPwa = document.getElementById('btn-install-pwa-device');
+    if (btnInstallPwa) {
+      btnInstallPwa.addEventListener('click', async () => {
+        if (this._deferredInstallPrompt) {
+          this._deferredInstallPrompt.prompt();
+          const choice = await this._deferredInstallPrompt.userChoice;
+          if (choice && choice.outcome === 'accepted') {
+            this._deferredInstallPrompt = null;
+            this.showToast('App installed on device! Ready for 100% offline use.', 3500);
+          }
+          return;
+        }
+        alert(
+          `One-Time Offline Device Install Instructions:\n\n` +
+          `1. On Android Chrome (Office Reader Phone):\n` +
+          `   • Tap the 3-dots menu (⋮) at the top-right of Chrome\n` +
+          `   • Tap "Add to Home screen" or "Install app"\n\n` +
+          `2. On Office PC (Chrome / Edge):\n` +
+          `   • Click the Install icon in the right side of the address bar.\n\n` +
+          `Once added to the Home Screen, the app and Barangay Dicklum map are saved permanently on the device for 100% offline field operation!`
+        );
+      });
+    }
+
+    const pcUrlInput = document.getElementById('office-pc-target-url-input');
+    const btnSavePcUrl = document.getElementById('btn-save-office-pc-url');
+    const lanIpDisplay = document.getElementById('office-lan-ip-display');
+
+    const savedPcUrl = localStorage.getItem('dicklum_office_pc_url') || '';
+    if (pcUrlInput && savedPcUrl) {
+      pcUrlInput.value = savedPcUrl;
+    }
+
+    if (btnSavePcUrl && pcUrlInput) {
+      btnSavePcUrl.addEventListener('click', () => {
+        const val = pcUrlInput.value.trim().replace(/\/+$/, '');
+        localStorage.setItem('dicklum_office_pc_url', val);
+        this.showToast(val ? `Saved Office PC URL: ${val}` : 'Cleared custom Office PC URL', 2500);
+      });
+    }
+
+    if (this._isLocalOfficeServer()) {
+      fetch('/api/device-install-info')
+        .then(r => r.ok ? r.json() : null)
+        .then(info => {
+          if (!info) return;
+          if (lanIpDisplay) {
+            const ips = (info.lanIps || []).map(i => i.url).join('  |  ');
+            lanIpDisplay.textContent = ips || info.localhostUrl || 'http://localhost:3000';
+          }
+          if (pcUrlInput && !pcUrlInput.value && info.primaryLanUrl) {
+            pcUrlInput.value = info.primaryLanUrl;
+          }
+        })
+        .catch(() => {});
+    } else if (lanIpDisplay) {
+      lanIpDisplay.textContent = savedPcUrl || 'Offline Field Mode (Enter Office PC Wi-Fi IP below to sync over Wi-Fi)';
     }
 
     const btnLockAppNow = document.getElementById('btn-lock-app-now');
@@ -4501,7 +5792,7 @@ class WaterBillingApp {
         if (!card) return;
 
         if (card.dataset.action === 'new-zone') {
-          const newZoneName = prompt('Enter new Zone / Purok name (e.g. Zone 5 - Upper Hillside):');
+          const newZoneName = prompt('Enter new zone or purok name:');
           if (!newZoneName || !newZoneName.trim()) return;
           await window.db.addZone(newZoneName.trim());
           this._lastSelectedZone = newZoneName.trim();
@@ -4558,7 +5849,7 @@ class WaterBillingApp {
       btnSaveNewZone.addEventListener('click', async () => {
         const newZoneName = inputNewZone ? inputNewZone.value.trim() : '';
         if (!newZoneName) {
-          alert('Please enter a Purok or Zone district name (e.g. Zone 5, Purok 5 - Riverside).');
+          alert('Please enter a zone or purok name.');
           return;
         }
         await window.db.addZone(newZoneName);
@@ -4602,7 +5893,7 @@ class WaterBillingApp {
       btnSaveNewCluster.addEventListener('click', async () => {
         const clusterName = inputNewCluster ? inputNewCluster.value.trim() : '';
         if (!clusterName) {
-          alert('Please enter a cluster manifold name (e.g. Manifold B - Purok Curve).');
+          alert('Please enter a cluster name.');
           return;
         }
         const activeZone = (pinZoneSelect && pinZoneSelect.value) ? pinZoneSelect.value : 'Zone 1 - Dicklum Central';
@@ -4708,7 +5999,7 @@ class WaterBillingApp {
             alert(`GPS Signal Error: ${err.message}. Make sure device Location and "Precise Location" are turned ON.`);
             btnPinUseGps.innerHTML = `
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" x2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
+                <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
               </svg>
               Use My Current GPS (Where I Am Standing)
             `;
@@ -4728,6 +6019,113 @@ class WaterBillingApp {
       houseLinkMeter.addEventListener('change', (e) => {
         const fields = document.getElementById('pin-house-meter-fields');
         if (fields) fields.style.display = e.target.checked ? 'block' : 'none';
+      });
+    }
+
+    // Clustered / Multi-Circle Water Meter Builder Events (Frames 2, 3, 4, 5)
+    const btnCountMinus = document.getElementById('btn-meter-count-minus');
+    const btnCountPlus = document.getElementById('btn-meter-count-plus');
+    if (btnCountMinus) {
+      btnCountMinus.addEventListener('click', () => {
+        const curr = (this._meterSlots && this._meterSlots.length) || 1;
+        if (curr > 1) this.setPinMeterCount(curr - 1);
+      });
+    }
+    if (btnCountPlus) {
+      btnCountPlus.addEventListener('click', () => {
+        const curr = (this._meterSlots && this._meterSlots.length) || 1;
+        this.setPinMeterCount(curr + 1);
+      });
+    }
+
+    const circlesStage = document.getElementById('pin-meter-circles-stage');
+    if (circlesStage) {
+      circlesStage.addEventListener('click', (e) => {
+        const item = e.target.closest('.mgb-circle-item');
+        if (!item) return;
+        const idx = Number(item.dataset.slotIdx);
+        if (!isNaN(idx)) {
+          this.selectPinMeterSlot(idx);
+        }
+      });
+    }
+
+    const btnPrevSlot = document.getElementById('btn-mse-prev-slot');
+    const btnNextSlot = document.getElementById('btn-mse-save-next-slot');
+    if (btnPrevSlot) {
+      btnPrevSlot.addEventListener('click', () => {
+        const idx = this._activeMeterSlotIdx || 0;
+        if (idx > 0) this.selectPinMeterSlot(idx - 1);
+      });
+    }
+    if (btnNextSlot) {
+      btnNextSlot.addEventListener('click', () => {
+        this.saveCurrentMeterSlotAndAdvance();
+      });
+    }
+
+    // Live-sync typing in Frame 4 directly into the active circle water meter slot & update Frame 5 label
+    ['pin-meter-owner-name', 'pin-meter-no', 'pin-meter-initial-reading', 'pin-meter-address', 'pin-meter-notes'].forEach(inputId => {
+      const el = document.getElementById(inputId);
+      if (el) {
+        el.addEventListener('input', () => {
+          this.syncCurrentFormToActiveMeterSlot();
+          this.renderPinMeterCirclesStage();
+          const idx = this._activeMeterSlotIdx || 0;
+          const slot = this._meterSlots && this._meterSlots[idx];
+          const total = (this._meterSlots && this._meterSlots.length) || 1;
+          const hasOwner = Boolean(slot && ((slot.ownerName || '').trim() || slot.existingConsumerId));
+          const slotTitle = document.getElementById('active-meter-slot-title');
+          const slotStatus = document.getElementById('active-meter-slot-status');
+          if (slotTitle && slot) {
+            slotTitle.textContent = total > 1
+              ? `Water Meter #${idx + 1} of ${total}${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`
+              : `Water Meter #1${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`;
+          }
+          if (slotStatus) {
+            slotStatus.textContent = hasOwner ? `Ready (#${idx + 1})` : `Editing #${idx + 1}`;
+            slotStatus.className = `badge ${hasOwner ? 'badge-success' : 'badge-warning'}`;
+          }
+        });
+      }
+    });
+
+    const selectExistingConsumer = document.getElementById('pin-meter-consumer-select');
+    if (selectExistingConsumer) {
+      selectExistingConsumer.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (val) {
+          const c = this.cachedConsumers.find(con => con.id === val);
+          const ownerInput = document.getElementById('pin-meter-owner-name');
+          if (c && ownerInput) {
+            ownerInput.value = c.name;
+          }
+        }
+        this.syncCurrentFormToActiveMeterSlot();
+        this.renderPinMeterCirclesStage();
+      });
+    }
+
+    const linkHouseholdCheck = document.getElementById('pin-meter-link-household');
+    if (linkHouseholdCheck) {
+      linkHouseholdCheck.addEventListener('change', () => {
+        this.syncCurrentFormToActiveMeterSlot();
+      });
+    }
+
+    // "+ Add Meter" button inside the Clustered Water Meters Map Sheet Dashboard
+    const btnClusterAddMeter = document.getElementById('btn-cluster-add-meter');
+    if (btnClusterAddMeter) {
+      btnClusterAddMeter.addEventListener('click', () => {
+        if (!this.activeCluster) return;
+        const cl = this.activeCluster;
+        this.closeClusterSheet();
+        this.openDropPinModal(cl.lat || 8.3688, cl.lng || 124.8630, {
+          pinType: 'meter',
+          zone: cl.zone || 'Zone 1',
+          skipWizard: true,
+          targetClusterId: cl.id
+        });
       });
     }
 

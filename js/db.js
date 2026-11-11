@@ -353,18 +353,41 @@ class WaterDB {
   }
 
   async restoreAllData(backupData) {
-    if (!backupData || !backupData.data) {
+    const rawData = (backupData && backupData.data)
+      ? backupData.data
+      : (backupData && (Array.isArray(backupData.consumers) || Array.isArray(backupData.meters)) ? backupData : null);
+    if (!rawData) {
       throw new Error('Invalid backup file format. Expected a valid Dicklum Water Association backup.');
     }
     const stores = ['consumers', 'meters', 'clusters', 'readings', 'bills', 'routes', 'settings'];
     for (const store of stores) {
-      if (backupData.data[store]) {
+      if (Array.isArray(rawData[store])) {
         await this.clear(store);
-        for (const item of backupData.data[store]) {
+        for (const item of rawData[store]) {
           await this.put(store, item);
         }
       }
     }
+
+    // Automatically ensure all zone names from imported consumers and meters are registered in settings.zones
+    const currentZones = await this.getZones();
+    let zonesChanged = false;
+    const checkZone = (z) => {
+      if (z && typeof z === 'string' && z.trim() && !currentZones.includes(z.trim())) {
+        currentZones.push(z.trim());
+        zonesChanged = true;
+      }
+    };
+    if (Array.isArray(rawData.consumers)) {
+      rawData.consumers.forEach(c => checkZone(c && c.zone));
+    }
+    if (Array.isArray(rawData.meters)) {
+      rawData.meters.forEach(m => checkZone(m && m.zone));
+    }
+    if (zonesChanged) {
+      await this.setSetting('zones', currentZones);
+    }
+
     return true;
   }
 

@@ -1,9 +1,10 @@
-# Protect private office database, backups, and security PIN hashes from being pushed to GitHub
+# Protect private office database, backups, consumer folders, and .env secrets from GitHub
 data/
 *.db
 *.sqlite
 .env
 .env.*
+!.env.example
 node_modules/
 .DS_Store
 Thumbs.db

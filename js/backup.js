@@ -42,11 +42,12 @@ class BackupEngine {
       reader.onload = async (e) => {
         try {
           const content = JSON.parse(e.target.result);
-          if (!content.appName || !content.data) {
+          const innerData = content.data || ((Array.isArray(content.consumers) || Array.isArray(content.meters)) ? content : null);
+          if (!innerData) {
             throw new Error('Invalid backup file format. Please ensure this file was exported from Dicklum Water Billing System.');
           }
           await window.db.restoreAllData(content);
-          resolve({ success: true, recordCount: Object.keys(content.data).length });
+          resolve({ success: true, recordCount: Object.keys(innerData).length });
         } catch (err) {
           reject(err);
         }

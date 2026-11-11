@@ -123,7 +123,16 @@ class BillingEngine {
     const readingDate = new Date(reading.readingDate || Date.now());
     const dueDate = new Date(readingDate.getTime() + (activeTariff.dueDays || 15) * 86400000);
 
-    const billId = `BILL-${reading.billingPeriod.replace('-', '')}-${String(consumer.id).replace('c-', '')}`;
+    const baseBillId = `BILL-${reading.billingPeriod.replace('-', '')}-${String(consumer.id).replace('c-', '')}`;
+    const existingBill = await window.db.get('bills', baseBillId);
+    const uniqueSuffix = String(reading.id || Date.now()).slice(-4);
+    const billId = existingBill ? `${baseBillId}-${uniqueSuffix}` : baseBillId;
+
+    let meterNo = 'N/A';
+    if (reading.meterId) {
+      const m = await window.db.get('meters', reading.meterId);
+      if (m && m.meterNo) meterNo = m.meterNo;
+    }
 
     // Snapshot of tariff at the moment of billing to preserve historical integrity
     const tariffSnapshot = {
@@ -138,7 +147,12 @@ class BillingEngine {
       id: billId,
       readingId: reading.id,
       consumerId: consumer.id,
+      consumerName: consumer.name,
+      accountNo: consumer.accountNo,
+      zone: consumer.zone,
       meterId: reading.meterId,
+      meterNo: meterNo,
+      readerName: reading.readerName || 'R. Fernandez',
       billingPeriod: reading.billingPeriod,
       billDate: readingDate.toISOString().split('T')[0],
       dueDate: dueDate.toISOString().split('T')[0],
@@ -157,7 +171,9 @@ class BillingEngine {
       paymentStatus: 'UNPAID',        // Printing does NOT mark bill as paid!
       amountPaid: 0.00,
       paidDate: null,
+      paidAt: null,
       orNumber: null,
+      officialReceiptNo: null,
       collectorName: null,
       printCount: 0,
       lastPrintedDate: null,
@@ -187,7 +203,9 @@ class BillingEngine {
     bill.amountPaid = (bill.amountPaid || 0) + amountPaid;
     bill.paymentStatus = bill.amountPaid >= bill.totalAmountDue ? 'PAID' : 'PARTIAL';
     bill.paidDate = paymentDate;
+    bill.paidAt = paymentDate;
     bill.orNumber = orNumber;
+    bill.officialReceiptNo = orNumber;
     bill.collectorName = collectorName;
     bill.paymentHistory = bill.paymentHistory || [];
     bill.paymentHistory.push({

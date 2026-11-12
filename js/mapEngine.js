@@ -731,6 +731,11 @@ class FieldMapEngine {
     const safeLabel = shortLabel.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
     const mCount = Number(d.meterCount || (d.meters && d.meters.length) || 0);
+    const isCutOff = Boolean(d.isCutOff || d.status === 'Disconnected' || d.status === 'Cut-Off');
+    const cutOffBadge = isCutOff ? `<span class="pin-cutoff-badge">CUT-OFF</span>` : '';
+    const cutOffClass = isCutOff ? ' pin-cutoff' : '';
+    const effectiveAccent = isCutOff ? '#DC2626' : accent;
+
     const wmSuffix = type === 'meter'
       ? `<span class="pin-wm-tag">WM</span>`
       : (type === 'cluster'
@@ -744,16 +749,17 @@ class FieldMapEngine {
     const iconClass = type === 'cluster' ? 'pin-icon pin-icon-cluster' : 'pin-icon';
 
     return `
-      <div class="map-pin map-pin-${type}" data-pin-id="${pin.id || ''}" data-pin-type="${type}">
+      <div class="map-pin map-pin-${type}${cutOffClass}" data-pin-id="${pin.id || ''}" data-pin-type="${type}">
         <div class="pin-popup-label">
           <span class="pin-label">${safeLabel || 'Pin'}</span>
           ${wmSuffix}
+          ${cutOffBadge}
         </div>
-        <div class="pin-body" style="background:${accent};">
+        <div class="pin-body" style="background:${effectiveAccent};">
           <span class="${iconClass}">${svgIcon}</span>
           ${clusterDotBadge}
         </div>
-        <div class="pin-tail" style="border-top-color:${accent};"></div>
+        <div class="pin-tail" style="border-top-color:${effectiveAccent};"></div>
       </div>
     `;
   }

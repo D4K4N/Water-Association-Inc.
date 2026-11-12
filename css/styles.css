@@ -2762,3 +2762,42 @@ html, body {
     flex: 1 1 auto;
   }
 }
+
+/* ─── Map Safety Delete Guard & Cut-Off Pin Indicators ──────────────────── */
+.btn-disabled-safety,
+button[disabled].btn-disabled-safety {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  border-color: #94A3B8 !important;
+  color: #94A3B8 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.map-pin.pin-cutoff .pin-body {
+  background: #DC2626 !important;
+  border-color: #FCA5A5 !important;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.45), 0 2px 5px rgba(0, 0, 0, 0.5) !important;
+}
+
+.map-pin.pin-cutoff .pin-tail {
+  border-top-color: #DC2626 !important;
+}
+
+.map-pin.pin-cutoff .pin-popup-label {
+  border-color: #EF4444 !important;
+}
+
+.pin-cutoff-badge {
+  display: inline-block;
+  background: #DC2626;
+  color: #FFFFFF;
+  font-size: 8px;
+  font-weight: 800;
+  padding: 1.5px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
+  margin-left: 4px;
+  vertical-align: middle;
+  text-transform: uppercase;
+}

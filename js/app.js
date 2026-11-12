@@ -36,6 +36,8 @@ class WaterBillingApp {
     this.recordsPeriodMode = 'today';
     this.pinGateMode = 'unlock';
     this.hasPinConfigured = false;
+    this.pinDeleteEnabled = localStorage.getItem('dicklum_pin_delete_enabled') === 'true';
+    this._pendingAdminCallback = null;
   }
 
   async init() {
@@ -365,6 +367,14 @@ class WaterBillingApp {
   // --- View & Mode Switching ---
 
   switchView(viewId) {
+    // Records and Settings are restricted by Admin PIN to protect office data from field readers
+    if (viewId === 'view-settings' && !this.isAdminUnlocked()) {
+      this.openPinGateModal('admin-verify', () => {
+        this.switchView('view-settings');
+      });
+      return;
+    }
+
     // If leaving map screen, stop GPS tracking to conserve battery (Phase 2, Section 5)
     if (this.activeView === 'view-map' && viewId !== 'view-map' && !this.isRecordingRoute) {
       this.stopRealtimeGps();
@@ -454,6 +464,8 @@ class WaterBillingApp {
             accountNo: c.accountNo,
             zone: c.zone,
             address: c.address,
+            status: c.status || 'Active',
+            isCutOff: c.status === 'Disconnected' || c.status === 'Cut-Off',
             isUnread: !readConsumerIds.has(c.id)
           }
         });
@@ -467,6 +479,7 @@ class WaterBillingApp {
       if (!belongsToValidCluster && m.meterLat && m.meterLng) {
         const consumer = this.cachedConsumers.find(c => c.id === m.consumerId);
         const ownerDisplay = (consumer && consumer.name) ? consumer.name : (m.ownerName || m.meterNo);
+        const isCutOff = (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) || m.status === 'Disconnected' || m.status === 'Cut-Off';
         pins.push({
           id: m.id,
           type: 'meter',
@@ -481,6 +494,8 @@ class WaterBillingApp {
             ownerName: (consumer && consumer.name) ? consumer.name : (m.ownerName || ''),
             accountNo: consumer ? consumer.accountNo : '',
             zone: m.zone || (consumer ? consumer.zone : ''),
+            status: (consumer && consumer.status) || m.status || 'Active',
+            isCutOff,
             householdLat: consumer ? consumer.householdLat : null,
             householdLng: consumer ? consumer.householdLng : null,
             isUnread: consumer ? !readConsumerIds.has(consumer.id) : false
@@ -619,6 +634,31 @@ class WaterBillingApp {
     document.getElementById('sheet-prev-reading').textContent = latestBill
       ? `${latestBill.currentReading} m³`
       : (meter && meter.initialReading !== undefined ? `${meter.initialReading} m³` : 'N/A');
+
+    // Update Cut-Off Status Pill and Cut-Off / Reconnect Action Button
+    const isCutOff = Boolean(
+      (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) ||
+      (meter && (meter.status === 'Disconnected' || meter.status === 'Cut-Off'))
+    );
+    const statusPill = document.getElementById('sheet-status-pill');
+    if (statusPill) {
+      statusPill.textContent = isCutOff ? 'CUT-OFF / DISCONNECTED' : 'ACTIVE';
+      statusPill.className = isCutOff ? 'badge badge-danger' : 'badge badge-success';
+      statusPill.style.background = isCutOff ? '#DC2626' : '';
+      statusPill.style.color = '#FFFFFF';
+    }
+
+    const cutoffBtn = document.getElementById('sheet-btn-toggle-cutoff');
+    const cutoffLabel = document.getElementById('sheet-cutoff-btn-label');
+    if (cutoffBtn && cutoffLabel) {
+      cutoffLabel.textContent = isCutOff ? 'Reconnect' : 'Cut-off';
+      cutoffBtn.style.color = isCutOff ? '#16A34A' : '#EA580C';
+      cutoffBtn.style.borderColor = isCutOff ? 'rgba(22, 163, 74, 0.4)' : 'rgba(234, 88, 12, 0.4)';
+      cutoffBtn.title = isCutOff ? 'Restore / Reconnect water service' : 'Mark water service as Cut-Off (Disconnected)';
+    }
+
+    // Refresh Delete Pin button enabled/disabled state based on Settings
+    this.updatePinDeleteButtonsState();
 
     sheet.classList.add('visible');
   }
@@ -810,6 +850,10 @@ class WaterBillingApp {
             Folder (${consumerBills.length})
           </button>
         ` : ''}
+        <button type="button" class="btn btn-sm btn-outline" style="color: var(--primary-light); border-color: rgba(56, 189, 248, 0.4);" onclick="window.app.openEditConsumerModal('${consumer ? consumer.id : ''}', '${selectedMeter.id}')" title="Edit Owner Name or Meter Number">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Edit
+        </button>
         <button type="button" class="btn btn-sm btn-outline" style="color: var(--danger-text); border-color: rgba(239,68,68,0.35);" onclick="window.app.removeSingleMeterFromCluster('${selectedMeter.id}')" title="Remove this water meter from the cluster">
           Remove
         </button>
@@ -1787,6 +1831,11 @@ class WaterBillingApp {
   }
 
   async unpinActiveConsumerOrMeter() {
+    if (!this.pinDeleteEnabled) {
+      alert('Map Pin Deletion is LOCKED for safety.\n\nTo prevent accidental pin deletion during field operations, delete buttons are disabled.\n\nTo enable pin deletion, go to Settings (requires Admin PIN) and switch ON "Enable Map Pin Deletion".');
+      return;
+    }
+
     // 1. User tapped a WATER METER pin -> delete ONLY the Water Meter pin (keep the Household pin intact!)
     if (this.activePinType === 'meter' && this.activeMeter) {
       const meter = this.activeMeter;
@@ -1904,6 +1953,11 @@ class WaterBillingApp {
   }
 
   async unpinActiveCluster(clusterIdParam = null) {
+    if (!this.pinDeleteEnabled) {
+      alert('Map Pin Deletion is LOCKED for safety.\n\nTo prevent accidental cluster deletion during field operations, delete buttons are disabled.\n\nTo enable pin deletion, go to Settings (requires Admin PIN) and switch ON "Enable Map Pin Deletion".');
+      return;
+    }
+
     const targetClusterId = clusterIdParam || (this.activeCluster && this.activeCluster.id) || this.activeClusterId;
     const cluster = (targetClusterId && this.cachedClusters.find(c => c.id === targetClusterId)) || this.activeCluster;
     if (!cluster) return;
@@ -3476,16 +3530,222 @@ class WaterBillingApp {
     this.hasPinConfigured = serverHasPin || Boolean(localPinHash);
     this.pinHint = serverHint || localHint;
     this.refreshPinSecurityBadge();
+    this.updatePinDeleteButtonsState();
 
-    // If a PIN is configured and the user hasn't unlocked this session yet, show the Security PIN Gate!
-    if (this.hasPinConfigured && !serverAuthenticated && !localSessionUnlocked) {
-      this.openPinGateModal('unlock');
-    }
+    // Do NOT lock the entire app on startup!
+    // Meter Readers can freely use the Map and Readings tabs to do field work without entering a PIN.
+    // Secret Admin PIN is only challenged when entering the "Records" tab or "Settings" drawer.
 
     const savedSyncStamp = localStorage.getItem('dicklum_last_pc_sync');
     const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
     if (savedSyncStamp && lastSyncEl) {
       lastSyncEl.innerHTML = `Last synced to Office PC: <strong>${savedSyncStamp}</strong>`;
+    }
+  }
+
+  isAdminUnlocked() {
+    if (!this.hasPinConfigured) return true; // If no PIN configured yet, allow access to configure
+    return sessionStorage.getItem('dicklum_admin_unlocked') === 'true' || sessionStorage.getItem('dicklum_pin_unlocked_session') === 'true';
+  }
+
+  lockAdminSession() {
+    sessionStorage.removeItem('dicklum_admin_unlocked');
+    sessionStorage.removeItem('dicklum_pin_unlocked_session');
+    document.getElementById('modal-settings-burger')?.classList.remove('active');
+    if (this.activeView === 'view-settings') {
+      this.switchView('view-map');
+    }
+    this.showToast('Admin Locked. Meter Reader mode active.', 2200);
+  }
+
+  updatePinDeleteButtonsState() {
+    const pill = document.getElementById('pin-delete-status-pill');
+    if (pill) {
+      pill.textContent = this.pinDeleteEnabled ? 'ENABLED (ACTIVE)' : 'LOCKED (SAFE)';
+      pill.className = this.pinDeleteEnabled ? 'badge badge-success' : 'badge badge-warning';
+    }
+    const toggleEl = document.getElementById('toggle-pin-delete-allow');
+    if (toggleEl && toggleEl.checked !== this.pinDeleteEnabled) {
+      toggleEl.checked = this.pinDeleteEnabled;
+    }
+    const btns = [
+      document.getElementById('sheet-btn-unpin'),
+      document.getElementById('btn-unpin-cluster')
+    ].filter(Boolean);
+
+    btns.forEach(b => {
+      if (this.pinDeleteEnabled) {
+        b.classList.remove('btn-disabled-safety');
+        b.removeAttribute('disabled');
+        b.title = 'Remove this GPS pin from map';
+      } else {
+        b.classList.add('btn-disabled-safety');
+        b.title = 'Pin Deletion is Locked for safety. Turn ON in Settings to enable.';
+      }
+    });
+  }
+
+  async toggleConsumerCutoffStatus(consumerIdParam = null) {
+    const consumer = (consumerIdParam && this.cachedConsumers.find(c => c.id === consumerIdParam)) || this.activeConsumer;
+    const meter = this.activeMeter || (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : null);
+    if (!consumer && !meter) return;
+
+    const currentStatus = (consumer && consumer.status) || (meter && meter.status) || 'Active';
+    const isNowCutOff = currentStatus === 'Active';
+    const newStatus = isNowCutOff ? 'Disconnected' : 'Active';
+    const actionWord = isNowCutOff ? 'Cut-Off (Disconnect)' : 'Reconnect';
+    const name = consumer ? consumer.name : (meter.ownerName || meter.meterNo);
+
+    if (!confirm(`${actionWord} water connection for "${name}"?\n\n(GPS satellite pins will stay exactly where they are on the map)`)) {
+      return;
+    }
+
+    try {
+      if (consumer) {
+        consumer.status = newStatus;
+        await window.db.update('consumers', consumer);
+      }
+      if (meter) {
+        meter.status = newStatus;
+        await window.db.update('meters', meter);
+      }
+      if (consumer) {
+        const otherMeters = this.cachedMeters.filter(m => m.consumerId === consumer.id);
+        for (const om of otherMeters) {
+          om.status = newStatus;
+          await window.db.update('meters', om);
+        }
+      }
+
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+
+      if (this.activeConsumer && consumer && this.activeConsumer.id === consumer.id) {
+        this.openConsumerSheet(consumer.id, meter ? meter.id : null, this.activePinType);
+      } else if (this.activeMeter && meter && this.activeMeter.id === meter.id) {
+        this.openConsumerSheet(consumer ? consumer.id : null, meter.id, this.activePinType);
+      }
+
+      const msg = isNowCutOff
+        ? `"${name}" water connection marked as CUT-OFF / DISCONNECTED.`
+        : `"${name}" water connection restored to ACTIVE.`;
+      this.showToast(msg, 2600);
+      this.autoSyncToOfficePcSilent();
+    } catch (err) {
+      console.error('Error toggling cutoff status:', err);
+      alert(`Failed to update connection status: ${err.message}`);
+    }
+  }
+
+  openEditConsumerModal(consumerId = null, meterId = null) {
+    const cId = consumerId || (this.activeConsumer && this.activeConsumer.id);
+    const mId = meterId || (this.activeMeter && this.activeMeter.id);
+    const consumer = cId ? this.cachedConsumers.find(c => c.id === cId) : null;
+    const meter = mId ? this.cachedMeters.find(m => m.id === mId) : (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : null);
+
+    if (!consumer && !meter) {
+      alert('Please select a consumer or water meter first.');
+      return;
+    }
+
+    const modal = document.getElementById('modal-edit-consumer');
+    if (!modal) return;
+
+    document.getElementById('edit-consumer-id').value = consumer ? consumer.id : '';
+    document.getElementById('edit-meter-id').value = meter ? meter.id : '';
+    document.getElementById('edit-consumer-name').value = consumer ? consumer.name : (meter.ownerName || '');
+    document.getElementById('edit-consumer-account-no').value = consumer ? (consumer.accountNo || '') : '';
+    document.getElementById('edit-consumer-address').value = consumer ? (consumer.address || '') : '';
+    document.getElementById('edit-consumer-meter-no').value = meter ? (meter.meterNo || '') : '';
+
+    const statusVal = (consumer && consumer.status) || (meter && meter.status) || 'Active';
+    const statusSelect = document.getElementById('edit-consumer-status');
+    if (statusSelect) {
+      statusSelect.value = (statusVal === 'Disconnected' || statusVal === 'Cut-Off') ? 'Disconnected' : 'Active';
+    }
+
+    const zoneSelect = document.getElementById('edit-consumer-zone');
+    if (zoneSelect) {
+      const activeZone = this.cleanZoneString((consumer && consumer.zone) || (meter && meter.zone) || 'Zone 1');
+      const zones = (this.cachedZones && this.cachedZones.length > 0)
+        ? this.cachedZones.map(z => z.name || z)
+        : ['Zone 1', 'Zone 2', 'Zone 3', 'Zone 4'];
+      zoneSelect.innerHTML = zones.map(z => `<option value="${z}" ${z === activeZone ? 'selected' : ''}>${z}</option>`).join('');
+    }
+
+    modal.classList.add('active');
+    setTimeout(() => {
+      document.getElementById('edit-consumer-name')?.focus();
+    }, 80);
+  }
+
+  async saveConsumerEdits() {
+    const cId = document.getElementById('edit-consumer-id')?.value;
+    const mId = document.getElementById('edit-meter-id')?.value;
+    const newName = (document.getElementById('edit-consumer-name')?.value || '').trim();
+    const newAcct = (document.getElementById('edit-consumer-account-no')?.value || '').trim();
+    const newZone = (document.getElementById('edit-consumer-zone')?.value || 'Zone 1').trim();
+    const newAddr = (document.getElementById('edit-consumer-address')?.value || '').trim();
+    const newMeterNo = (document.getElementById('edit-consumer-meter-no')?.value || '').trim();
+    const newStatus = (document.getElementById('edit-consumer-status')?.value || 'Active').trim();
+
+    if (!newName) {
+      alert('Please enter a consumer / owner name.');
+      return;
+    }
+
+    try {
+      let consumer = cId ? this.cachedConsumers.find(c => c.id === cId) : null;
+      let meter = mId ? this.cachedMeters.find(m => m.id === mId) : null;
+
+      if (consumer) {
+        consumer.name = newName;
+        if (newAcct) consumer.accountNo = newAcct;
+        consumer.zone = newZone;
+        if (newAddr) consumer.address = newAddr;
+        consumer.status = newStatus;
+        await window.db.update('consumers', consumer);
+      }
+
+      if (meter) {
+        if (newMeterNo) meter.meterNo = newMeterNo;
+        meter.ownerName = newName;
+        meter.zone = newZone;
+        meter.status = newStatus;
+        await window.db.update('meters', meter);
+      }
+
+      if (consumer && !meter) {
+        const linkedMeters = this.cachedMeters.filter(m => m.consumerId === consumer.id);
+        for (const lm of linkedMeters) {
+          lm.ownerName = newName;
+          lm.zone = newZone;
+          lm.status = newStatus;
+          if (newMeterNo) lm.meterNo = newMeterNo;
+          await window.db.update('meters', lm);
+        }
+      }
+
+      document.getElementById('modal-edit-consumer')?.classList.remove('active');
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      this.populateQuickConsumerSelect();
+
+      if (this.activeConsumer && consumer && this.activeConsumer.id === consumer.id) {
+        this.openConsumerSheet(consumer.id, meter ? meter.id : null, this.activePinType);
+      } else if (this.activeMeter && meter && this.activeMeter.id === meter.id) {
+        this.openConsumerSheet(consumer ? consumer.id : null, meter.id, this.activePinType);
+      }
+
+      this.showToast(`Details updated for "${newName}". Pins preserved.`, 2500);
+      this.autoSyncToOfficePcSilent();
+    } catch (err) {
+      console.error('Error saving consumer edits:', err);
+      alert(`Failed to save edits: ${err.message}`);
     }
   }
 
@@ -3512,11 +3772,12 @@ class WaterBillingApp {
     }
   }
 
-  openPinGateModal(mode = 'unlock') {
+  openPinGateModal(mode = 'unlock', onVerifiedCallback = null) {
     if (mode === 'auto') {
       mode = this.hasPinConfigured ? 'change' : 'setup';
     }
     this.pinGateMode = mode;
+    this._pendingAdminCallback = onVerifiedCallback || null;
 
     const modal = document.getElementById('modal-security-pin-gate');
     const titleEl = document.getElementById('pin-gate-title');
@@ -3544,15 +3805,15 @@ class WaterBillingApp {
       errorEl.textContent = '';
     }
 
-    if (mode === 'unlock') {
-      if (titleEl) titleEl.textContent = 'Locked — Enter Secret Office PIN';
-      if (bannerEl) bannerEl.textContent = 'This Dicklum Water Association system is protected. Enter your 4–8 digit Secret PIN to unlock the map, consumers, and billing records.';
+    if (mode === 'unlock' || mode === 'admin-verify') {
+      if (titleEl) titleEl.textContent = 'Admin PIN Required';
+      if (bannerEl) bannerEl.textContent = 'Restricted to Office Admins & Developers. Enter your Secret PIN to access records, reports, and system settings.';
       if (currentGroup) currentGroup.style.display = 'none';
       if (mainLabel) mainLabel.textContent = 'Secret PIN *';
       if (confirmGroup) confirmGroup.style.display = 'none';
-      if (btnClose) btnClose.style.display = 'none';
-      if (btnCancel) btnCancel.style.display = 'none';
-      if (btnSubmit) btnSubmit.textContent = 'Unlock Application';
+      if (btnClose) btnClose.style.display = 'inline-flex';
+      if (btnCancel) btnCancel.style.display = 'inline-flex';
+      if (btnSubmit) btnSubmit.textContent = 'Unlock Admin Access';
       if (hintDisplay) {
         if (this.pinHint) {
           hintDisplay.style.display = 'block';
@@ -3562,8 +3823,8 @@ class WaterBillingApp {
         }
       }
     } else if (mode === 'setup') {
-      if (titleEl) titleEl.textContent = 'Create Secret Office & Reader PIN';
-      if (bannerEl) bannerEl.textContent = 'Set a 4 to 8 digit Secret PIN. Once created, anyone opening this app on the Office PC or Field Phone must enter this PIN first.';
+      if (titleEl) titleEl.textContent = 'Create Secret Admin PIN';
+      if (bannerEl) bannerEl.textContent = 'Set a 4 to 8 digit Secret PIN. Once created, anyone attempting to access Records or Settings must enter this PIN.';
       if (currentGroup) currentGroup.style.display = 'none';
       if (mainLabel) mainLabel.textContent = 'New Secret PIN (4–8 digits) *';
       if (confirmGroup) confirmGroup.style.display = 'block';
@@ -3572,7 +3833,7 @@ class WaterBillingApp {
       if (btnSubmit) btnSubmit.textContent = 'Save & Activate Secret PIN';
       if (hintDisplay) hintDisplay.style.display = 'none';
     } else if (mode === 'change') {
-      if (titleEl) titleEl.textContent = 'Change Secret Office & Reader PIN';
+      if (titleEl) titleEl.textContent = 'Change Secret Admin PIN';
       if (bannerEl) bannerEl.textContent = 'Enter your current PIN first, then enter your new 4 to 8 digit Secret PIN.';
       if (currentGroup) currentGroup.style.display = 'block';
       if (mainLabel) mainLabel.textContent = 'New Secret PIN (4–8 digits) *';
@@ -3609,7 +3870,7 @@ class WaterBillingApp {
       }
     };
 
-    if (mode === 'unlock') {
+    if (mode === 'unlock' || mode === 'admin-verify') {
       if (!mainPin) return showErr('Please enter your Secret PIN.');
 
       // 1. Try server-enforced login first
@@ -3622,9 +3883,15 @@ class WaterBillingApp {
         if (resp.ok) {
           const localHash = await this.hashPinLocal(mainPin);
           localStorage.setItem('dicklum_pin_hash_v1', localHash);
+          sessionStorage.setItem('dicklum_admin_unlocked', 'true');
           sessionStorage.setItem('dicklum_pin_unlocked_session', 'true');
           document.getElementById('modal-security-pin-gate')?.classList.remove('active');
-          this.showToast('Security Gate Unlocked — Welcome!', 2200);
+          this.showToast('Admin Access Granted — Welcome!', 2200);
+          if (typeof this._pendingAdminCallback === 'function') {
+            const cb = this._pendingAdminCallback;
+            this._pendingAdminCallback = null;
+            cb();
+          }
           return;
         } else if (resp.status === 401) {
           return showErr('Incorrect PIN. Access denied.');
@@ -3637,9 +3904,15 @@ class WaterBillingApp {
       const savedHash = localStorage.getItem('dicklum_pin_hash_v1');
       const enteredHash = await this.hashPinLocal(mainPin);
       if (savedHash && enteredHash === savedHash) {
+        sessionStorage.setItem('dicklum_admin_unlocked', 'true');
         sessionStorage.setItem('dicklum_pin_unlocked_session', 'true');
         document.getElementById('modal-security-pin-gate')?.classList.remove('active');
-        this.showToast('Security Gate Unlocked (Offline Mode)', 2200);
+        this.showToast('Admin Access Granted (Offline Mode)', 2200);
+        if (typeof this._pendingAdminCallback === 'function') {
+          const cb = this._pendingAdminCallback;
+          this._pendingAdminCallback = null;
+          cb();
+        }
       } else {
         showErr('Incorrect Secret PIN. Please try again.');
       }
@@ -3696,6 +3969,7 @@ class WaterBillingApp {
     localStorage.setItem('dicklum_pin_hash_v1', newHash);
     localStorage.setItem('dicklum_pin_hint_v1', hint);
     sessionStorage.setItem('dicklum_pin_unlocked_session', 'true');
+    sessionStorage.setItem('dicklum_admin_unlocked', 'true');
     this.hasPinConfigured = true;
     this.pinHint = hint;
     this.refreshPinSecurityBadge();
@@ -3711,10 +3985,13 @@ class WaterBillingApp {
       return;
     }
     sessionStorage.removeItem('dicklum_pin_unlocked_session');
+    sessionStorage.removeItem('dicklum_admin_unlocked');
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
     } catch (_) {}
-    this.openPinGateModal('unlock');
+    document.getElementById('modal-settings-burger')?.classList.remove('active');
+    this.switchView('view-map');
+    this.showToast('Application & Admin locked. Returning to Map.', 2200);
   }
 
   // --- Individual Consumer Folder: Saved Thermal Paper Bills & Monthly Payment Ledger ---
@@ -4134,8 +4411,14 @@ class WaterBillingApp {
             <strong>${c.name}</strong>
             <span class="acct-pill">${c.accountNo}</span>
           </div>
-          <div style="display: flex; gap: 4px; align-items: center;">
-            <span class="badge ${c.status === 'Active' ? 'badge-success' : 'badge-danger'}">${c.status}</span>
+          <div style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
+            <span class="badge ${c.status === 'Active' ? 'badge-success' : 'badge-danger'}">${c.status || 'Active'}</span>
+            <button class="btn btn-xs btn-outline" onclick="window.app.openEditConsumerModal('${c.id}')" style="color: var(--primary-light); border-color: rgba(56,189,248,0.4); padding: 2px 6px;" title="Edit consumer name, meter, or zone">
+              Edit
+            </button>
+            <button class="btn btn-xs btn-outline" onclick="window.app.toggleConsumerCutoffStatus('${c.id}')" style="color: ${c.status === 'Disconnected' ? '#16A34A' : '#EA580C'}; border-color: ${c.status === 'Disconnected' ? 'rgba(22,163,74,0.4)' : 'rgba(234,88,12,0.4)'}; padding: 2px 6px;" title="Cut-off or Reconnect water service">
+              ${c.status === 'Disconnected' ? 'Reconnect' : 'Cut-off'}
+            </button>
             <button class="btn btn-xs btn-outline" onclick="window.app.deleteConsumerRecord('${c.id}')" style="color: #F87171; border-color: rgba(239,68,68,0.4); padding: 2px 6px;" title="Delete consumer record">
               Delete
             </button>
@@ -4849,6 +5132,21 @@ class WaterBillingApp {
     document.getElementById('btn-close-sheet').addEventListener('click', () => this.closeConsumerSheet());
     document.getElementById('btn-close-cluster-sheet').addEventListener('click', () => this.closeClusterSheet());
 
+    const btnSheetEdit = document.getElementById('sheet-btn-edit-consumer');
+    if (btnSheetEdit) {
+      btnSheetEdit.addEventListener('click', () => this.openEditConsumerModal());
+    }
+
+    const btnSheetCutoff = document.getElementById('sheet-btn-toggle-cutoff');
+    if (btnSheetCutoff) {
+      btnSheetCutoff.addEventListener('click', () => this.toggleConsumerCutoffStatus());
+    }
+
+    const btnSaveEditConsumer = document.getElementById('btn-save-edit-consumer');
+    if (btnSaveEditConsumer) {
+      btnSaveEditConsumer.addEventListener('click', () => this.saveConsumerEdits());
+    }
+
     const btnSheetUnpin = document.getElementById('sheet-btn-unpin');
     if (btnSheetUnpin) {
       btnSheetUnpin.addEventListener('click', () => this.unpinActiveConsumerOrMeter());
@@ -5210,17 +5508,57 @@ class WaterBillingApp {
   }
 
   bindSettingsAndReportEvents() {
-    // Burger Menu Slide-Over Drawer in Records & Reports
+    // Burger Menu Slide-Over Drawer in Records & Reports (Protected by Admin PIN)
     const btnOpenSettingsBurger = document.getElementById('btn-open-settings-burger');
     if (btnOpenSettingsBurger) {
       btnOpenSettingsBurger.addEventListener('click', async () => {
+        if (!this.isAdminUnlocked()) {
+          this.openPinGateModal('admin-verify', async () => {
+            const drawerModal = document.getElementById('modal-settings-burger');
+            if (drawerModal) {
+              drawerModal.classList.add('active');
+              try {
+                await this.renderSettingsZonesAndClusters();
+              } catch (_) {}
+              this.updatePinDeleteButtonsState();
+            }
+          });
+          return;
+        }
+
         const drawerModal = document.getElementById('modal-settings-burger');
         if (drawerModal) {
           drawerModal.classList.add('active');
           try {
             await this.renderSettingsZonesAndClusters();
           } catch (_) {}
+          this.updatePinDeleteButtonsState();
         }
+      });
+    }
+
+    // Lock Admin session buttons (in Records header and Settings Drawer header)
+    const btnLockRecords = document.getElementById('btn-lock-admin-records');
+    if (btnLockRecords) {
+      btnLockRecords.addEventListener('click', () => this.lockAdminSession());
+    }
+    const btnLockDrawer = document.getElementById('btn-lock-admin-drawer');
+    if (btnLockDrawer) {
+      btnLockDrawer.addEventListener('click', () => this.lockAdminSession());
+    }
+
+    // Map Pin Deletion Switch Guard (Settings Drawer)
+    const togglePinDelete = document.getElementById('toggle-pin-delete-allow');
+    if (togglePinDelete) {
+      togglePinDelete.checked = this.pinDeleteEnabled;
+      togglePinDelete.addEventListener('change', () => {
+        this.pinDeleteEnabled = togglePinDelete.checked;
+        localStorage.setItem('dicklum_pin_delete_enabled', String(this.pinDeleteEnabled));
+        this.updatePinDeleteButtonsState();
+        const msg = this.pinDeleteEnabled
+          ? 'Map Pin Deletion is now ENABLED. You can delete pins on the map.'
+          : 'Map Pin Deletion is LOCKED (SAFE). Delete buttons are greyed out.';
+        this.showToast(msg, 3000);
       });
     }
 

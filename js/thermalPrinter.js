@@ -605,14 +605,14 @@ class ThermalPrinterDriver {
     const consRdg = Number(bill.consumption || 0);
 
     let currentBill = Number(bill.currentBill !== undefined ? bill.currentBill : (bill.totalAmountDue ?? 0));
-    if (consRdg <= 0 && (!bill.currentBill || bill.currentBill === 100)) {
-      currentBill = 0;
+    if (consRdg <= 0) {
+      currentBill = 0.00;
     }
-    const arrears = Number(bill.arrears || 0);
-    let totalDue = Number(bill.totalAmountDue !== undefined ? bill.totalAmountDue : (currentBill + arrears));
-    if (consRdg <= 0 && (!bill.arrears || bill.arrears === 0)) {
-      totalDue = 0;
+    let arrears = Number(bill.arrears || 0);
+    if (consRdg <= 0) {
+      arrears = 0.00;
     }
+    const totalDue = currentBill + arrears;
     const paidAmt = Number(bill.amountPaid || 0);
     const isPaid = bill.paymentStatus === 'PAID';
     const orNo = bill.orNumber || bill.officialReceiptNo || '';

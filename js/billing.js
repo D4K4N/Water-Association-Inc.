@@ -140,10 +140,7 @@ class BillingEngine {
     const readingDate = new Date(reading.readingDate || Date.now());
     const dueDate = new Date(readingDate.getTime() + (activeTariff.dueDays || 15) * 86400000);
 
-    const baseBillId = `BILL-${reading.billingPeriod.replace('-', '')}-${String(consumer.id).replace('c-', '')}`;
-    const existingBill = await window.db.get('bills', baseBillId);
-    const uniqueSuffix = String(reading.id || Date.now()).slice(-4);
-    const billId = existingBill ? `${baseBillId}-${uniqueSuffix}` : baseBillId;
+    const billId = `BILL-${reading.billingPeriod.replace('-', '')}-${String(consumer.id).replace('c-', '')}`;
 
     let meterNo = 'N/A';
     if (reading.meterId) {
@@ -151,16 +148,25 @@ class BillingEngine {
       if (m && m.meterNo) meterNo = m.meterNo;
     }
 
-    // Calculate arrears from prior unpaid bills for this consumer
-    let arrears = 0.00;
-    try {
-      const allBills = await window.db.getAll('bills');
-      const priorUnpaid = allBills.filter(b => b.consumerId === consumer.id && b.id !== billId && b.paymentStatus !== 'PAID');
-      arrears = priorUnpaid.reduce((sum, b) => sum + ((Number(b.totalAmountDue) || 0) - (Number(b.amountPaid) || 0)), 0);
-      arrears = Math.max(0, arrears);
-    } catch (e) {
-      arrears = 0.00;
+    // Clean up any stale duplicate bills for the same consumer in this same billing period
+    const allBills = (await window.db.getAll('bills')) || [];
+    const samePeriodDuplicates = allBills.filter(b => 
+      b.consumerId === consumer.id && 
+      b.billingPeriod === reading.billingPeriod && 
+      b.id !== billId
+    );
+    for (const dup of samePeriodDuplicates) {
+      await window.db.delete('bills', dup.id);
     }
+
+    // Calculate TRUE arrears strictly from PRIOR billing periods (< reading.billingPeriod)
+    const priorUnpaid = allBills.filter(b => 
+      b.consumerId === consumer.id && 
+      b.billingPeriod && 
+      b.billingPeriod < reading.billingPeriod && 
+      b.paymentStatus !== 'PAID'
+    );
+    const arrears = priorUnpaid.reduce((sum, b) => sum + Math.max(0, (Number(b.totalAmountDue) || 0) - (Number(b.amountPaid) || 0)), 0);
 
     const currentBill = Number(calculation.totalAmountDue) || 0.00;
     const grandTotalDue = currentBill + arrears;

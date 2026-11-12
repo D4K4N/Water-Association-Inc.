@@ -282,6 +282,66 @@ class WaterBillingApp {
       }
     }
 
+    // 3. Deduplicate multiple bills for the same consumer in the same billing period & heal arrears
+    const allBillsForAudit = await window.db.getAll('bills');
+    const billsByConsumerPeriod = new Map();
+    for (const b of allBillsForAudit) {
+      if (!b.consumerId || !b.billingPeriod) continue;
+      const key = `${b.consumerId}_${b.billingPeriod}`;
+      if (!billsByConsumerPeriod.has(key)) billsByConsumerPeriod.set(key, []);
+      billsByConsumerPeriod.get(key).push(b);
+    }
+
+    for (const [, periodGroup] of billsByConsumerPeriod.entries()) {
+      if (periodGroup.length > 1) {
+        periodGroup.sort((a, b) => new Date(b.createdAt || b.billDate || 0).getTime() - new Date(a.createdAt || a.billDate || 0).getTime());
+        for (let i = 1; i < periodGroup.length; i++) {
+          await window.db.delete('bills', periodGroup[i].id);
+          dbUpdated = true;
+        }
+      }
+    }
+
+    const cleanedBills = await window.db.getAll('bills');
+    for (const b of cleanedBills) {
+      const cons = Number(b.consumption || 0);
+      let needsFix = false;
+
+      // Arrears strictly from prior billing periods (< b.billingPeriod)
+      const truePrior = cleanedBills.filter(ob => 
+        ob.consumerId === b.consumerId && 
+        ob.id !== b.id && 
+        ob.billingPeriod && 
+        ob.billingPeriod < b.billingPeriod && 
+        ob.paymentStatus !== 'PAID'
+      );
+      const trueArrears = truePrior.reduce((sum, ob) => sum + Math.max(0, (Number(ob.totalAmountDue) || 0) - (Number(ob.amountPaid) || 0)), 0);
+
+      if (Number(b.arrears || 0) !== trueArrears) {
+        b.arrears = trueArrears;
+        needsFix = true;
+      }
+
+      if (cons <= 0) {
+        if (b.currentBill !== 0 || b.minimumCharge !== 0) {
+          b.currentBill = 0.00;
+          b.minimumCharge = 0.00;
+          needsFix = true;
+        }
+      }
+
+      const expectedTotal = Math.max(0, (Number(b.currentBill) || 0) + (Number(b.arrears) || 0));
+      if (Number(b.totalAmountDue) !== expectedTotal) {
+        b.totalAmountDue = expectedTotal;
+        needsFix = true;
+      }
+
+      if (needsFix) {
+        await window.db.put('bills', b);
+        dbUpdated = true;
+      }
+    }
+
     if (dbUpdated) {
       this.cachedConsumers = await window.db.getAll('consumers');
       this.cachedMeters = await window.db.getAll('meters');
@@ -1730,14 +1790,14 @@ class WaterBillingApp {
     const consRdg = Number(bill.consumption || 0);
 
     let currentBill = Number(bill.currentBill !== undefined ? bill.currentBill : (bill.totalAmountDue ?? 0));
-    if (consRdg <= 0 && (!bill.currentBill || bill.currentBill === 100)) {
-      currentBill = 0;
+    if (consRdg <= 0) {
+      currentBill = 0.00;
     }
-    const arrears = Number(bill.arrears || 0);
-    let totalDue = Number(bill.totalAmountDue !== undefined ? bill.totalAmountDue : (currentBill + arrears));
-    if (consRdg <= 0 && (!bill.arrears || bill.arrears === 0)) {
-      totalDue = 0;
+    let arrears = Number(bill.arrears || 0);
+    if (consRdg <= 0) {
+      arrears = 0.00;
     }
+    const totalDue = currentBill + arrears;
 
     const isPaid = bill.paymentStatus === 'PAID';
     const orNo = bill.orNumber || bill.officialReceiptNo || '';

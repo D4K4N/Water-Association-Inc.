@@ -596,23 +596,53 @@ class ThermalPrinterDriver {
 
     const cName = (consumer && consumer.name) || bill.consumerName || 'Consumer';
     const cAcct = (consumer && consumer.accountNo) || bill.accountNo || 'N/A';
-    const cZone = (consumer && consumer.zone) || bill.zone || 'Dicklum';
+    const cAddress = (consumer && consumer.address) || bill.address || `${(consumer && consumer.zone) || bill.zone || 'Zone 1'}, Dicklum`;
+    const classification = (consumer && consumer.classification) || bill.classification || 'Residential';
     const mNo = (meter && meter.meterNo && meter.meterNo !== 'Unassigned') ? meter.meterNo : (bill.meterNo || 'N/A');
+
     const prevRdg = Number(bill.previousReading || 0);
     const currRdg = Number(bill.currentReading || 0);
     const consRdg = Number(bill.consumption || 0);
-    const minCharge = Number(bill.minimumCharge ?? 100);
-    const excessM3 = Number(bill.excessCubicMeters || 0);
-    const excessRate = Number(bill.excessRate || 15);
-    const excessAmt = Number(bill.excessAmount || 0);
-    const maintFee = Number(bill.maintenanceFee || 0);
-    const discountAmt = Number(bill.discount || 0);
-    const taxAmt = Number(bill.taxAmount || 0);
-    const subtotalAmt = minCharge + excessAmt + maintFee;
-    const totalDue = Number(bill.totalAmountDue ?? (subtotalAmt - discountAmt + taxAmt));
+
+    let currentBill = Number(bill.currentBill !== undefined ? bill.currentBill : (bill.totalAmountDue ?? 0));
+    if (consRdg <= 0 && (!bill.currentBill || bill.currentBill === 100)) {
+      currentBill = 0;
+    }
+    const arrears = Number(bill.arrears || 0);
+    let totalDue = Number(bill.totalAmountDue !== undefined ? bill.totalAmountDue : (currentBill + arrears));
+    if (consRdg <= 0 && (!bill.arrears || bill.arrears === 0)) {
+      totalDue = 0;
+    }
     const paidAmt = Number(bill.amountPaid || 0);
     const isPaid = bill.paymentStatus === 'PAID';
     const orNo = bill.orNumber || bill.officialReceiptNo || '';
+
+    // Date formatting helpers
+    const formatDateLong = (val) => {
+      if (!val) return '';
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return String(val);
+      return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    };
+
+    const formatPeriodLong = (val) => {
+      if (!val) return 'October 2026';
+      if (val.includes(' ')) return val;
+      const parts = String(val).split('-');
+      if (parts.length === 2) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = new Date(y, m, 1);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        }
+      }
+      return val;
+    };
+
+    const periodStr = formatPeriodLong(bill.billingPeriod);
+    const dueDateStr = formatDateLong(bill.dueDate || new Date(Date.now() + 15 * 86400000));
+    const discDateStr = formatDateLong(bill.disconnectionDate || (bill.dueDate ? new Date(new Date(bill.dueDate).getTime() + 2 * 86400000) : new Date(Date.now() + 17 * 86400000)));
 
     // 1. Initialize printer & set standard line spacing
     appendBytes([0x1B, 0x40]);       // ESC @: Initialize
@@ -626,70 +656,35 @@ class ThermalPrinterDriver {
       }
     }
 
-    // 3. Header (Center Aligned)
+    // 3. Header (Matching Original Paper Notice)
     appendBytes([0x1B, 0x61, 0x01]); // Center
     appendBytes([0x1B, 0x45, 0x01]); // Bold ON
-    appendBytes([0x1D, 0x21, 0x11]); // Double width & height
-    appendText('DICKLUM WATER');
-    appendBytes([0x1D, 0x21, 0x00]); // Normal size
-    appendText('ASSOCIATION, INC.');
+    appendText('Dicklum Water Association, Inc.');
     appendBytes([0x1B, 0x45, 0x00]); // Bold OFF
     appendText('Dicklum, Manolo Fortich, Bukidnon');
-    appendText('SEC Reg. CN2014-99120 | TIN: 008-721-432');
-    appendBytes([0x1B, 0x45, 0x01]); // Bold ON
-    appendText(this.customHeader || 'OFFICIAL WATER BILL NOTICE');
-    appendBytes([0x1B, 0x45, 0x00]); // Bold OFF
-    appendText(doubleDivider);
+    appendText(`Statement of Account for the month of ${periodStr}`);
+    appendText(divider);
 
-    // 4. Transaction Reference & Dates (Left Aligned)
+    // 4. Account Details (Matching Original Paper)
     appendBytes([0x1B, 0x61, 0x00]); // Left
-    appendText(formatRow('Bill Ref :', bill.id));
-    appendText(formatRow('Date/Time:', bill.billDate || new Date().toISOString().split('T')[0]));
-    appendText(formatRow('Period   :', bill.billingPeriod || ''));
+    appendText(formatRow('Account Name:', cName));
+    appendText(formatRow('Account No.:', cAcct));
+    appendText(formatRow('Address:', cAddress));
+    appendText(formatRow('Classification:', classification));
+    appendText(formatRow('Meter No.:', mNo));
+    appendText(divider);
+
+    // 5. Meter Readings & Usage (Matching Original Paper)
+    appendText(formatRow('Previous Reading:', prevRdg.toLocaleString()));
+    appendText(formatRow('Current Reading:', currRdg.toLocaleString()));
     appendBytes([0x1B, 0x45, 0x01]);
-    appendText(formatRow('Due Date :', bill.dueDate || ''));
+    appendText(formatRow('Usage:', `${consRdg.toLocaleString()} cubic meters`));
     appendBytes([0x1B, 0x45, 0x00]);
     appendText(divider);
 
-    // 5. Customer / Consumer Information
-    appendText(formatRow('Consumer :', cName));
-    appendText(formatRow('Acct No  :', cAcct));
-    appendText(formatRow('Zone     :', cZone));
-    appendText(formatRow('Meter No :', mNo));
-    appendText(divider);
-
-    // 6. Meter Reading Summary
-    appendBytes([0x1B, 0x45, 0x01]);
-    appendText(formatRow('METER READING', 'CUBIC METERS'));
-    appendBytes([0x1B, 0x45, 0x00]);
-    appendText(formatRow('Previous Reading', `${prevRdg.toLocaleString()} m3`));
-    appendText(formatRow('Current Reading', `${currRdg.toLocaleString()} m3`));
-    appendBytes([0x1B, 0x45, 0x01]);
-    appendText(formatRow('Consumption', `${consRdg.toLocaleString()} m3`));
-    appendBytes([0x1B, 0x45, 0x00]);
-    appendText(divider);
-
-    // 7. Itemized Charges Table (Description | Qty/Unit | Amount)
-    appendBytes([0x1B, 0x45, 0x01]);
-    appendText(formatTable3Col('DESCRIPTION', 'QTY', 'AMOUNT'));
-    appendBytes([0x1B, 0x45, 0x00]);
-    appendText(formatTable3Col('Min Charge (0-10m3)', '10m3', `PHP ${minCharge.toFixed(2)}`));
-    if (excessM3 > 0) {
-      appendText(formatTable3Col(`Excess @${excessRate.toFixed(0)}/m3`, `${excessM3}m3`, `PHP ${excessAmt.toFixed(2)}`));
-    }
-    if (maintFee > 0) {
-      appendText(formatTable3Col('Maintenance Fee', '1', `PHP ${maintFee.toFixed(2)}`));
-    }
-    appendText(divider);
-
-    // 8. Subtotals, Discounts, Taxes & Grand Total (Right / Two-Column Aligned)
-    appendText(formatRow('Subtotal :', `PHP ${subtotalAmt.toFixed(2)}`));
-    if (discountAmt > 0) {
-      appendText(formatRow('Discount :', `-PHP ${discountAmt.toFixed(2)}`));
-    }
-    if (taxAmt > 0) {
-      appendText(formatRow('Tax / VAT:', `PHP ${taxAmt.toFixed(2)}`));
-    }
+    // 6. Charges & Totals (Matching Original Paper)
+    appendText(formatRow('Current Bill:', `PHP ${currentBill.toFixed(2)}`));
+    appendText(formatRow('Arrears:', `PHP ${arrears.toFixed(2)}`));
     appendText(doubleDivider);
 
     // Grand Total (Centered Bold Double-Height)
@@ -701,36 +696,50 @@ class ThermalPrinterDriver {
     appendBytes([0x1B, 0x45, 0x00]); // Bold OFF
     appendText(doubleDivider);
 
-    // 9. Payment Status & Reader Info
-    appendBytes([0x1B, 0x61, 0x01]);
-    appendText(`Reader: ${bill.readerName || 'R. Fernandez'}`);
-    appendText(`Payment Status: ${bill.paymentStatus || 'UNPAID'}`);
+    // 7. Important Deadlines
+    appendBytes([0x1B, 0x61, 0x00]); // Left
+    appendText(formatRow('Due Date:', dueDateStr));
+    appendText(formatRow('Disconnection Date:', discDateStr));
+    appendText(divider);
+
+    // Payment Status if settled
     if (isPaid || paidAmt > 0) {
-      appendText(`Paid: PHP ${paidAmt.toFixed(2)} ${orNo ? `| OR#: ${orNo}` : ''}`);
+      appendBytes([0x1B, 0x61, 0x01]);
+      appendText(`PAID: PHP ${paidAmt.toFixed(2)} ${orNo ? `| OR#: ${orNo}` : ''}`);
+      appendText(divider);
+      appendBytes([0x1B, 0x61, 0x00]);
     }
 
-    // 10. Optional 1D Barcode (Transaction Reference)
+    // 8. Official Reminders from Dicklum Paper Notice
+    appendBytes([0x1B, 0x45, 0x01]);
+    appendText('Reminders:');
+    appendBytes([0x1B, 0x45, 0x00]);
+    appendText('1. Disregard this notice if payment has been made.');
+    appendText('2. This serves as Notice of Disconnection.');
+    appendText('3. Please pay on time. Reconnection fee is Php 500.');
+    appendText('4. Pay bills directly to the cashier.');
+    appendText('5. Kindly report leaks or acts of vandalism on our pipeline.');
+
+    // 9. Optional 1D Barcode (Transaction Reference for Cashier Scan)
     if (this.printBarcode && bill.id) {
+      appendBytes([0x1B, 0x61, 0x01]); // Center
       appendBytes(this._buildEscPosBarcodeBytes(bill.id));
+      appendText(bill.id);
     }
 
-    // 11. Optional QR Code (Verification Payload)
+    // 10. Optional QR Code (Verification Payload)
     if (this.printQrCode) {
+      appendBytes([0x1B, 0x61, 0x01]); // Center
       const qrPayload = `DWA|${bill.id}|${cAcct}|${cName}|${consRdg}m3|PHP${totalDue.toFixed(2)}|${bill.dueDate || ''}`;
       appendBytes(this._buildEscPosQrCodeBytes(qrPayload, 4));
       appendText('');
     }
 
-    // 12. Footer & Phenol-Free Paper Compliance Tag
-    appendText('*** THIS BILL IS NOT A PAYMENT RECEIPT ***');
-    appendText('Please settle on or before due date to');
-    appendText('avoid service disconnection.');
-    if (this.customFooter) {
-      appendText(this.customFooter);
-    }
+    // 11. Footer
+    appendBytes([0x1B, 0x61, 0x01]); // Center
     appendText('[Printed on 100% Phenol-Free Thermal Paper]');
 
-    // 13. Paper Feed (ESC d 4 — feeds 4 lines past the manual tear bar)
+    // 12. Paper Feed (ESC d 4 — feeds 4 lines past the manual tear bar)
     appendBytes([0x1B, 0x64, 0x04]);
 
     // 14. Receipt Cut ONLY if user explicitly enabled automatic cutter

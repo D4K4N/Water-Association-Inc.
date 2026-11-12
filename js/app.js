@@ -1721,97 +1721,134 @@ class WaterBillingApp {
 
     const cName = (consumer && consumer.name) || bill.consumerName || 'Consumer';
     const cAcct = (consumer && consumer.accountNo) || bill.accountNo || 'N/A';
-    const cZone = (consumer && consumer.zone) || bill.zone || 'Dicklum';
+    const cAddress = (consumer && consumer.address) || bill.address || `${(consumer && consumer.zone) || bill.zone || 'Zone 1'}, Dicklum`;
+    const classification = (consumer && consumer.classification) || bill.classification || 'Residential';
     const mNo = (meter && meter.meterNo && meter.meterNo !== 'Unassigned') ? meter.meterNo : (bill.meterNo || 'N/A');
+
     const prevRdg = Number(bill.previousReading || 0);
     const currRdg = Number(bill.currentReading || 0);
     const consRdg = Number(bill.consumption || 0);
-    const minCharge = Number(bill.minimumCharge ?? 100);
-    const excessM3 = Number(bill.excessCubicMeters || 0);
-    const excessRate = Number(bill.excessRate || 15);
-    const excessAmt = Number(bill.excessAmount || 0);
-    const maintFee = Number(bill.maintenanceFee || 0);
-    const discountAmt = Number(bill.discount || 0);
-    const taxAmt = Number(bill.taxAmount || 0);
-    const subtotalAmt = minCharge + excessAmt + maintFee;
-    const totalDue = Number(bill.totalAmountDue ?? (subtotalAmt - discountAmt + taxAmt));
-    const paidAmt = Number(bill.amountPaid || 0);
+
+    let currentBill = Number(bill.currentBill !== undefined ? bill.currentBill : (bill.totalAmountDue ?? 0));
+    if (consRdg <= 0 && (!bill.currentBill || bill.currentBill === 100)) {
+      currentBill = 0;
+    }
+    const arrears = Number(bill.arrears || 0);
+    let totalDue = Number(bill.totalAmountDue !== undefined ? bill.totalAmountDue : (currentBill + arrears));
+    if (consRdg <= 0 && (!bill.arrears || bill.arrears === 0)) {
+      totalDue = 0;
+    }
+
     const isPaid = bill.paymentStatus === 'PAID';
     const orNo = bill.orNumber || bill.officialReceiptNo || '';
+    const paidAmt = Number(bill.amountPaid || 0);
     const paidDate = bill.paidDate || bill.paidAt || '';
 
-    const customHeader = (tp && tp.customHeader) ? tp.customHeader : 'OFFICIAL WATER BILL NOTICE';
-    const customFooter = (tp && tp.customFooter) ? tp.customFooter : 'Conserve water for the community.';
+    // Date formatting helpers (e.g., "October 15, 2026")
+    const formatDateLong = (val) => {
+      if (!val) return '';
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return String(val);
+      return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    };
+
+    const formatPeriodLong = (val) => {
+      if (!val) return 'October 2026';
+      if (val.includes(' ')) return val;
+      const parts = String(val).split('-');
+      if (parts.length === 2) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = new Date(y, m, 1);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        }
+      }
+      return val;
+    };
+
+    const periodStr = formatPeriodLong(bill.billingPeriod);
+    const dueDateStr = formatDateLong(bill.dueDate || new Date(Date.now() + 15 * 86400000));
+    const discDateStr = formatDateLong(bill.disconnectionDate || (bill.dueDate ? new Date(new Date(bill.dueDate).getTime() + 2 * 86400000) : new Date(Date.now() + 17 * 86400000)));
+
     const showLogo = Boolean(tp && tp.printLogo);
     const showBarcode = tp ? Boolean(tp.printBarcode) : true;
     const showQr = tp ? Boolean(tp.printQrCode) : true;
 
     return `
-      <div class="thermal-receipt ${is80 ? 'w-80' : 'w-58'}" data-printable-mm="${printableMm}" style="margin: 0 auto;">
+      <div class="thermal-receipt ${is80 ? 'w-80' : 'w-58'}" data-printable-mm="${printableMm}" style="margin: 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.38;">
         ${showLogo ? `<div class="t-center" style="margin-bottom:4px;"><img src="assets/logo.png" alt="Logo" style="width:38px; height:38px; filter:grayscale(1) contrast(1.8);"></div>` : ''}
-        <div class="t-center t-bold t-large">DICKLUM WATER</div>
-        <div class="t-center t-bold">ASSOCIATION, INC.</div>
-        <div class="t-center t-small">Dicklum, Manolo Fortich, Bukidnon</div>
-        <div class="t-center t-small">SEC Reg. CN2014-99120 | TIN: 008-721-432</div>
-        <div class="t-center t-bold">${customHeader}</div>
+        
+        <!-- Header Matching Original Paper Notice -->
+        <div class="t-center t-bold" style="font-size: 14px; letter-spacing: -0.01em;">Dicklum Water Association, Inc.</div>
+        <div class="t-center t-small" style="color: #334155;">Dicklum, Manolo Fortich, Bukidnon</div>
+        <div class="t-center t-small" style="font-style: italic; margin-top: 2px;">Statement of Account for the month of ${periodStr}</div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Account Details Matching Original Paper -->
+        <div class="t-row"><span>Account Name:</span><span class="t-bold">${cName}</span></div>
+        <div class="t-row"><span>Account No.:</span><span>${cAcct}</span></div>
+        <div class="t-row"><span>Address:</span><span>${cAddress}</span></div>
+        <div class="t-row"><span>Classification:</span><span>${classification}</span></div>
+        <div class="t-row"><span>Meter No.:</span><span>${mNo}</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Meter Reading & Usage -->
+        <div class="t-row"><span>Previous Reading:</span><span>${prevRdg.toLocaleString()}</span></div>
+        <div class="t-row"><span>Current Reading:</span><span>${currRdg.toLocaleString()}</span></div>
+        <div class="t-row t-bold" style="color: #0284C7;"><span>Usage:</span><span>${consRdg.toLocaleString()} cubic meters</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Billing Amounts -->
+        <div class="t-row"><span>Current Bill:</span><span>₱ ${currentBill.toFixed(2)}</span></div>
+        <div class="t-row"><span>Arrears:</span><span>₱ ${arrears.toFixed(2)}</span></div>
         <div class="t-divider">${doubleDivider}</div>
 
-        <div class="t-row"><span>Bill Ref :</span><span>${bill.id}</span></div>
-        <div class="t-row"><span>Date     :</span><span>${bill.billDate || ''}</span></div>
-        <div class="t-row"><span>Period   :</span><span>${bill.billingPeriod || ''}</span></div>
-        <div class="t-row"><span>Due Date :</span><span class="t-bold text-danger">${bill.dueDate || ''}</span></div>
-        <div class="t-divider">${divider}</div>
-
-        <div class="t-row"><span>Consumer :</span><span class="t-bold">${cName}</span></div>
-        <div class="t-row"><span>Acct No  :</span><span>${cAcct}</span></div>
-        <div class="t-row"><span>Zone     :</span><span>${cZone}</span></div>
-        <div class="t-row"><span>Meter No :</span><span>${mNo}</span></div>
-        <div class="t-divider">${divider}</div>
-
-        <div class="t-row t-bold"><span>METER READING</span><span>CUBIC METERS</span></div>
-        <div class="t-row"><span>Previous Reading:</span><span>${prevRdg.toLocaleString()} m³</span></div>
-        <div class="t-row"><span>Current Reading:</span><span>${currRdg.toLocaleString()} m³</span></div>
-        <div class="t-row t-bold text-primary"><span>Consumption:</span><span>${consRdg.toLocaleString()} m³</span></div>
-        <div class="t-divider">${divider}</div>
-
-        <div class="t-row t-bold"><span>DESCRIPTION / QTY</span><span>AMOUNT</span></div>
-        <div class="t-row"><span>Min Charge (10 m³):</span><span>PHP ${minCharge.toFixed(2)}</span></div>
-        ${excessM3 > 0 ? `<div class="t-row"><span>Excess (${excessM3}m³ @ PHP ${excessRate}):</span><span>PHP ${excessAmt.toFixed(2)}</span></div>` : ''}
-        ${maintFee > 0 ? `<div class="t-row"><span>Maintenance Fee (1):</span><span>PHP ${maintFee.toFixed(2)}</span></div>` : ''}
-        <div class="t-divider">${divider}</div>
-        <div class="t-row"><span>Subtotal :</span><span>PHP ${subtotalAmt.toFixed(2)}</span></div>
-        ${discountAmt > 0 ? `<div class="t-row"><span>Discount :</span><span>-PHP ${discountAmt.toFixed(2)}</span></div>` : ''}
-        ${taxAmt > 0 ? `<div class="t-row"><span>Tax / VAT:</span><span>PHP ${taxAmt.toFixed(2)}</span></div>` : ''}
+        <!-- Prominent Total Due -->
+        <div class="t-center t-bold t-total" style="font-size: 16px; margin: 4px 0;">TOTAL DUE: ₱ ${totalDue.toFixed(2)}</div>
         <div class="t-divider">${doubleDivider}</div>
 
-        <div class="t-center t-bold t-total">TOTAL DUE: PHP ${totalDue.toFixed(2)}</div>
-        <div class="t-divider">${doubleDivider}</div>
+        <!-- Important Dates -->
+        <div class="t-row"><span>Due Date:</span><span class="t-bold text-danger">${dueDateStr}</span></div>
+        <div class="t-row"><span>Disconnection Date:</span><span class="t-bold text-danger">${discDateStr}</span></div>
+        <div class="t-divider">${divider}</div>
 
-        <div class="t-center t-small">Reader: ${bill.readerName || 'R. Fernandez'}</div>
-        <div class="t-center t-small">Payment Status: <strong style="color:${isPaid ? '#059669' : '#0F172A'};">${bill.paymentStatus || 'UNPAID'}</strong></div>
-        ${paidAmt > 0 ? `<div class="t-center t-small" style="color:#059669; font-weight:700; margin-top:2px;">PAID: PHP ${paidAmt.toFixed(2)} ${orNo ? `| OR#: ${orNo}` : ''} ${paidDate ? `(${paidDate})` : ''}</div>` : ''}
+        <!-- Payment Status (if already settled) -->
+        ${isPaid ? `
+          <div class="t-center t-bold" style="color: #059669; border: 1px dashed #059669; padding: 3px; margin: 4px 0;">
+            PAID: ₱ ${paidAmt.toFixed(2)} ${orNo ? `(OR# ${orNo})` : ''} ${paidDate ? `• ${paidDate}` : ''}
+          </div>
+        ` : ''}
 
+        <!-- Official Reminders Word-for-Word from Original Dicklum Paper Notice -->
+        <div class="t-bold" style="margin-top: 6px; font-size: 11px; text-align: left;">Reminders</div>
+        <div style="font-size: 9.5px; line-height: 1.4; text-align: left; margin-top: 3px; color: #1E293B;">
+          <div>1. Disregard this notice if payment has been made.</div>
+          <div>2. This serves as Notice of Disconnection.</div>
+          <div>3. Please pay on time. Reconnection fee is Php 500.</div>
+          <div>4. Pay bills directly to the cashier.</div>
+          <div>5. Kindly report leaks or acts of vandalism on our pipeline.</div>
+        </div>
+
+        <!-- Barcode & QR (Useful for Instant Cashier Scanning) -->
         ${showBarcode ? `
-          <div class="t-center" style="margin: 6px 0 2px 0;">
-            <svg width="160" height="32" viewBox="0 0 160 32" style="display:inline-block;">
+          <div class="t-center" style="margin: 8px 0 2px 0;">
+            <svg width="160" height="30" viewBox="0 0 160 30" style="display:inline-block;">
               <path d="M4 2h2v26H4zm4 0h1v26H8zm3 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h2v26h-2z" fill="#000"/>
             </svg>
-            <div style="font-size:8.5px; letter-spacing:1px;">${bill.id}</div>
+            <div style="font-size:8.5px; letter-spacing:1px; color:#475569;">${bill.id}</div>
           </div>
         ` : ''}
 
         ${showQr ? `
           <div class="t-center" style="margin: 4px 0;">
-            <svg width="56" height="56" viewBox="0 0 29 29" shape-rendering="crispEdges" style="display:inline-block; border:1px solid #000; padding:2px; background:#fff;">
+            <svg width="50" height="50" viewBox="0 0 29 29" shape-rendering="crispEdges" style="display:inline-block; border:1px solid #000; padding:2px; background:#fff;">
               <path d="M1 1h7v7H1V1zm1 1v5h5V2H2zm1 1h3v3H3V3zm18-2h7v7h-7V1zm1 1v5h5V2h-5zm1 1h3v3h-3V3zM1 21h7v7H1v-7zm1 1v5h5v-5H2zm1 1h3v3H3v-3zM10 1h2v2h-2V1zm4 0h1v3h-1V1zm3 1h2v2h-2V2zM10 5h3v2h-3V5zm5 0h2v3h-2V5zM1 10h3v2H1v-2zm5 0h2v3H6v-3zm4 0h4v2h-4v-2zm6 0h2v4h-2v-4zm4 0h3v2h-3v-2zm5 1h3v2h-3v-2zM2 14h2v3H2v-3zm4 1h3v2H6v-2zm5-1h2v4h-2v-4zm4 1h3v3h-3v-3zm5 0h2v2h-2v-2zm4 1h3v3h-3v-3zM10 21h3v2h-3v-2zm5 0h2v3h-2v-3zm4 1h4v2h-4v-2zm6 0h2v4h-2v-4zM10 25h2v3h-2v-3zm4 1h3v2h-3v-2zm5 0h3v2h-3v-2zm5 1h3v1h-3v-1z" fill="#000"/>
             </svg>
           </div>
         ` : ''}
 
-        <div class="t-center t-warning t-small">*** THIS BILL IS NOT A PAYMENT RECEIPT ***</div>
-        <div class="t-center t-small">Please settle on or before due date to avoid service disconnection.</div>
-        <div class="t-center t-small">${customFooter}</div>
-        <div class="t-center t-small" style="font-size:8.5px; margin-top:3px; color:#475569;">[Xprinter XP-P300 • ${printableMm}mm • 100% Phenol-Free Paper]</div>
+        <div class="t-center t-small" style="font-size:8px; margin-top:4px; color:#64748B;">[Xprinter XP-P300 • ${printableMm}mm • 100% Phenol-Free Paper]</div>
       </div>
     `;
   }

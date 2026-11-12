@@ -80,28 +80,45 @@ class BillingEngine {
       }
     }
 
-    const subtotal = isExcessRateRequired ? minimumCharge : (minimumCharge + excessCharge + maintenanceFee);
-    const totalAmountDue = Math.max(minimumCharge, subtotal);
-
+    let minChargeToApply = 0.00;
+    let subtotal = 0.00;
+    let totalAmountDue = 0.00;
     let formulaExplanation = '';
-    if (consumption <= minimumAllowance) {
-      formulaExplanation = `Water consumption of ${consumption} m³ is within the minimum monthly allowance of ${minimumAllowance} m³. The flat minimum charge of PHP ${minimumCharge.toFixed(2)} applies.`;
+
+    if (consumption <= 0) {
+      minChargeToApply = 0.00;
+      subtotal = 0.00;
+      totalAmountDue = 0.00;
+      formulaExplanation = 'Zero water consumption (0 m³). Total amount due is PHP 0.00.';
+    } else if (consumption <= minimumAllowance) {
+      minChargeToApply = minimumCharge;
+      subtotal = minimumCharge + maintenanceFee;
+      totalAmountDue = subtotal;
+      formulaExplanation = `Water consumption of ${consumption} m³ is within the minimum monthly allowance of ${minimumAllowance} m³. Flat minimum charge of PHP ${minimumCharge.toFixed(2)} applies.`;
     } else if (isExcessRateRequired) {
+      minChargeToApply = minimumCharge;
+      subtotal = minimumCharge;
+      totalAmountDue = minimumCharge;
       formulaExplanation = unconfiguredMessage;
     } else {
+      minChargeToApply = minimumCharge;
+      subtotal = minimumCharge + excessCharge + maintenanceFee;
+      totalAmountDue = subtotal;
       formulaExplanation = `Water consumption of ${consumption} m³ exceeds the ${minimumAllowance} m³ allowance by ${excessMeters} m³. Computed as: Minimum Charge PHP ${minimumCharge.toFixed(2)} + (${excessMeters} m³ × PHP ${excessRate.toFixed(2)}/m³ = PHP ${excessCharge.toFixed(2)}) = PHP ${totalAmountDue.toFixed(2)}.`;
     }
 
     return {
       previousReading: prev,
       currentReading: curr,
-      consumption: consumption,
+      consumption: Math.max(0, consumption),
       minimumAllowance: minimumAllowance,
-      minimumCharge: minimumCharge,
+      minimumCharge: minChargeToApply,
+      baseMinimumRate: minimumCharge,
       excessMeters: excessMeters,
       excessRate: excessRate,
       excessCharge: excessCharge,
       maintenanceFee: maintenanceFee,
+      currentBill: subtotal,
       totalAmountDue: totalAmountDue,
       isExcessRateConfigured: isExcessRateConfigured,
       isExcessRateRequired: isExcessRateRequired,
@@ -134,6 +151,21 @@ class BillingEngine {
       if (m && m.meterNo) meterNo = m.meterNo;
     }
 
+    // Calculate arrears from prior unpaid bills for this consumer
+    let arrears = 0.00;
+    try {
+      const allBills = await window.db.getAll('bills');
+      const priorUnpaid = allBills.filter(b => b.consumerId === consumer.id && b.id !== billId && b.paymentStatus !== 'PAID');
+      arrears = priorUnpaid.reduce((sum, b) => sum + ((Number(b.totalAmountDue) || 0) - (Number(b.amountPaid) || 0)), 0);
+      arrears = Math.max(0, arrears);
+    } catch (e) {
+      arrears = 0.00;
+    }
+
+    const currentBill = Number(calculation.totalAmountDue) || 0.00;
+    const grandTotalDue = currentBill + arrears;
+    const disconnectionDate = new Date(dueDate.getTime() + 2 * 86400000);
+
     // Snapshot of tariff at the moment of billing to preserve historical integrity
     const tariffSnapshot = {
       minimumCharge: calculation.minimumCharge,
@@ -150,12 +182,14 @@ class BillingEngine {
       consumerName: consumer.name,
       accountNo: consumer.accountNo,
       zone: consumer.zone,
+      address: consumer.address || `${consumer.zone || 'Zone 1'}, Dicklum`,
+      classification: consumer.classification || 'Residential',
       meterId: reading.meterId,
       meterNo: meterNo,
-      readerName: reading.readerName || 'R. Fernandez',
       billingPeriod: reading.billingPeriod,
       billDate: readingDate.toISOString().split('T')[0],
       dueDate: dueDate.toISOString().split('T')[0],
+      disconnectionDate: disconnectionDate.toISOString().split('T')[0],
       previousReading: calculation.previousReading,
       currentReading: calculation.currentReading,
       consumption: calculation.consumption,
@@ -165,8 +199,10 @@ class BillingEngine {
       excessRate: calculation.excessRate,
       excessAmount: calculation.excessCharge,
       maintenanceFee: calculation.maintenanceFee,
+      currentBill: currentBill,
+      arrears: arrears,
       penaltyAmount: 0.00,
-      totalAmountDue: calculation.totalAmountDue,
+      totalAmountDue: grandTotalDue,
       tariffSnapshot: tariffSnapshot, // Permanent audit snapshot
       paymentStatus: 'UNPAID',        // Printing does NOT mark bill as paid!
       amountPaid: 0.00,

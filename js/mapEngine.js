@@ -270,20 +270,6 @@ class FieldMapEngine {
     this._pinsLayerGroup = L.layerGroup().addTo(this._map);
     this._savedRoutesLayerGroup = L.layerGroup().addTo(this._map);
 
-    // Base blur satellite layer (Google Earth progressive blur-up foundation)
-    // Pre-loads low-zoom satellite overview so zooming in/out never shows black or white void tiles
-    this._baseBlurLayer = L.tileLayer('https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
-      subdomains: ['0', '1', '2', '3'],
-      minZoom: 13,
-      maxZoom: 22,
-      maxNativeZoom: 15,
-      className: 'google-earth-blur-base',
-      keepBuffer: 30,
-      updateWhenZooming: true,
-      updateWhenIdle: false
-    }).addTo(this._map);
-    this._baseBlurLayer.bringToBack();
-
     // Set initial tile layer & render Barangay Diclum Red Border Line
     this.setLayer(this._currentLayerKey);
     this._renderDicklumBoundary();
@@ -398,11 +384,6 @@ class FieldMapEngine {
     this._activeTileLayer = config.createLayer();
     this._activeTileLayer.addTo(this._map);
     this._activeTileLayer.bringToBack();
-
-    // Ensure the permanent blur base layer stays underneath the sharp active layer
-    if (this._baseBlurLayer) {
-      this._baseBlurLayer.bringToBack();
-    }
   }
 
   // ─── Barangay Diclum (Dicklum) Elastic Red Border Line & Focus Mask ───────

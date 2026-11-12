@@ -398,18 +398,10 @@ html, body {
   overflow: visible !important;
 }
 
-/* ─── Google Earth Smoothness & 4K Progressive Blur-Up Architecture ────────── */
+/* ─── Ultra-HD 4K Crisp Satellite Map Rendering (Zero Blur) ─────────────── */
 #field-map,
 #field-map.leaflet-container {
-  background: #0d171e !important; /* Deep dark satellite terrain base tone */
-}
-
-/* All tile panes and intermediate containers MUST remain transparent so underlying blur map is visible */
-#field-map .leaflet-pane,
-#field-map .leaflet-tile-pane,
-#field-map .leaflet-tile-container,
-#field-map .leaflet-layer {
-  background: transparent !important;
+  background: #090e17 !important; /* Deep dark satellite terrain base tone */
 }
 
 /* Remove Chromium plus-lighter blend mode that causes flashing on tile load */
@@ -418,10 +410,10 @@ html, body {
   mix-blend-mode: normal !important;
 }
 
-/* ZERO VISIBLE TILE LINES / SEAMS:
- * 1. image-rendering: auto enables smooth bilinear edge filtering (replaces -webkit-optimize-contrast which caused raster seams).
- * 2. -0.5px margin + 0.5px padding provides subpixel bleed overlap, eliminating 1px gaps at any DPI/fractional zoom.
- * 3. outline: 1px solid transparent forces hardware rasterizer to avoid clipping tile boundaries.
+/* Crystal-clear 4K tiles with zero artificial blur:
+ * 1. image-rendering: auto for native GPU bilinear interpolation.
+ * 2. -0.5px margin + 0.5px padding subpixel bleed overlap to seal any tile grid lines.
+ * 3. 100% sharp rendering without any blur filter.
  */
 #field-map .leaflet-tile {
   background: transparent !important;
@@ -436,60 +428,23 @@ html, body {
   box-sizing: content-box !important;
   border: none !important;
   box-shadow: none !important;
+  filter: none !important; /* Explicitly enforce zero blur */
 }
 
 #field-map .leaflet-tile-container {
   image-rendering: auto !important;
-  background: transparent !important;
 }
 
 #field-map .leaflet-layer img.leaflet-tile {
   max-width: none !important;
   image-rendering: auto !important;
-}
-
-/* ─── Google Earth Style Blur-Up Progressive Satellite Loading ───────────────
- * 1. Permanent low-altitude satellite base layer keeps Diclum 100% visible with a soft blur.
- * 2. While new zoom level loads, previous zoom tiles remain 100% visible with soft blur.
- * 3. High-res sharp 4K tiles stream smoothly on top without any black or white voids.
- */
-#field-map .google-earth-blur-base {
-  z-index: 1 !important;
-  pointer-events: none !important;
-}
-
-#field-map .google-earth-blur-base img.leaflet-tile {
-  filter: blur(2.5px) contrast(1.08) saturate(1.15) !important;
-  transform: scale(1.02);
-  pointer-events: none !important;
-  opacity: 0.95 !important;
-}
-
-/* Previous zoom tiles remain locked & softly blurred during zoom transitions */
-#field-map .leaflet-tile-container:not(:last-child) {
-  opacity: 1 !important;
-  z-index: 2 !important;
-}
-
-#field-map .leaflet-tile-container:not(:last-child) img.leaflet-tile {
-  filter: blur(1.5px) !important;
-  opacity: 0.98 !important;
-  visibility: visible !important;
-}
-
-/* Active sharp tile container */
-#field-map .leaflet-tile-container:last-child {
-  z-index: 3 !important;
-}
-
-#field-map .leaflet-tile-container:last-child img.leaflet-tile {
   filter: none !important;
 }
 
 /* Smooth seamless crossfade between tiles instead of sudden flash */
 #field-map .leaflet-fade-anim .leaflet-tile {
   will-change: opacity, transform;
-  transition: opacity 0.2s cubic-bezier(0.2, 0, 0, 1) !important;
+  transition: opacity 0.16s cubic-bezier(0.2, 0, 0, 1) !important;
 }
 
 /* Keep previous zoom tiles locked & visible until new zoom is 100% loaded */

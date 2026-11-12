@@ -398,7 +398,25 @@ html, body {
   overflow: visible !important;
 }
 
+/* ─── Google Maps Smoothness: Zero White Tiles Loading ────────────────────── */
+#field-map,
+#field-map.leaflet-container,
+#field-map .leaflet-container,
+#field-map .leaflet-pane,
+#field-map .leaflet-tile-pane,
+#field-map .leaflet-tile-container,
+#field-map .leaflet-layer {
+  background: #090e17 !important; /* Deep dark satellite base tone - NO WHITE TILES EVER */
+}
+
+/* Remove Chromium plus-lighter blend mode that causes flashing on tile load */
+#field-map .leaflet-container img.leaflet-tile,
+#field-map img.leaflet-tile {
+  mix-blend-mode: normal !important;
+}
+
 #field-map .leaflet-tile {
+  background: transparent !important;
   will-change: transform, opacity;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
@@ -414,6 +432,18 @@ html, body {
 #field-map .leaflet-layer img.leaflet-tile {
   max-width: none !important;
   image-rendering: -webkit-optimize-contrast;
+}
+
+/* Smooth seamless crossfade between tiles instead of sudden flash */
+#field-map .leaflet-fade-anim .leaflet-tile {
+  will-change: opacity, transform;
+  transition: opacity 0.16s cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
+/* Keep previous zoom tiles locked & visible until new zoom is 100% loaded */
+#field-map .leaflet-zoom-anim .leaflet-zoom-animated {
+  will-change: transform;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 #field-map .leaflet-pane {

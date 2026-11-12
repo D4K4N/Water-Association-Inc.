@@ -334,25 +334,55 @@ class OfflineTileEngine {
         const z = coords.z;
         const x = coords.x;
         const y = coords.y;
+        const key = self.makeKey(layerKey, z, x, y);
 
-        // Try offline sources first (IndexedDB or Bundled assets)
+        // 1. Instant 0ms memory cache hit
+        if (self.memoryCache && self.memoryCache.has(key)) {
+          tile.src = self.memoryCache.get(key);
+          tile.onload = () => done(null, tile);
+          tile.onerror = () => this._loadLiveTile(tile, coords, done);
+          return tile;
+        }
+
+        // 2. When online, set tile.src synchronously for zero-latency C++ browser download!
+        // No waiting for asynchronous IndexedDB transactions before starting download
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          const liveSrc = this.getTileUrl(coords);
+          tile.src = liveSrc;
+
+          tile.onload = () => {
+            done(null, tile);
+          };
+
+          tile.onerror = () => {
+            // Live failed; fall back to offline storage / fallback URL
+            self.getTileBlob(layerKey, z, x, y).then(offlineSrc => {
+              if (offlineSrc && typeof offlineSrc === 'string') {
+                tile.src = offlineSrc;
+                tile.onload = () => done(null, tile);
+                tile.onerror = () => this._handleFallback(tile, coords, done);
+              } else {
+                this._handleFallback(tile, coords, done);
+              }
+            }).catch(() => {
+              this._handleFallback(tile, coords, done);
+            });
+          };
+
+          return tile;
+        }
+
+        // 3. When offline: load directly from IndexedDB / bundled assets
         self.getTileBlob(layerKey, z, x, y).then((offlineSrc) => {
           if (offlineSrc && typeof offlineSrc === 'string') {
             tile.src = offlineSrc;
-
-            tile.onload = () => {
-              done(null, tile);
-            };
-
-            tile.onerror = () => {
-              // Bundled tile was missing; fall back to live tile server / Service Worker cache
-              this._loadLiveTile(tile, coords, done);
-            };
+            tile.onload = () => done(null, tile);
+            tile.onerror = () => this._handleFallback(tile, coords, done);
           } else {
-            this._loadLiveTile(tile, coords, done);
+            this._handleFallback(tile, coords, done);
           }
         }).catch(() => {
-          this._loadLiveTile(tile, coords, done);
+          this._handleFallback(tile, coords, done);
         });
 
         return tile;
@@ -361,49 +391,40 @@ class OfflineTileEngine {
       _loadLiveTile(tile, coords, done) {
         const liveSrc = this.getTileUrl(coords);
         tile.src = liveSrc;
+        tile.onload = () => done(null, tile);
+        tile.onerror = () => this._handleFallback(tile, coords, done);
+      },
 
-        tile.onload = () => {
-          done(null, tile);
-        };
+      _handleFallback(tile, coords, done) {
+        const ext = layerKey === 'streets' ? 'png' : 'jpg';
+        const bundledSrc = `assets/dicklum-tiles/${layerKey}/${coords.z}/${coords.x}/${coords.y}.${ext}`;
 
-        tile.onerror = (e) => {
-          // If 4K scale=2 failed on a specific tile coordinate, try 1x standard resolution first
-          if (liveSrc && liveSrc.includes('&scale=2') && !tile._hasTriedStandard) {
-            tile._hasTriedStandard = true;
-            tile.src = liveSrc.replace('&scale=2', '');
-            return;
-          }
+        if (!tile._hasTriedBundled && coords.z <= 17) {
+          tile._hasTriedBundled = true;
+          tile.src = bundledSrc;
+          return;
+        }
 
-          const ext = layerKey === 'streets' ? 'png' : 'jpg';
-          const bundledSrc = `assets/dicklum-tiles/${layerKey}/${coords.z}/${coords.x}/${coords.y}.${ext}`;
+        if (fallbackUrl && !tile._hasFallback && coords.z <= 20) {
+          tile._hasFallback = true;
+          tile.src = fallbackUrl
+            .replace('{z}', coords.z)
+            .replace('{y}', coords.y)
+            .replace('{x}', coords.x);
+          return;
+        }
 
-          if (!tile._hasTriedBundled && coords.z <= 17) {
-            tile._hasTriedBundled = true;
-            tile.src = bundledSrc;
-            return;
-          }
-
-          if (fallbackUrl && !tile._hasFallback && coords.z <= 20) {
-            tile._hasFallback = true;
-            tile.src = fallbackUrl
-              .replace('{z}', coords.z)
-              .replace('{y}', coords.y)
-              .replace('{x}', coords.x);
-            return;
-          }
-
-          // Tell Leaflet this specific deep zoom tile is unavailable so Leaflet
-          // automatically retains and hardware-upscales the parent zoom satellite imagery!
-          done(new Error('Tile unavailable offline'), tile);
-        };
+        // Deep zoom tile unavailable: Leaflet retains and hardware-upscales parent zoom imagery
+        done(new Error('Tile unavailable'), tile);
       }
     });
 
     const mergedOpts = Object.assign({
       referrerPolicy: 'no-referrer',
       updateWhenIdle: false,
-      updateWhenZooming: false,
-      keepBuffer: 6
+      updateWhenZooming: true,  // Fetch tiles DURING zoom so no white gaps appear
+      updateInterval: 80,
+      keepBuffer: 20            // Deep tile retention cache
     }, options);
 
     return new OfflineTileLayer(primaryUrl, mergedOpts);

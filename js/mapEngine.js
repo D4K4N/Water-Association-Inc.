@@ -88,8 +88,9 @@ function createRobustTileLayer(layerKey, primaryUrl, options = {}, fallbackUrl =
     referrerPolicy: 'no-referrer',
     crossOrigin: false,
     updateWhenIdle: false,    // Fetch tiles immediately while panning for zero-lag feel
-    updateWhenZooming: false, // Avoid thrashing intermediate zoom tiles
-    keepBuffer: 6             // Keep surrounding Diclum tiles warm in memory
+    updateWhenZooming: true,  // Fetch tiles DURING zoom so whole map is ready with zero white gaps
+    updateInterval: 80,       // Fast responsive tile queue processing
+    keepBuffer: 20            // Keep 20 tiles buffer around view so zooming in/out is instantaneous
   }, options);
 
   const layer = L.tileLayer(primaryUrl, mergedOpts);
@@ -112,23 +113,21 @@ function createRobustTileLayer(layerKey, primaryUrl, options = {}, fallbackUrl =
   return layer;
 }
 
-// Detect High-DPI / Retina displays (Smartphones, 4K Displays)
-const isHighDpiDisplay = typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.25;
-
 // Available high-performance tile layer configurations (Google 4K Satellite Hybrid, ESRI & Standard Streets)
 const LAYER_PROVIDERS = {
   google_hybrid: {
     name: 'Google Satellite (4K Ultra-HD Hybrid)',
     createLayer: () => createRobustTileLayer(
       'google_hybrid',
-      isHighDpiDisplay
-        ? 'https://{s}.google.com/vt/lyrs=y&scale=2&x={x}&y={y}&z={z}'
-        : 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+      'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
       {
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+        subdomains: ['0', '1', '2', '3'],
         maxZoom: 22,
         maxNativeZoom: 20, // Real native ultra-crisp Google satellite up to zoom 20!
         tileSize: 256,
+        updateWhenZooming: true,
+        updateWhenIdle: false,
+        keepBuffer: 20,
         attribution: '© Google Maps'
       },
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
@@ -147,9 +146,12 @@ const LAYER_PROVIDERS = {
         maxZoom: 22,
         maxNativeZoom: 19,
         tileSize: 256,
+        updateWhenZooming: true,
+        updateWhenIdle: false,
+        keepBuffer: 20,
         attribution: '© Esri, Maxar, Earthstar Geographics'
       },
-      'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+      'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
     )
   },
   streets: {
@@ -161,6 +163,9 @@ const LAYER_PROVIDERS = {
         subdomains: ['a', 'b', 'c'],
         maxZoom: 22,
         maxNativeZoom: 19,
+        updateWhenZooming: true,
+        updateWhenIdle: false,
+        keepBuffer: 20,
         attribution: '© OpenStreetMap contributors'
       }
     )
@@ -245,7 +250,10 @@ class FieldMapEngine {
       wheelPxPerZoomLevel: 70,
       zoomControl: false, // UI has its own floating +/- buttons
       boxZoom: false,     // Reserve Shift + Left-Click drag for desktop 360° map rotation
-      attributionControl: false // Hide Leaflet attribution logo banner
+      attributionControl: false, // Hide Leaflet attribution logo banner
+      zoomAnimation: true,
+      zoomAnimationThreshold: 8,
+      fadeAnimation: true
     });
 
     // Create a dedicated non-interactive SVG pane for the Diclum boundary & mask
@@ -308,6 +316,45 @@ class FieldMapEngine {
         }
       }, delay);
     });
+
+    // Preload Barangay Diclum whole tile envelope so zooming has zero white gaps
+    this._preloadDiclumTiles();
+  }
+
+  // Preload whole Diclum map boundary tiles into browser HTTP cache
+  _preloadDiclumTiles() {
+    if (typeof window === 'undefined' || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+
+    const diclumBounds = {
+      minLat: 8.348,
+      maxLat: 8.400,
+      minLng: 124.840,
+      maxLng: 124.865
+    };
+
+    setTimeout(() => {
+      const subdomains = ['0', '1', '2', '3'];
+      let subIdx = 0;
+
+      [14, 15, 16, 17, 18].forEach(z => {
+        const n = Math.pow(2, z);
+        const latRadMax = (diclumBounds.maxLat * Math.PI) / 180;
+        const latRadMin = (diclumBounds.minLat * Math.PI) / 180;
+
+        const minX = Math.floor(((diclumBounds.minLng + 180) / 360) * n);
+        const maxX = Math.floor(((diclumBounds.maxLng + 180) / 360) * n);
+        const minY = Math.floor(((1 - Math.log(Math.tan(latRadMax) + 1 / Math.cos(latRadMax)) / Math.PI) / 2) * n);
+        const maxY = Math.floor(((1 - Math.log(Math.tan(latRadMin) + 1 / Math.cos(latRadMin)) / Math.PI) / 2) * n);
+
+        for (let x = minX; x <= maxX; x++) {
+          for (let y = minY; y <= maxY; y++) {
+            const sub = subdomains[(subIdx++) % 4];
+            const img = new Image();
+            img.src = `https://mt${sub}.google.com/vt/lyrs=y&x=${x}&y=${y}&z=${z}`;
+          }
+        }
+      });
+    }, 800);
   }
 
   // ─── Public Getters / Setters ─────────────────────────────────────────────

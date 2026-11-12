@@ -253,11 +253,15 @@ html, body {
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 12px;
+  padding: 12px 12px 90px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   background: var(--bg);
+}
+
+.view-scroll-content > * {
+  flex-shrink: 0;
 }
 
 /* ─── Splash Screen (Legacy / Direct Launch Fallback) ────────────────────── */
@@ -1166,11 +1170,13 @@ html, body {
 .calc-table {
   width: 100%;
   font-size: 12px;
+  line-height: 1.45;
   border-collapse: collapse;
 }
 
 .calc-table td {
-  padding: 5px 0;
+  padding: 6px 0;
+  vertical-align: middle;
   color: var(--text-secondary);
   border-bottom: 1px solid rgba(30, 41, 59, 0.6);
 }
@@ -1181,7 +1187,8 @@ html, body {
 
 .calc-table tr.total-row td {
   border-top: 1px solid var(--border-strong);
-  padding-top: 8px;
+  padding-top: 9px;
+  padding-bottom: 6px;
   font-size: 13px;
   font-weight: 700;
   color: var(--text-primary);
@@ -1378,11 +1385,16 @@ html, body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 12px 90px 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   background: var(--bg);
+}
+
+.settings-content > * {
+  flex-shrink: 0;
 }
 
 .settings-section-card {
@@ -3045,9 +3057,17 @@ button[disabled].btn-disabled-safety {
   background: rgba(17, 23, 36, 0.85);
   border: 1px solid var(--blueprint-line);
   border-radius: var(--radius-sm);
-  overflow: hidden;
   transition: border-color 0.22s ease, box-shadow 0.22s ease;
   margin-bottom: 8px;
+  flex-shrink: 0 !important;
+  min-height: -webkit-fit-content;
+  min-height: fit-content;
+  width: 100%;
+  box-sizing: border-box;
+  position: relative;
+}
+.blueprint-disclosure:not(.open) {
+  overflow: hidden;
 }
 .blueprint-disclosure:hover {
   border-color: rgba(56, 189, 248, 0.32);
@@ -3055,10 +3075,15 @@ button[disabled].btn-disabled-safety {
 .blueprint-disclosure.open {
   border-color: rgba(56, 189, 248, 0.42);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  overflow: visible !important;
+  height: auto !important;
 }
 
 .disclosure-header {
   padding: 10px 12px;
+  min-height: 44px;
+  box-sizing: border-box;
+  flex-shrink: 0 !important;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3079,6 +3104,13 @@ button[disabled].btn-disabled-safety {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
+  min-width: 0;
+  flex: 1;
+}
+.disclosure-title-wrap span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .disclosure-title-wrap svg {
   color: var(--blueprint-accent);
@@ -3105,10 +3137,12 @@ button[disabled].btn-disabled-safety {
   overflow: hidden;
   transition: max-height 0.34s var(--spring-smooth), opacity 0.26s ease, padding 0.34s var(--spring-smooth);
   padding: 0 12px;
+  box-sizing: border-box;
 }
 .blueprint-disclosure.open .disclosure-body {
-  max-height: 1400px;
+  max-height: none !important;
   opacity: 1;
+  overflow: visible !important;
   padding: 12px;
 }
 

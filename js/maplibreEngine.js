@@ -178,7 +178,7 @@
       this._zoneFilter = null;
       this._pinsHidden = false;
       this._isolatedPinId = null;
-      this._mappingMode = 'view';
+      this._mappingMode = opts.mode || 'mapping';
       this._userGps = null;
       this._userHeading = 0;
       this._lastGpsRenderPos = null;
@@ -263,8 +263,10 @@
         if (this._selectedPinKey) {
           this.clearSelectedPin();
         }
-        if (this._mappingMode === 'mapping' && this.dropPinCallback) {
-          this.dropPinCallback(e.lngLat.lat, e.lngLat.lng);
+        if (this.dropPinCallback && this._mappingMode !== 'readonly') {
+          const lat = Number(e.lngLat.lat);
+          const lng = Number(e.lngLat.lng);
+          this.dropPinCallback(lat, lng);
         }
       });
 
@@ -987,6 +989,10 @@
         })
         .setLngLat([lng, lat])
         .addTo(this._map);
+
+        if (this._gpsMarker.getElement()) {
+          this._gpsMarker.getElement().style.pointerEvents = 'none';
+        }
       } else {
         this._gpsMarker.setLngLat([lng, lat]);
         const cone = document.getElementById('gps-marker-cone');
@@ -1023,6 +1029,9 @@
 
     setMappingMode(mode) {
       this._mappingMode = mode;
+      if (this._map && this._map.getCanvas()) {
+        this._map.getCanvas().style.cursor = (mode === 'mapping' || mode === 'all') ? 'crosshair' : '';
+      }
     }
 
     get bearing() {

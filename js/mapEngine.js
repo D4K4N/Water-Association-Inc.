@@ -112,25 +112,45 @@ function createRobustTileLayer(layerKey, primaryUrl, options = {}, fallbackUrl =
   return layer;
 }
 
-// Available high-performance tile layer configurations (Google Satellite Hybrid & Standard Streets)
+// Detect High-DPI / Retina displays (Smartphones, 4K Displays)
+const isHighDpiDisplay = typeof window !== 'undefined' && (window.devicePixelRatio || 1) >= 1.25;
+
+// Available high-performance tile layer configurations (Google 4K Satellite Hybrid, ESRI & Standard Streets)
 const LAYER_PROVIDERS = {
   google_hybrid: {
-    name: 'Google Satellite (Hybrid)',
+    name: 'Google Satellite (4K Ultra-HD Hybrid)',
     createLayer: () => createRobustTileLayer(
       'google_hybrid',
-      'https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}',
+      isHighDpiDisplay
+        ? 'https://{s}.google.com/vt/lyrs=y&scale=2&x={x}&y={y}&z={z}'
+        : 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
       {
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         maxZoom: 22,
-        maxNativeZoom: 18, // Native satellite up to zoom 18; deeper zooms 19-22 smoothly upscale via GPU
+        maxNativeZoom: 20, // Real native ultra-crisp Google satellite up to zoom 20!
+        tileSize: 256,
         attribution: '© Google Maps'
       },
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
     )
   },
   hybrid: {
-    name: 'Google Satellite (Hybrid)',
+    name: 'Google Satellite (4K Ultra-HD Hybrid)',
     createLayer: () => LAYER_PROVIDERS.google_hybrid.createLayer()
+  },
+  esri_satellite: {
+    name: 'ESRI World Imagery (High Resolution)',
+    createLayer: () => createRobustTileLayer(
+      'esri_satellite',
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        maxZoom: 22,
+        maxNativeZoom: 19,
+        tileSize: 256,
+        attribution: '© Esri, Maxar, Earthstar Geographics'
+      },
+      'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+    )
   },
   streets: {
     name: 'Standard Streets (OpenStreetMap)',
@@ -140,7 +160,7 @@ const LAYER_PROVIDERS = {
       {
         subdomains: ['a', 'b', 'c'],
         maxZoom: 22,
-        maxNativeZoom: 18,
+        maxNativeZoom: 19,
         attribution: '© OpenStreetMap contributors'
       }
     )
@@ -220,9 +240,9 @@ class FieldMapEngine {
       maxBounds: DICLUM_MAX_BOUNDS,
       maxBoundsViscosity: 0.90,
       preferCanvas: true,
-      zoomSnap: 0.25,
-      zoomDelta: 0.75,
-      wheelPxPerZoomLevel: 80,
+      zoomSnap: 0.5,
+      zoomDelta: 0.5,
+      wheelPxPerZoomLevel: 70,
       zoomControl: false, // UI has its own floating +/- buttons
       boxZoom: false,     // Reserve Shift + Left-Click drag for desktop 360° map rotation
       attributionControl: false // Hide Leaflet attribution logo banner

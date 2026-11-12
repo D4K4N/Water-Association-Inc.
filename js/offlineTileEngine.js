@@ -367,6 +367,13 @@ class OfflineTileEngine {
         };
 
         tile.onerror = (e) => {
+          // If 4K scale=2 failed on a specific tile coordinate, try 1x standard resolution first
+          if (liveSrc && liveSrc.includes('&scale=2') && !tile._hasTriedStandard) {
+            tile._hasTriedStandard = true;
+            tile.src = liveSrc.replace('&scale=2', '');
+            return;
+          }
+
           const ext = layerKey === 'streets' ? 'png' : 'jpg';
           const bundledSrc = `assets/dicklum-tiles/${layerKey}/${coords.z}/${coords.x}/${coords.y}.${ext}`;
 
@@ -376,7 +383,7 @@ class OfflineTileEngine {
             return;
           }
 
-          if (fallbackUrl && !tile._hasFallback && coords.z <= 18) {
+          if (fallbackUrl && !tile._hasFallback && coords.z <= 20) {
             tile._hasFallback = true;
             tile.src = fallbackUrl
               .replace('{z}', coords.z)

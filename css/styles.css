@@ -402,6 +402,18 @@ html, body {
   will-change: transform, opacity;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
+}
+
+#field-map .leaflet-tile-container {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
+}
+
+#field-map .leaflet-layer img.leaflet-tile {
+  max-width: none !important;
+  image-rendering: -webkit-optimize-contrast;
 }
 
 #field-map .leaflet-pane {

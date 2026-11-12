@@ -60,10 +60,14 @@ class WaterBillingApp {
     // 2. Load cached records
     await this.refreshDataCache();
 
-    // 3. Initialize Satellite Map Engine (Direct Launch)
+    // 3. Initialize Satellite Map Engine (Direct Launch: MapLibre WebGL GPU or Leaflet fallback)
     const mapContainer = document.getElementById('field-map');
     if (mapContainer) {
-      this.mapEngine = new window.FieldMapEngine(mapContainer, {
+      const MapEngineClass = (typeof window.MapLibreFieldMapEngine !== 'undefined')
+        ? window.MapLibreFieldMapEngine
+        : window.FieldMapEngine;
+
+      this.mapEngine = new MapEngineClass(mapContainer, {
         centerLat: 8.3735,
         centerLng: 124.8505,
         zoom: 15.0,

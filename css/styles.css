@@ -400,8 +400,45 @@ html, body {
 
 /* ─── Ultra-HD 4K Crisp Satellite Map Rendering (Zero Blur) ─────────────── */
 #field-map,
-#field-map.leaflet-container {
+#field-map.leaflet-container,
+#field-map.maplibregl-map {
   background: #090e17 !important; /* Deep dark satellite terrain base tone */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ─── MapLibre WebGL GPU Canvas Rules ─────────────────────────────────────── */
+.maplibregl-canvas-container,
+.maplibregl-canvas {
+  width: 100% !important;
+  height: 100% !important;
+  outline: none !important;
+}
+
+.custom-map-pin-wrap {
+  position: relative;
+  width: 28px;
+  height: 34px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.custom-gps-icon-wrap {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
 /* Remove Chromium plus-lighter blend mode that causes flashing on tile load */

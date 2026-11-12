@@ -1174,8 +1174,14 @@ html, body {
   border-collapse: collapse;
 }
 
+.disclosure-body .calc-summary-card {
+  padding: 10px 14px !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+}
+
 .calc-table td {
-  padding: 6px 0;
+  padding: 6px 4px;
   vertical-align: middle;
   color: var(--text-secondary);
   border-bottom: 1px solid rgba(30, 41, 59, 0.6);

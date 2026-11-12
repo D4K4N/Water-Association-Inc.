@@ -97,6 +97,7 @@ class WaterBillingApp {
     this.bindBillingEvents();
     this.bindSettingsAndReportEvents();
     this.bindModalEvents();
+    this.initInterruptibleButtonPhysics();
 
     // 6. Check Online/Offline Network Status
     this.updateOnlineBadge();
@@ -417,6 +418,93 @@ class WaterBillingApp {
         }, delay);
       });
     }
+  }
+
+  // --- Shared Element Transition & Fluid Morphing Engine ---
+
+  sharedElementMorph(sourceEl, targetEl, callback) {
+    if (!sourceEl || !targetEl || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+      if (typeof callback === 'function') callback();
+      return;
+    }
+
+    try {
+      const startRect = sourceEl.getBoundingClientRect();
+      if (!startRect || startRect.width === 0 || startRect.height === 0) {
+        if (typeof callback === 'function') callback();
+        return;
+      }
+
+      if (typeof callback === 'function') callback();
+
+      requestAnimationFrame(() => {
+        const endRect = targetEl.getBoundingClientRect();
+        if (!endRect || endRect.width === 0 || endRect.height === 0) return;
+
+        const ghost = document.createElement('div');
+        ghost.className = 'shared-element-ghost';
+        ghost.style.left = `${startRect.left}px`;
+        ghost.style.top = `${startRect.top}px`;
+        ghost.style.width = `${startRect.width}px`;
+        ghost.style.height = `${startRect.height}px`;
+        document.body.appendChild(ghost);
+
+        const deltaX = endRect.left - startRect.left;
+        const deltaY = endRect.top - startRect.top;
+        const scaleX = endRect.width / startRect.width;
+        const scaleY = endRect.height / startRect.height;
+
+        const anim = ghost.animate([
+          {
+            transform: 'translate(0px, 0px) scale(1, 1)',
+            opacity: 0.95
+          },
+          {
+            transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`,
+            opacity: 1
+          }
+        ], {
+          duration: 260,
+          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+          fill: 'forwards'
+        });
+
+        anim.onfinish = () => {
+          ghost.remove();
+          targetEl.animate([
+            { transform: 'scale(0.985)' },
+            { transform: 'scale(1)' }
+          ], { duration: 150, easing: 'cubic-bezier(0.16, 1.15, 0.45, 1)' });
+        };
+      });
+    } catch (_) {
+      if (typeof callback === 'function') callback();
+    }
+  }
+
+  // --- Interruptible Button Physics Gestures ---
+
+  initInterruptibleButtonPhysics() {
+    const selector = '.btn, .nav-item, .stepper-btn, .burger-menu-btn, .map-layer-fab, .billing-mode-btn, .records-period-btn, .zone-chip, .map-filter-chip';
+    
+    document.addEventListener('pointerdown', (e) => {
+      const target = e.target.closest(selector);
+      if (!target || target.disabled) return;
+      target.style.setProperty('--press-scale', '0.94');
+      target.style.setProperty('--press-y', '1.5px');
+    }, { passive: true });
+
+    const release = (e) => {
+      const target = e.target.closest(selector);
+      if (target) {
+        target.style.setProperty('--press-scale', '1');
+        target.style.setProperty('--press-y', '0px');
+      }
+    };
+
+    document.addEventListener('pointerup', release, { passive: true });
+    document.addEventListener('pointercancel', release, { passive: true });
+    document.addEventListener('pointerleave', release, { passive: true });
   }
 
   setMode(mode) {
@@ -1412,7 +1500,7 @@ class WaterBillingApp {
     }
   }
 
-  async startReadingForConsumer(consumerId) {
+  async startReadingForConsumer(consumerId, sourceEl = null) {
     this.closeConsumerSheet();
     this.closeClusterSheet();
 
@@ -1456,7 +1544,15 @@ class WaterBillingApp {
       }
 
       this.updateLiveConsumption();
-      this.switchView('view-reading');
+
+      const targetCard = document.getElementById('rdg-consumer-card');
+      if (sourceEl && targetCard) {
+        this.sharedElementMorph(sourceEl, targetCard, () => {
+          this.switchView('view-reading');
+        });
+      } else {
+        this.switchView('view-reading');
+      }
     } catch (err) {
       alert(`Error loading reading: ${err.message}`);
     }
@@ -1547,6 +1643,14 @@ class WaterBillingApp {
     if (calcExcessEl) calcExcessEl.textContent = calculation.isExcessRateRequired ? 'Unset' : `PHP ${calculation.excessCharge.toFixed(2)}`;
     if (calcTotalEl) calcTotalEl.textContent = calculation.isExcessRateRequired ? 'Requires Tariff' : `PHP ${calculation.totalAmountDue.toFixed(2)}`;
     if (calcExpEl) calcExpEl.textContent = calculation.formulaExplanation;
+
+    // Blueprint Progressive Disclosure & Live Summary Bar Readouts
+    const quickUsageEl = document.getElementById('rdg-quick-usage');
+    const quickDueEl = document.getElementById('rdg-quick-due');
+    const dueTagEl = document.getElementById('rdg-disclosure-due-tag');
+    if (quickUsageEl) quickUsageEl.textContent = `${Math.max(0, usage).toLocaleString()} m³`;
+    if (quickDueEl) quickDueEl.textContent = calculation.isExcessRateRequired ? 'Requires Tariff' : `PHP ${calculation.totalAmountDue.toFixed(2)}`;
+    if (dueTagEl) dueTagEl.textContent = calculation.isExcessRateRequired ? 'Unset' : `PHP ${calculation.totalAmountDue.toFixed(2)}`;
   }
 
   async submitReading(andPrint = false) {
@@ -4017,7 +4121,7 @@ class WaterBillingApp {
     if (panelLedger) panelLedger.style.display = !isThermal ? 'block' : 'none';
   }
 
-  async openConsumerHistoryModal(consumerId) {
+  async openConsumerHistoryModal(consumerId, sourceEl = null) {
     const consumer = this.cachedConsumers.find(c => c.id === consumerId);
     if (!consumer) return;
     this.activeHistoryConsumerId = consumerId;
@@ -4276,7 +4380,15 @@ class WaterBillingApp {
       };
     }
 
-    document.getElementById('modal-consumer-history').classList.add('active');
+    const modalHist = document.getElementById('modal-consumer-history');
+    const modalCard = modalHist ? modalHist.querySelector('.modal-card') : null;
+    if (sourceEl && modalCard) {
+      this.sharedElementMorph(sourceEl, modalCard, () => {
+        modalHist.classList.add('active');
+      });
+    } else if (modalHist) {
+      modalHist.classList.add('active');
+    }
   }
 
   // --- Map Layer Switcher & Offline Diclum Tile Downloader ---
@@ -4576,52 +4688,68 @@ class WaterBillingApp {
         const card = document.createElement('div');
         card.className = 'bill-card';
         card.innerHTML = `
-          <div class="b-header" style="cursor:pointer;" onclick="window.app.openConsumerHistoryModal('${c.id}')">
-            <div>
-              <strong style="font-size:13.5px; font-weight:600; color:var(--text-primary); display:block;">${c.name}</strong>
-              <span class="acct-pill" style="margin-left:0; margin-top:3px;">${c.accountNo} • ${c.zone || 'Dicklum'} • Meter: ${m ? m.meterNo : 'N/A'}</span>
+          <div class="b-header" style="cursor: pointer;" onclick="window.app.openConsumerHistoryModal('${c.id}', this.closest('.bill-card'))">
+            <div style="flex: 1; min-width: 0;">
+              <strong style="font-size: 13.5px; font-weight: 600; color: var(--text-primary); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${c.name}</strong>
+              <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 3px;">
+                <span class="acct-pill" style="margin-left: 0;">${c.accountNo}</span>
+                <span class="blueprint-tag">${c.zone || 'Dicklum'}</span>
+                <span class="blueprint-tag" style="color: var(--text-muted); border-color: var(--border);">Mtr: ${m ? m.meterNo : 'N/A'}</span>
+              </div>
             </div>
-            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:3px;">
+            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0;">
               ${badgeHtml}
+              ${hasUnpaid ? `<span style="font-size: 11px; font-weight: 700; color: var(--danger-text); font-variant-numeric: tabular-nums;">Due: PHP ${item.balanceDue.toFixed(2)}</span>` : `<span style="font-size: 10px; color: var(--text-muted);">Settled</span>`}
             </div>
           </div>
 
-          <div class="b-body" style="cursor:pointer;" onclick="window.app.openConsumerHistoryModal('${c.id}')">
-            <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr);">
-              <div class="r-cell">
-                <span class="lbl">Saved Bills</span>
-                <span class="val">${bCount}</span>
-              </div>
-              <div class="r-cell">
-                <span class="lbl">Consumed</span>
-                <span class="val" style="color:var(--primary-light);">${item.totalConsumed.toLocaleString()} m³</span>
-              </div>
-              <div class="r-cell">
-                <span class="lbl">Total Paid</span>
-                <span class="val" style="color:var(--success-text);">PHP ${item.totalPaid.toFixed(2)}</span>
-              </div>
-              <div class="r-cell ${hasUnpaid ? 'highlight' : ''}">
-                <span class="lbl">Balance Due</span>
-                <span class="val" style="color:${hasUnpaid ? 'var(--danger-text)' : 'var(--text-primary)'};">PHP ${item.balanceDue.toFixed(2)}</span>
-              </div>
-            </div>
-
-            ${latest ? `
-              <div style="margin-top:6px; padding:6px 8px; background:var(--surface-alt); border:1px solid var(--border); color:var(--text-secondary); border-radius:6px; font-size:11px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px; font-variant-numeric:tabular-nums;">
-                <span><strong style="color:var(--text-primary); font-weight:600;">Latest Bill:</strong> ${latest.billingPeriod} (${Number(latest.previousReading || 0).toLocaleString()} → ${Number(latest.currentReading || 0).toLocaleString()} m³ = <strong style="color:var(--primary-light); font-weight:600;">${Number(latest.consumption || 0)} m³</strong>)</span>
-                <strong style="color:var(--primary-light); font-weight:600;">PHP ${Number(latest.totalAmountDue || 0).toFixed(2)} (${latest.paymentStatus})</strong>
-              </div>
-            ` : ''}
+          <!-- Progressive Disclosure Toggle Trigger -->
+          <div style="padding: 0 10px 8px 10px;">
+            <button type="button" class="btn btn-xs btn-outline btn-toggle-details" onclick="event.stopPropagation(); this.closest('.bill-card').classList.toggle('details-expanded');" style="width: 100%; height: 26px; font-size: 10.5px; display: flex; align-items: center; justify-content: center; gap: 5px; border-color: rgba(56, 189, 248, 0.2); background: rgba(15, 20, 31, 0.5);">
+              <span>Show Details &amp; Metrics</span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
           </div>
 
-          <div class="b-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-sm btn-primary" onclick="window.app.openConsumerHistoryModal('${c.id}')" style="flex:1;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              Open Folder (${bCount} Receipt${bCount === 1 ? '' : 's'})
-            </button>
-            <button class="btn btn-sm btn-outline" onclick="window.app.startReadingForConsumer('${c.id}')">
-              ${window.AppIcons.reading('', 13)} Read Meter
-            </button>
+          <!-- Progressively Disclosed Drawer -->
+          <div class="card-details-drawer">
+            <div class="b-body" style="cursor: pointer; padding: 0 10px;" onclick="window.app.openConsumerHistoryModal('${c.id}', this.closest('.bill-card'))">
+              <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr);">
+                <div class="r-cell">
+                  <span class="lbl">Saved Bills</span>
+                  <span class="val">${bCount}</span>
+                </div>
+                <div class="r-cell">
+                  <span class="lbl">Consumed</span>
+                  <span class="val" style="color: var(--primary-light);">${item.totalConsumed.toLocaleString()} m³</span>
+                </div>
+                <div class="r-cell">
+                  <span class="lbl">Total Paid</span>
+                  <span class="val" style="color: var(--success-text);">PHP ${item.totalPaid.toFixed(2)}</span>
+                </div>
+                <div class="r-cell ${hasUnpaid ? 'highlight' : ''}">
+                  <span class="lbl">Balance Due</span>
+                  <span class="val" style="color: ${hasUnpaid ? 'var(--danger-text)' : 'var(--text-primary)'};">PHP ${item.balanceDue.toFixed(2)}</span>
+                </div>
+              </div>
+
+              ${latest ? `
+                <div style="margin-top: 6px; padding: 6px 8px; background: var(--surface-alt); border: 1px solid var(--border); color: var(--text-secondary); border-radius: 6px; font-size: 11px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px; font-variant-numeric: tabular-nums;">
+                  <span><strong style="color: var(--text-primary); font-weight: 600;">Latest Bill:</strong> ${latest.billingPeriod} (${Number(latest.previousReading || 0).toLocaleString()} → ${Number(latest.currentReading || 0).toLocaleString()} m³ = <strong style="color: var(--primary-light); font-weight: 600;">${Number(latest.consumption || 0)} m³</strong>)</span>
+                  <strong style="color: var(--primary-light); font-weight: 600;">PHP ${Number(latest.totalAmountDue || 0).toFixed(2)} (${latest.paymentStatus})</strong>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="b-actions" style="display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px 10px 10px;">
+              <button class="btn btn-sm btn-primary" onclick="window.app.openConsumerHistoryModal('${c.id}', this.closest('.bill-card'))" style="flex: 1;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                Open Folder (${bCount} Receipt${bCount === 1 ? '' : 's'})
+              </button>
+              <button class="btn btn-sm btn-outline" onclick="window.app.startReadingForConsumer('${c.id}', this.closest('.bill-card'))">
+                ${window.AppIcons.reading('', 13)} Read Meter
+              </button>
+            </div>
           </div>
         `;
         list.appendChild(card);
@@ -4699,7 +4827,7 @@ class WaterBillingApp {
           </div>
         </div>
         <div class="b-actions">
-          <button class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${b.consumerId}')" style="border-color:var(--primary); color:#38BDF8; font-weight:700;">
+          <button class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${b.consumerId}', this.closest('.bill-card'))" style="border-color:var(--primary); color:#38BDF8; font-weight:700;">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             Folder
           </button>
@@ -5177,17 +5305,17 @@ class WaterBillingApp {
       btnCancelOffline.addEventListener('click', () => this.cancelOfflineDiclumDownload());
     }
 
-    document.getElementById('sheet-btn-read').addEventListener('click', () => {
+    document.getElementById('sheet-btn-read').addEventListener('click', (e) => {
       if (this.activeConsumer) {
-        this.startReadingForConsumer(this.activeConsumer.id);
+        this.startReadingForConsumer(this.activeConsumer.id, e.currentTarget.closest('.bottom-sheet') || e.currentTarget);
       }
     });
 
     const btnSheetHist = document.getElementById('sheet-btn-history');
     if (btnSheetHist) {
-      btnSheetHist.addEventListener('click', () => {
+      btnSheetHist.addEventListener('click', (e) => {
         if (this.activeConsumer) {
-          this.openConsumerHistoryModal(this.activeConsumer.id);
+          this.openConsumerHistoryModal(this.activeConsumer.id, e.currentTarget.closest('.bottom-sheet') || e.currentTarget);
         }
       });
     }

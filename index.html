@@ -424,104 +424,181 @@
           <!-- Invalid Reading Alert -->
           <div id="rdg-error-alert" class="alert alert-danger hidden"></div>
 
-          <!-- Rollover / Replacement Override -->
-          <label style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
-            <input type="checkbox" id="rdg-override-checkbox">
-            Meter Replacement / Rollover Override (If physical meter was replaced or rolled over)
-          </label>
-        </div>
-
-        <!-- Reactive Computation Breakdown Card -->
-        <div class="calc-summary-card">
-          <h4>Utility Billing Computation (Dicklum Tariff)</h4>
-          <table class="calc-table">
-            <tr>
-              <td>Previous Reading:</td>
-              <td class="text-right" id="rdg-calc-prev">0 m³</td>
-            </tr>
-            <tr>
-              <td>Current Reading:</td>
-              <td class="text-right" id="rdg-calc-curr">0 m³</td>
-            </tr>
-            <tr>
-              <td>Water Consumption (Current − Previous):</td>
-              <td class="text-right bold text-primary" id="rdg-calc-usage">0 m³</td>
-            </tr>
-            <tr>
-              <td>Minimum Monthly Charge (up to 10 m³):</td>
-              <td class="text-right" id="rdg-calc-min-charge">PHP 100.00</td>
-            </tr>
-            <tr>
-              <td>Excess Consumption Charge:</td>
-              <td class="text-right" id="rdg-calc-excess-charge">PHP 0.00</td>
-            </tr>
-            <tr class="total-row">
-              <td>TOTAL AMOUNT DUE:</td>
-              <td class="text-right" id="rdg-calc-total-due">PHP 100.00</td>
-            </tr>
-          </table>
-
-          <div class="calc-explanation-box" id="rdg-calc-explanation">
-            Minimum monthly charge of PHP 100.00 covers water consumption up to 10 cubic meters (m³).
-          </div>
-
-          <div id="rdg-excess-warning-box" class="calc-warning-box hidden"></div>
-        </div>
-
-        <!-- Reading History for this Consumer (Phase 4, Section 12) -->
-        <div class="calc-summary-card">
-          <h4>Consumer Reading History</h4>
-          <div id="consumer-reading-history-list">
-            <!-- Dynamically populated -->
-          </div>
-        </div>
-
-        <!-- Optional Meter Photo -->
-        <div class="photo-capture-box" id="rdg-photo-capture-box">
-          <div id="rdg-photo-prompt" onclick="document.getElementById('rdg-photo-input').click()">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
-              <circle cx="12" cy="13" r="3"/>
-            </svg>
-            <div style="font-size: 12px; font-weight: 700; color: var(--primary); margin-top: 2px;">
-              Capture Meter Photo Proof (Optional)
+          <!-- Live Reactive Summary Bar -->
+          <div class="reading-live-summary-bar" style="display: flex; justify-content: space-between; align-items: center; background: rgba(2, 132, 199, 0.12); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: var(--radius-sm); padding: 8px 12px; margin-top: 8px;">
+            <div>
+              <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-muted); display: block;">WATER CONSUMPTION</span>
+              <strong id="rdg-quick-usage" style="font-size: 15px; color: var(--primary-light); font-variant-numeric: tabular-nums;">0 m³</strong>
             </div>
-            <div style="font-size: 10.5px; color: var(--text-muted);">
-              Automatically watermarked with GPS coordinates, timestamp, and meter number
-            </div>
-          </div>
-          <input type="file" id="rdg-photo-input" accept="image/*" capture="environment" style="display: none;">
-          
-          <div id="rdg-photo-preview-wrap" class="hidden" style="margin-top: 8px; position: relative;">
-            <img id="rdg-photo-preview" alt="Meter Proof" style="max-width: 100%; max-height: 180px; border-radius: var(--radius-xs); border: 1px solid var(--border); display: block; margin: 0 auto;">
-            <div style="display: flex; gap: 8px; justify-content: center; margin-top: 8px;">
-              <button type="button" id="btn-retake-photo" class="btn btn-xs btn-outline">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                Retake
-              </button>
-              <button type="button" id="btn-delete-photo" class="btn btn-xs btn-outline" style="color: var(--danger-text); border-color: rgba(239, 68, 68, 0.4);">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                Delete Photo
-              </button>
+            <div style="text-align: right;">
+              <span style="font-size: 10px; font-weight: 600; letter-spacing: 0.04em; color: var(--text-muted); display: block;">TOTAL AMOUNT DUE</span>
+              <strong id="rdg-quick-due" style="font-size: 15px; color: #FFFFFF; font-variant-numeric: tabular-nums;">PHP 100.00</strong>
             </div>
           </div>
         </div>
 
-        <!-- Notes -->
-        <div class="form-group">
-          <label for="rdg-notes-input">Field Notes / Meter Inspection Remarks:</label>
-          <input type="text" id="rdg-notes-input" class="form-control" placeholder="Optional remarks">
-        </div>
-
-        <!-- Submit Actions -->
-        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;">
+        <!-- Primary Action Buttons (Always Accessible Immediately) -->
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px;">
           <button id="btn-save-print-reading" class="btn btn-primary" style="padding: 11px; font-size: 13px;">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
-            Save & Print Thermal Receipt
+            Save &amp; Print Thermal Receipt
           </button>
           <button id="btn-save-reading" class="btn btn-outline" style="padding: 9px;">
             Save Reading to Database
           </button>
+        </div>
+
+        <!-- PROGRESSIVE DISCLOSURE 1: Tariff Breakdown & Computation Details -->
+        <div class="blueprint-disclosure" id="disclosure-tariff">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="16" y1="14" x2="16" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></svg>
+              <span>Tariff Breakdown &amp; Calculation</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="blueprint-tag" id="rdg-disclosure-due-tag">PHP 100.00</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="disclosure-body">
+            <div class="calc-summary-card" style="margin: 0; box-shadow: none; border: none; background: transparent; padding: 0;">
+              <table class="calc-table">
+                <tr>
+                  <td>Previous Reading:</td>
+                  <td class="text-right" id="rdg-calc-prev">0 m³</td>
+                </tr>
+                <tr>
+                  <td>Current Reading:</td>
+                  <td class="text-right" id="rdg-calc-curr">0 m³</td>
+                </tr>
+                <tr>
+                  <td>Water Consumption (Current − Previous):</td>
+                  <td class="text-right bold text-primary" id="rdg-calc-usage">0 m³</td>
+                </tr>
+                <tr>
+                  <td>Minimum Monthly Charge (up to 10 m³):</td>
+                  <td class="text-right" id="rdg-calc-min-charge">PHP 100.00</td>
+                </tr>
+                <tr>
+                  <td>Excess Consumption Charge:</td>
+                  <td class="text-right" id="rdg-calc-excess-charge">PHP 0.00</td>
+                </tr>
+                <tr class="total-row">
+                  <td>TOTAL AMOUNT DUE:</td>
+                  <td class="text-right" id="rdg-calc-total-due">PHP 100.00</td>
+                </tr>
+              </table>
+
+              <div class="calc-explanation-box" id="rdg-calc-explanation" style="margin-top: 8px;">
+                Minimum monthly charge of PHP 100.00 covers water consumption up to 10 cubic meters (m³).
+              </div>
+
+              <div id="rdg-excess-warning-box" class="calc-warning-box hidden"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PROGRESSIVE DISCLOSURE 2: Meter Replacement & Rollover Override -->
+        <div class="blueprint-disclosure" id="disclosure-override">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6"/><path d="M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              <span>Meter Rollover &amp; Replacement Override</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="blueprint-tag" style="color: var(--text-muted); border-color: var(--border);">STANDARD</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="disclosure-body">
+            <div style="padding: 4px 0;">
+              <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 11px; color: var(--text-secondary); cursor: pointer;">
+                <input type="checkbox" id="rdg-override-checkbox" style="margin-top: 2px;">
+                <span>
+                  <strong>Enable Rollover / Replacement Mode:</strong> Check this if physical water meter dial reset back to 0 or if the old meter was replaced by a new unit.
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- PROGRESSIVE DISCLOSURE 3: Consumer Reading History Log -->
+        <div class="blueprint-disclosure" id="disclosure-history">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              <span>Consumer Reading History</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="blueprint-tag">PRIOR MONTHS</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="disclosure-body">
+            <div id="consumer-reading-history-list" style="padding: 4px 0;">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <!-- PROGRESSIVE DISCLOSURE 4: Photo Proof & Field Notes -->
+        <div class="blueprint-disclosure" id="disclosure-proof">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              <span>Photo Proof &amp; Inspection Remarks</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="blueprint-tag" style="color: var(--text-muted); border-color: var(--border);">OPTIONAL</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="disclosure-body">
+            <!-- Optional Meter Photo -->
+            <div class="photo-capture-box" id="rdg-photo-capture-box" style="margin-bottom: 8px;">
+              <div id="rdg-photo-prompt" onclick="document.getElementById('rdg-photo-input').click()">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                  <circle cx="12" cy="13" r="3"/>
+                </svg>
+                <div style="font-size: 12px; font-weight: 700; color: var(--primary); margin-top: 2px;">
+                  Capture Meter Photo Proof
+                </div>
+                <div style="font-size: 10.5px; color: var(--text-muted);">
+                  Watermarked with GPS coordinates, timestamp, and meter number
+                </div>
+              </div>
+              <input type="file" id="rdg-photo-input" accept="image/*" capture="environment" style="display: none;">
+              
+              <div id="rdg-photo-preview-wrap" class="hidden" style="margin-top: 8px; position: relative;">
+                <img id="rdg-photo-preview" alt="Meter Proof" style="max-width: 100%; max-height: 180px; border-radius: var(--radius-xs); border: 1px solid var(--border); display: block; margin: 0 auto;">
+                <div style="display: flex; gap: 8px; justify-content: center; margin-top: 8px;">
+                  <button type="button" id="btn-retake-photo" class="btn btn-xs btn-outline">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Retake
+                  </button>
+                  <button type="button" id="btn-delete-photo" class="btn btn-xs btn-outline" style="color: var(--danger-text); border-color: rgba(239, 68, 68, 0.4);">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    Delete Photo
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Notes -->
+            <div class="form-group" style="margin-bottom: 4px;">
+              <label for="rdg-notes-input" style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block;">Field Notes / Meter Inspection Remarks:</label>
+              <input type="text" id="rdg-notes-input" class="form-control" placeholder="Optional remarks (e.g. meter glass cloudy, leak reported)">
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -592,76 +669,107 @@
       </div>
 
       <div class="settings-content">
-        <!-- Master Consumer & Meter Directory Section -->
-        <div class="settings-section-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <h3 style="margin: 0;">Registered Consumers &amp; Water Meters</h3>
-            <span id="consumer-records-count-badge" class="badge badge-success">0 CONSUMERS</span>
+        <!-- ACCORDION 1: Master Consumer & Meter Directory (Open by Default) -->
+        <div class="blueprint-disclosure open" id="records-accordion-directory">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <span>1 · Registered Consumers &amp; Water Meters</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="consumer-records-count-badge" class="badge badge-success">0 CONSUMERS</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
           </div>
-          <div style="margin-bottom: 8px;">
-            <input type="text" id="consumer-search-input" class="form-control" placeholder="Search consumer name, account #, meter #, or zone..." style="font-size: 12px;">
-          </div>
-          <div id="consumers-list-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto;">
-            <!-- Dynamically populated with consumer cards, pin statuses, read meter and delete actions -->
+          <div class="disclosure-body">
+            <div style="margin-bottom: 8px;">
+              <input type="text" id="consumer-search-input" class="form-control" placeholder="Search consumer name, account #, meter #, or zone..." style="font-size: 12px;">
+            </div>
+            <div id="consumers-list-container" style="display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto;">
+              <!-- Dynamically populated with consumer cards, pin statuses, read meter and delete actions -->
+            </div>
           </div>
         </div>
 
-        <!-- Zone-Separated & Period-Filtered Records Export (Today vs This Month, PDF & Excel + Office PC Upload) -->
-        <div class="settings-section-card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <h3 style="margin: 0;">Office PC Sync &amp; Zone Records Export</h3>
-            <span id="office-sync-status-badge" class="badge badge-success">READY</span>
-          </div>
-          <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 10px;">
-            Upload field readings to the Office PC or export records separated by zone and billing period.
-          </p>
-
-          <!-- Step 1: Upload to Office PC / Pull on Office PC -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
-            <button type="button" id="btn-upload-readings-to-pc" class="btn btn-sm btn-primary">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              Upload Readings to PC
-            </button>
-            <button type="button" id="btn-pull-readings-from-pc" class="btn btn-sm btn-outline">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              Load PC Office Records
-            </button>
-          </div>
-
-          <!-- Step 2: Filter Options (Records I Made Today | Records of This Month | All) -->
-          <div style="margin-bottom: 10px;">
-            <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
-              1 · Record Period
-            </label>
-            <div id="records-period-toggle" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; background: var(--surface-alt); padding: 2px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-              <button type="button" class="btn btn-xs records-period-btn active" data-period="today" style="background: var(--primary); color: #FFF; font-weight: 600; height: 28px; border-radius: var(--radius-xs);">
-                Records Today
-              </button>
-              <button type="button" class="btn btn-xs records-period-btn" data-period="month" style="background: transparent; color: var(--text-secondary); font-weight: 500; height: 28px; border-radius: var(--radius-xs);">
-                This Month
-              </button>
-              <button type="button" class="btn btn-xs records-period-btn" data-period="all" style="background: transparent; color: var(--text-secondary); font-weight: 500; height: 28px; border-radius: var(--radius-xs);">
-                All Records
-              </button>
+        <!-- ACCORDION 2: Office PC Sync & Zone Records Export -->
+        <div class="blueprint-disclosure" id="records-accordion-sync">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              <span>2 · Office PC Sync &amp; Zone Export</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span id="office-sync-status-badge" class="badge badge-success">READY</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
             </div>
           </div>
+          <div class="disclosure-body">
+            <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 10px;">
+              Upload field readings to the Office PC or export records separated by zone and billing period.
+            </p>
 
-          <!-- Step 3: Zone-Separated Download Cards (Zone 1, Zone 2, Zone 3, Zone 4) -->
-          <div style="margin-bottom: 12px;">
-            <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 6px;">
-              2 · Export by Zone (PDF / Excel)
-            </label>
-            <div id="zone-export-cards-container" style="display: flex; flex-direction: column; gap: 6px;">
-              <!-- Populated dynamically for Zone 1, Zone 2, Zone 3, Zone 4, and All Zones -->
+            <!-- Step 1: Upload to Office PC / Pull on Office PC -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px;">
+              <button type="button" id="btn-upload-readings-to-pc" class="btn btn-sm btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Upload Readings to PC
+              </button>
+              <button type="button" id="btn-pull-readings-from-pc" class="btn btn-sm btn-outline">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Load PC Office Records
+              </button>
+            </div>
+
+            <!-- Step 2: Filter Options (Records I Made Today | Records of This Month | All) -->
+            <div style="margin-bottom: 10px;">
+              <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
+                Record Period
+              </label>
+              <div id="records-period-toggle" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; background: var(--surface-alt); padding: 2px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+                <button type="button" class="btn btn-xs records-period-btn active" data-period="today" style="background: var(--primary); color: #FFF; font-weight: 600; height: 28px; border-radius: var(--radius-xs);">
+                  Records Today
+                </button>
+                <button type="button" class="btn btn-xs records-period-btn" data-period="month" style="background: transparent; color: var(--text-secondary); font-weight: 500; height: 28px; border-radius: var(--radius-xs);">
+                  This Month
+                </button>
+                <button type="button" class="btn btn-xs records-period-btn" data-period="all" style="background: transparent; color: var(--text-secondary); font-weight: 500; height: 28px; border-radius: var(--radius-xs);">
+                  All Records
+                </button>
+              </div>
+            </div>
+
+            <!-- Step 3: Zone-Separated Download Cards (Zone 1, Zone 2, Zone 3, Zone 4) -->
+            <div style="margin-bottom: 6px;">
+              <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 6px;">
+                Export by Zone (PDF / Excel)
+              </label>
+              <div id="zone-export-cards-container" style="display: flex; flex-direction: column; gap: 6px;">
+                <!-- Populated dynamically for Zone 1, Zone 2, Zone 3, Zone 4, and All Zones -->
+              </div>
             </div>
           </div>
+        </div>
 
-          <!-- Step 4: Individual Consumer / Water Meter Owner Reading Ledger -->
-          <div style="border-top: 1px solid var(--border); padding-top: 10px;">
-            <label style="font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.04em; display: block; margin-bottom: 5px;">
-              3 · Individual Consumer Reading Table
-            </label>
-            <select id="export-consumer-select" class="form-control" style="margin-bottom: 6px;">
+        <!-- ACCORDION 3: Individual Consumer Ledger Table -->
+        <div class="blueprint-disclosure" id="records-accordion-ledger">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              <span>3 · Individual Consumer Reading Table</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="blueprint-tag">LEDGER</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="disclosure-body">
+            <select id="export-consumer-select" class="form-control" style="margin-bottom: 8px;">
               <option value="">-- Select Consumer / Water Meter Owner --</option>
             </select>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
@@ -677,19 +785,32 @@
           </div>
         </div>
 
-        <!-- Official Utility Reports Section -->
-        <div class="settings-section-card">
-          <h3>Official Association Reports (PDF)</h3>
-          <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">
-            Generate printable A4 billing summaries and master directories.
-          </p>
-          <div style="display: flex; flex-direction: column; gap: 6px;">
-            <button id="btn-report-billing-summary" class="btn btn-sm btn-primary">
-              Generate Monthly Billing Summary
-            </button>
-            <button id="btn-report-consumer-directory" class="btn btn-sm btn-outline">
-              Generate Consumer &amp; Meter Directory
-            </button>
+        <!-- ACCORDION 4: Official Association Reports (PDF) -->
+        <div class="blueprint-disclosure" id="records-accordion-reports">
+          <div class="disclosure-header" onclick="this.parentElement.classList.toggle('open')">
+            <div class="disclosure-title-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>4 · Official Association Reports (PDF)</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="blueprint-tag">PRINTABLE A4</span>
+              <div class="disclosure-chevron">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+              </div>
+            </div>
+          </div>
+          <div class="disclosure-body">
+            <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">
+              Generate printable A4 billing summaries and master directories.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <button id="btn-report-billing-summary" class="btn btn-sm btn-primary">
+                Generate Monthly Billing Summary
+              </button>
+              <button id="btn-report-consumer-directory" class="btn btn-sm btn-outline">
+                Generate Consumer &amp; Meter Directory
+              </button>
+            </div>
           </div>
         </div>
       </div>

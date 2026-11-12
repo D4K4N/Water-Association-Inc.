@@ -2801,3 +2801,262 @@ button[disabled].btn-disabled-safety {
   vertical-align: middle;
   text-transform: uppercase;
 }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   BLUEPRINT DRAFTING GRID & SPECKLED GRAPHITE DESIGN SYSTEM
+   Professional engineering aesthetic with progressive disclosure & spring physics
+   ═════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --blueprint-grid-minor: rgba(56, 189, 248, 0.04);
+  --blueprint-grid-major: rgba(56, 189, 248, 0.085);
+  --blueprint-line: rgba(56, 189, 248, 0.16);
+  --blueprint-line-glow: rgba(56, 189, 248, 0.28);
+  --blueprint-accent: #38BDF8;
+  --graphite-base: #0B0F17;
+  --graphite-surface: #111724;
+  --graphite-elevated: #151D2C;
+  --spring-interruptible: cubic-bezier(0.16, 1.15, 0.45, 1);
+  --spring-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Blueprint Grid + Speckled Graphite Noise Texture */
+#app-container,
+.app-view,
+.view-scroll-content,
+.settings-content,
+.directory-scroll-list {
+  background-color: var(--graphite-base);
+  background-image: 
+    linear-gradient(var(--blueprint-grid-major) 1px, transparent 1px),
+    linear-gradient(90deg, var(--blueprint-grid-major) 1px, transparent 1px),
+    linear-gradient(var(--blueprint-grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--blueprint-grid-minor) 1px, transparent 1px),
+    url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.8 0 0 0 0 0.85 0 0 0 0 0.95 0 0 0 0.038 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  background-size: 100px 100px, 100px 100px, 20px 20px, 20px 20px, 200px 200px;
+  background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px, 0 0;
+  background-attachment: local;
+}
+
+/* Blueprint Technical Cards */
+.consumer-badge-card,
+.reading-entry-card,
+.calc-summary-card,
+.settings-section-card,
+.bill-card,
+.blueprint-card {
+  position: relative;
+  background: rgba(17, 23, 36, 0.9);
+  border: 1px solid var(--blueprint-line) !important;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.22s var(--spring-interruptible);
+}
+
+/* Precision Corner Drafting Ticks */
+.consumer-badge-card::before,
+.settings-section-card::before,
+.bill-card::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 6px;
+  height: 6px;
+  border-top: 2px solid var(--blueprint-accent);
+  border-left: 2px solid var(--blueprint-accent);
+  pointer-events: none;
+  border-top-left-radius: 2px;
+}
+
+.consumer-badge-card::after,
+.settings-section-card::after,
+.bill-card::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-bottom: 2px solid var(--blueprint-accent);
+  border-right: 2px solid var(--blueprint-accent);
+  pointer-events: none;
+  border-bottom-right-radius: 2px;
+}
+
+/* Technical Monospace & Spec Badges */
+.blueprint-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--blueprint-accent);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.03em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ─── Interruptible Button Animations ────────────────────────────────────── */
+.btn,
+.nav-item,
+.stepper-btn,
+.burger-menu-btn,
+.map-layer-fab,
+.billing-mode-btn,
+.records-period-btn,
+.map-filter-chip,
+.zone-chip,
+.quick-action-btn,
+.disclosure-header {
+  position: relative;
+  touch-action: manipulation;
+  --press-scale: 1;
+  --press-y: 0px;
+  transform: scale(var(--press-scale)) translateY(var(--press-y));
+  transition: transform 0.22s var(--spring-interruptible), filter 0.16s ease, box-shadow 0.22s ease, background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+  will-change: transform;
+}
+
+/* Fluid interruptible compression on press */
+.btn:active:not(:disabled),
+.nav-item:active,
+.stepper-btn:active,
+.burger-menu-btn:active,
+.map-layer-fab:active,
+.billing-mode-btn:active,
+.records-period-btn:active {
+  --press-scale: 0.95;
+  --press-y: 1.5px;
+  filter: brightness(1.12);
+}
+
+.btn-primary:active:not(:disabled) {
+  box-shadow: 0 0 14px rgba(2, 132, 199, 0.5) !important;
+}
+
+/* Bottom Navigation Physics & Indicator */
+.nav-item {
+  transition: color 0.18s ease, transform 0.22s var(--spring-interruptible);
+}
+.nav-item svg {
+  transition: transform 0.24s var(--spring-interruptible), stroke 0.18s ease;
+}
+.nav-item.active svg {
+  transform: scale(1.15) translateY(-1px);
+}
+.nav-item:active svg {
+  transform: scale(0.92);
+}
+
+/* ─── Progressive Disclosure Components ──────────────────────────────────── */
+.blueprint-disclosure {
+  background: rgba(17, 23, 36, 0.85);
+  border: 1px solid var(--blueprint-line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.22s ease, box-shadow 0.22s ease;
+  margin-bottom: 8px;
+}
+.blueprint-disclosure:hover {
+  border-color: rgba(56, 189, 248, 0.32);
+}
+.blueprint-disclosure.open {
+  border-color: rgba(56, 189, 248, 0.42);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.disclosure-header {
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(15, 20, 31, 0.6);
+  border-bottom: 1px solid transparent;
+  transition: background 0.16s ease, border-color 0.2s ease;
+}
+.blueprint-disclosure.open .disclosure-header {
+  border-bottom-color: var(--blueprint-line);
+  background: rgba(19, 27, 42, 0.9);
+}
+.disclosure-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.disclosure-title-wrap svg {
+  color: var(--blueprint-accent);
+  flex-shrink: 0;
+}
+.disclosure-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  transition: transform 0.26s var(--spring-interruptible), color 0.18s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.blueprint-disclosure.open .disclosure-chevron {
+  transform: rotate(180deg);
+  color: var(--blueprint-accent);
+}
+
+.disclosure-body {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.34s var(--spring-smooth), opacity 0.26s ease, padding 0.34s var(--spring-smooth);
+  padding: 0 12px;
+}
+.blueprint-disclosure.open .disclosure-body {
+  max-height: 1400px;
+  opacity: 1;
+  padding: 12px;
+}
+
+/* Card Progressive Disclosure (Folder List "Show Details") */
+.bill-card .card-details-drawer {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.32s var(--spring-smooth), opacity 0.24s ease, padding 0.32s var(--spring-smooth);
+  padding: 0;
+}
+.bill-card.details-expanded .card-details-drawer {
+  max-height: 600px;
+  opacity: 1;
+  padding-top: 8px;
+}
+.bill-card .btn-toggle-details svg {
+  transition: transform 0.24s var(--spring-interruptible);
+}
+.bill-card.details-expanded .btn-toggle-details svg {
+  transform: rotate(180deg);
+}
+
+/* ─── Shared Element Transition Ghost ────────────────────────────────────── */
+.shared-element-ghost {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+  background: rgba(17, 24, 39, 0.95);
+  border: 1px solid var(--blueprint-accent);
+  box-shadow: 0 8px 30px rgba(2, 132, 199, 0.35);
+  overflow: hidden;
+  transform-origin: top left;
+  will-change: transform, opacity, border-radius;
+}
+

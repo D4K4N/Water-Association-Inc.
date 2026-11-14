@@ -114,7 +114,7 @@ class ReportsEngine {
       const curr = Number(r.currentReading ?? 0);
       const cons = Number(r.consumption ?? Math.max(0, curr - prev));
       const excess = Math.max(0, cons - 10);
-      const estBill = 100 + excess * 15;
+      const estBill = cons <= 0 ? 0.00 : (100 + excess * 15);
 
       rows.push({
         id: r.id,
@@ -158,7 +158,7 @@ class ReportsEngine {
           previousReading: initRdg,
           currentReading: initRdg,
           consumption: 0,
-          totalAmountDue: 100.00,
+          totalAmountDue: 0.00,
           amountPaid: 0,
           paymentStatus: 'REGISTERED'
         });

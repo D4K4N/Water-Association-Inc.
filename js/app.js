@@ -46,12 +46,21 @@ class WaterBillingApp {
     // 1. Initialize DB and seed initial sample data if empty
     await window.db.ready();
 
-    // Automatic clean slate wipe:
-    // Ensures that any existing browser with old mock pins and mock records starts 100% fresh
+    // Automatic clean slate guard:
+    // Only clears legacy unpinned demo seed data (Mark Zuckerberg / Pedro Penduko) if present.
+    // NEVER touches or wipes real user-pinned houses, water meters, or imported JSON backups!
     const CLEAN_SLATE_KEY = 'dicklum_app_fresh_slate_v5';
     if (!localStorage.getItem(CLEAN_SLATE_KEY)) {
-      console.log('Activating fresh utility state: wiping all previous mock pins and records...');
-      await window.db.wipeCleanSlate();
+      const existingConsumers = await window.db.getAll('consumers');
+      const existingMeters = await window.db.getAll('meters');
+      const hasRealUserPins = existingConsumers.some(c => c.householdLat != null && c.householdLng != null) ||
+                              existingMeters.some(m => m.meterLat != null && m.meterLng != null);
+      const isLegacyMockSeed = !hasRealUserPins &&
+                               existingConsumers.some(c => c.name === 'Mark Zuckerberg' || c.name === 'Pedro Penduko');
+      if (isLegacyMockSeed) {
+        console.log('Clearing legacy unpinned demo seed data...');
+        await window.db.wipeCleanSlate();
+      }
       localStorage.setItem(CLEAN_SLATE_KEY, 'true');
     }
 
@@ -1743,7 +1752,7 @@ class WaterBillingApp {
         billingPeriod: this.activeBillingCode,
         previousReading: prev,
         currentReading: curr,
-        readerName: this.cachedSettings.reader ? this.cachedSettings.reader.name : 'R. Fernandez',
+        readerName: (this.cachedSettings.reader && this.cachedSettings.reader.name) || '',
         notes: notes,
         isRolloverOverride: isOverride,
         photoDataUrl: photoDataUrl
@@ -2346,7 +2355,7 @@ class WaterBillingApp {
     document.getElementById('pay-amount-due').textContent = `PHP ${bill.totalAmountDue.toFixed(2)}`;
     document.getElementById('pay-amount-input').value = bill.totalAmountDue;
     document.getElementById('pay-or-input').value = `OR-${Date.now().toString().slice(-6)}`;
-    document.getElementById('pay-collector-input').value = this.cachedSettings.reader ? this.cachedSettings.reader.name : 'R. Fernandez';
+    document.getElementById('pay-collector-input').value = (this.cachedSettings.reader && this.cachedSettings.reader.name) || 'Cashier';
 
     document.getElementById('modal-record-payment').classList.add('active');
   }
@@ -4425,7 +4434,7 @@ class WaterBillingApp {
           <div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface); color:var(--text-primary); border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:11.5px;">
             <div>
               <strong>${r.readingDate ? new Date(r.readingDate).toLocaleDateString() : 'N/A'}</strong>
-              <span style="color:var(--text-muted); margin-left:6px; font-size:10px;">Period: ${r.billingPeriod || ''} • Reader: ${r.readerName || 'R. Fernandez'}</span>
+              <span style="color:var(--text-muted); margin-left:6px; font-size:10px;">Period: ${r.billingPeriod || ''}</span>
             </div>
             <div>
               <span style="color:var(--text-muted); font-size:10.5px;">Prev ${Number(r.previousReading || 0).toLocaleString()} → Curr</span>
@@ -4952,35 +4961,15 @@ class WaterBillingApp {
   }
 
   renderStats() {
-    const totalConsumers = this.cachedConsumers.length;
-    const totalMeters = this.cachedMeters.length;
-    const totalBills = this.cachedBills.length;
-
-    const elTotalC = document.getElementById('stat-total-consumers');
-    if (elTotalC) elTotalC.textContent = totalConsumers;
-    const elTotalM = document.getElementById('stat-total-meters');
-    if (elTotalM) elTotalM.textContent = totalMeters;
-    const elReadings = document.getElementById('stat-month-readings');
-    if (elReadings) elReadings.textContent = totalBills;
+    const badge = document.getElementById('consumer-records-count-badge');
+    if (badge) {
+      badge.textContent = `${this.cachedConsumers.length} CONSUMERS`;
+    }
   }
 
   // --- Event Binding ---
 
   bindNavigationEvents() {
-    const cardMapping = document.getElementById('card-mode-mapping');
-    if (cardMapping) {
-      cardMapping.addEventListener('click', () => {
-        this.switchView('view-map');
-      });
-    }
-
-    const cardReading = document.getElementById('card-mode-reading');
-    if (cardReading) {
-      cardReading.addEventListener('click', () => {
-        this.switchView('view-reading');
-      });
-    }
-
     document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         this.setMode(e.target.dataset.mode);

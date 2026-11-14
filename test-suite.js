@@ -114,10 +114,10 @@ class MockWaterDB {
 
   async getZones() {
     const defaultZones = [
-      'Zone 1 - Dicklum Central',
-      'Zone 2 - San Francisco',
-      'Zone 3 - Sayre Highway & Riverside',
-      'Zone 4 - Upper Dicklum'
+      'Zone 1',
+      'Zone 2',
+      'Zone 3',
+      'Zone 4'
     ];
     const saved = await this.getSetting('zones');
     if (Array.isArray(saved) && saved.length > 0) {
@@ -301,10 +301,11 @@ async function main() {
   });
 
   // Test 2: Zero consumption
-  runTest('Zero Consumption: 1954 - 1954 = 0 m³ -> PHP 100.00 Minimum Charge', () => {
+  runTest('Zero Consumption: 1954 - 1954 = 0 m³ -> PHP 0.00 Total Due', () => {
     const calc = billingEngine.calculate(1954, 1954);
     assert.strictEqual(calc.consumption, 0, 'Consumption must be 0 m³');
-    assert.strictEqual(calc.totalAmountDue, 100.00, 'Minimum monthly charge applies even for 0 m³');
+    assert.strictEqual(calc.minimumCharge, 0.00, 'Minimum charge must be PHP 0.00 when consumption is 0 m³');
+    assert.strictEqual(calc.totalAmountDue, 0.00, 'Total due must be PHP 0.00 when consumption is 0 m³');
   });
 
   // Test 3: Exactly at allowance limit (10 m³)
@@ -440,7 +441,10 @@ async function main() {
     };
     await window.db.put('bills', bill);
 
-    // Simulate printing
+    // Simulate connected Xprinter XP-P300 hardware
+    printerDriver.isConnected = true;
+    printerDriver.isSimulated = false;
+    printerDriver._sendRawBytes = async () => {};
     await printerDriver.printBill(bill, { name: 'Test Consumer', accountNo: 'DWA-P1', zone: 'Zone 2' }, { meterNo: 'WM-001' }, {});
 
     const updatedBill = await window.db.get('bills', bill.id);
@@ -538,7 +542,7 @@ async function main() {
   });
 
   // Test 13: ESC/POS Thermal Receipt Command Synthesis
-  runTest('Hardware Driver: ESC/POS binary command generation (58mm and 80mm)', () => {
+  await runAsyncTest('Hardware Driver: ESC/POS binary command generation (58mm and 80mm)', async () => {
     const sampleBill = {
       id: 'BILL-202610-001',
       billDate: '2026-10-24',
@@ -551,19 +555,19 @@ async function main() {
       excessCubicMeters: 0,
       excessAmount: 0.00,
       maintenanceFee: 0.00,
-      totalAmountDue: 100.00,
-      readerName: 'R. Fernandez'
+      totalAmountDue: 100.00
     };
     const sampleConsumer = {
       name: 'Juan Carlos Dela Cruz',
       accountNo: 'DWA-2026-001',
-      zone: 'Zone 2 - San Francisco'
+      zone: 'Zone 2'
     };
     const sampleMeter = { meterNo: 'WM-2024-001' };
 
     // 58mm roll test
     printerDriver.setPaperWidth('58mm');
-    const bytes58 = printerDriver.generateEscPosCommands(sampleBill, sampleConsumer, sampleMeter, {});
+    printerDriver.hasAutoCutter = true;
+    const bytes58 = await printerDriver.generateEscPosCommands(sampleBill, sampleConsumer, sampleMeter, {});
     assert.ok(bytes58 instanceof Uint8Array, 'Output must be Uint8Array');
     assert.ok(bytes58.length > 100, 'Byte sequence must have content');
 
@@ -581,17 +585,18 @@ async function main() {
     // Verify text contents inside the byte stream
     const decoder = new TextDecoder();
     const decodedText = decoder.decode(bytes58);
-    assert.ok(decodedText.includes('DICKLUM WATER'), 'Must contain Association header');
+    assert.ok(decodedText.includes('Dicklum Water Association'), 'Must contain Association header');
     assert.ok(decodedText.includes('Juan Carlos Dela Cruz'), 'Must contain consumer name');
-    assert.ok(decodedText.includes('1,954 m3'), 'Must contain previous reading');
-    assert.ok(decodedText.includes('1,957 m3'), 'Must contain current reading');
-    assert.ok(decodedText.includes('3 m3'), 'Must contain consumption');
-    assert.ok(decodedText.includes('TOTAL: PHP 100.00'), 'Must contain total due');
-    assert.ok(decodedText.includes('THIS IS NOT AN OFFICIAL RECEIPT'), 'Must contain official notice');
+    assert.ok(decodedText.includes('1,954'), 'Must contain previous reading');
+    assert.ok(decodedText.includes('1,957'), 'Must contain current reading');
+    assert.ok(decodedText.includes('3 cubic meters'), 'Must contain consumption');
+    assert.ok(decodedText.includes('PHP 100.00'), 'Must contain total due');
+    assert.ok(decodedText.includes('Notice of Disconnection'), 'Must contain official reminders');
+    assert.ok(!decodedText.includes('R. Fernandez'), 'Must not contain removed reader name');
 
     // 80mm roll test
     printerDriver.setPaperWidth('80mm');
-    const bytes80 = printerDriver.generateEscPosCommands(sampleBill, sampleConsumer, sampleMeter, {});
+    const bytes80 = await printerDriver.generateEscPosCommands(sampleBill, sampleConsumer, sampleMeter, {});
     assert.ok(bytes80.length > bytes58.length, '80mm with 48 chars should produce wider dividers');
   });
 
@@ -693,55 +698,55 @@ async function main() {
     // 1. Initial zones contain default 4 zones
     const initialZones = await window.db.getZones();
     assert.strictEqual(initialZones.length, 4);
-    assert.ok(initialZones.includes('Zone 1 - Dicklum Central'));
-    assert.ok(initialZones.includes('Zone 2 - San Francisco'));
-    assert.ok(initialZones.includes('Zone 3 - Sayre Highway & Riverside'));
-    assert.ok(initialZones.includes('Zone 4 - Upper Dicklum'));
+    assert.ok(initialZones.includes('Zone 1'));
+    assert.ok(initialZones.includes('Zone 2'));
+    assert.ok(initialZones.includes('Zone 3'));
+    assert.ok(initialZones.includes('Zone 4'));
 
     // 2. Add new custom zone / purok dynamically
-    const updatedZones = await window.db.addZone('Zone 5 - Riverside Purok Extension');
+    const updatedZones = await window.db.addZone('Zone 5');
     assert.strictEqual(updatedZones.length, 5);
-    assert.ok(updatedZones.includes('Zone 5 - Riverside Purok Extension'));
+    assert.ok(updatedZones.includes('Zone 5'));
 
     // 3. Create clusters in different zones
     const clusterZ1 = await window.db.saveCluster({
       name: 'Manifold Alpha (Purok 1 Crossing)',
-      zone: 'Zone 1 - Dicklum Central',
+      zone: 'Zone 1',
       lat: 8.3688,
       lng: 124.8630
     });
 
     const clusterZ2 = await window.db.saveCluster({
       name: 'Manifold Beta (San Francisco Curve)',
-      zone: 'Zone 2 - San Francisco',
+      zone: 'Zone 2',
       lat: 8.3690,
       lng: 124.8635
     });
 
     const clusterZ5 = await window.db.saveCluster({
       name: 'Manifold Gamma (Riverside Extension)',
-      zone: 'Zone 5 - Riverside Purok Extension',
+      zone: 'Zone 5',
       lat: 8.3700,
       lng: 124.8640
     });
 
     // 4. Retrieve clusters filtered by zone
-    const z1Clusters = await window.db.getClustersByZone('Zone 1 - Dicklum Central');
+    const z1Clusters = await window.db.getClustersByZone('Zone 1');
     assert.strictEqual(z1Clusters.length, 1);
     assert.strictEqual(z1Clusters[0].name, 'Manifold Alpha (Purok 1 Crossing)');
 
-    const z2Clusters = await window.db.getClustersByZone('Zone 2 - San Francisco');
+    const z2Clusters = await window.db.getClustersByZone('Zone 2');
     assert.strictEqual(z2Clusters.length, 1);
     assert.strictEqual(z2Clusters[0].name, 'Manifold Beta (San Francisco Curve)');
 
-    const z5Clusters = await window.db.getClustersByZone('Zone 5 - Riverside Purok Extension');
+    const z5Clusters = await window.db.getClustersByZone('Zone 5');
     assert.strictEqual(z5Clusters.length, 1);
     assert.strictEqual(z5Clusters[0].name, 'Manifold Gamma (Riverside Extension)');
 
     // 5. Deleting a zone works cleanly
-    const finalZones = await window.db.deleteZone('Zone 5 - Riverside Purok Extension');
+    const finalZones = await window.db.deleteZone('Zone 5');
     assert.strictEqual(finalZones.length, 4);
-    assert.ok(!finalZones.includes('Zone 5 - Riverside Purok Extension'));
+    assert.ok(!finalZones.includes('Zone 5'));
   });
 
   console.log('\n================================================================');

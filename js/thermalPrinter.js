@@ -91,6 +91,7 @@ class ThermalPrinterDriver {
 
   _loadSavedConfig() {
     try {
+      if (typeof localStorage === 'undefined') return;
       const raw = localStorage.getItem('dicklum_xprinter_config_v1');
       if (!raw) return;
       const cfg = JSON.parse(raw);

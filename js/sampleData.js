@@ -403,7 +403,7 @@ const SAMPLE_SETTINGS = [
   {
     key: 'reader',
     value: {
-      name: 'R. Fernandez',
+      name: '',
       id: 'DWA-FO-03',
       role: 'Field Meter Reader & Operations Officer',
       contact: '0917-888-9921'
@@ -432,10 +432,10 @@ const SAMPLE_SETTINGS = [
   {
     key: 'zones',
     value: [
-      'Zone 1 - Dicklum Central',
-      'Zone 2 - San Francisco',
-      'Zone 3 - Sayre Highway & Riverside',
-      'Zone 4 - Upper Dicklum'
+      'Zone 1',
+      'Zone 2',
+      'Zone 3',
+      'Zone 4'
     ]
   }
 ];

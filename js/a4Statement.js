@@ -96,10 +96,6 @@ class A4StatementGenerator {
                 <td class="lbl">Payment Due Date:</td>
                 <td class="val text-danger bold">${bill.dueDate}</td>
               </tr>
-              <tr>
-                <td class="lbl">Field Meter Reader:</td>
-                <td class="val">${bill.readerName || 'R. Fernandez'}</td>
-              </tr>
             </table>
           </div>
         </div>

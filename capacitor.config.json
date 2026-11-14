@@ -1,0 +1,22 @@
+{
+  "appId": "com.dicklum.waterbilling",
+  "appName": "Dicklum Water",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": [
+      "*.google.com",
+      "*.openstreetmap.org",
+      "*.arcgisonline.com",
+      "*.github.io",
+      "*.githubusercontent.com"
+    ]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  }
+}

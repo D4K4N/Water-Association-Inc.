@@ -10,6 +10,10 @@
   
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="assets/logo.png">
+  <link rel="apple-touch-icon" href="assets/logo.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
   <!-- Preconnect to Google Satellite & OSM Tile Servers for Fast, Zero-Latency Tile Loading -->
   <link rel="preconnect" href="https://mt0.google.com" crossorigin>
@@ -24,9 +28,9 @@
   <link rel="dns-prefetch" href="https://mt2.google.com">
   <link rel="dns-prefetch" href="https://mt3.google.com">
   
-  <link rel="stylesheet" href="css/styles.css?v=18">
-  <link rel="stylesheet" href="css/print-thermal.css?v=16">
-  <link rel="stylesheet" href="css/print-a4.css?v=16">
+  <link rel="stylesheet" href="css/styles.css?v=25">
+  <link rel="stylesheet" href="css/print-thermal.css?v=25">
+  <link rel="stylesheet" href="css/print-a4.css?v=25">
   <!-- Local Vendor Libraries — 100% Offline (Zero CDN Dependence) -->
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <script src="vendor/leaflet/leaflet.js"></script>
@@ -54,65 +58,6 @@
 
   <!-- Viewport for Mobile App Screens -->
   <main class="app-viewport">
-
-    <!-- VIEW 1: Splash / Archived Home (Direct entry into Map) -->
-    <section id="view-splash" class="app-view" style="display:none;">
-      <div class="splash-content">
-        <div class="splash-hero">
-          <img src="assets/logo.png" alt="Dicklum Water Association" class="splash-logo">
-          <h2>Dicklum Water Association, Inc.</h2>
-          <p>Dicklum, Manolo Fortich, Bukidnon, Philippines</p>
-          <p style="font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 4px;">SEC Reg. CN2014-99120 • Field Utility System</p>
-        </div>
-
-        <div class="splash-modes-container">
-          <!-- Mapping Mode Card -->
-          <div id="card-mode-mapping" class="mode-select-card">
-            <div class="mode-card-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-                <circle cx="12" cy="10" r="3"/>
-              </svg>
-            </div>
-            <div class="mode-card-info">
-              <h3>Mapping Mode</h3>
-              <p>Pin consumer household GPS, standalone water meters, and clustered pipe manifolds in the field.</p>
-            </div>
-          </div>
-
-          <!-- Reading Mode Card -->
-          <div id="card-mode-reading" class="mode-select-card">
-            <div class="mode-card-icon" style="background: var(--accent-amber-tint); color: var(--accent-amber);">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <polyline points="12 6 12 12 16 14"/>
-              </svg>
-            </div>
-            <div class="mode-card-info">
-              <h3>Reading Mode</h3>
-              <p>Tour routes, enter meter readings, auto-calculate consumption (Current − Previous), and print receipts.</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="splash-footer-stats">
-          <div class="stat-item">
-            <span class="val" id="stat-total-consumers">8</span>
-            <span class="lbl">Consumers</span>
-          </div>
-          <div class="stat-item">
-            <span class="val" id="stat-total-meters">8</span>
-            <span class="lbl">Meters</span>
-          </div>
-          <div class="stat-item">
-            <span class="val" id="stat-month-readings">5</span>
-            <span class="lbl">Readings</span>
-          </div>
-        </div>
-
-        <p style="font-size: 11px; color: var(--text-muted);">Select an operational mode to begin field tasks.</p>
-      </div>
-    </section>
 
     <!-- VIEW 2: Real Satellite Map Dashboard (Primary Launch View) -->
     <section id="view-map" class="app-view active">
@@ -1272,7 +1217,7 @@
       </div>
       <div class="form-group">
         <label>Collector / Cashier Name</label>
-        <input type="text" id="pay-collector-input" class="form-control" value="R. Fernandez">
+        <input type="text" id="pay-collector-input" class="form-control" value="Cashier">
       </div>
     </div>
     <div class="modal-footer">
@@ -1702,6 +1647,27 @@
         </div>
       </div>
 
+      <!-- 5B. Hybrid Android APK & Live GitHub Auto-Update -->
+      <div class="settings-section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <h3 style="margin: 0;">Hybrid Android APK &amp; Offline Engine</h3>
+          <span id="ota-status-badge" class="badge badge-success">100% OFFLINE READY</span>
+        </div>
+        <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 10px;">
+          Works 100% offline even after phone restart. Automatically syncs code updates from GitHub when online without losing any pinned houses, water meters, or JSON backups.
+        </p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+          <button type="button" id="btn-download-hybrid-apk" class="btn btn-sm btn-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download Hybrid .APK
+          </button>
+          <button type="button" id="btn-ota-check-update" class="btn btn-sm btn-outline">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Sync GitHub Update
+          </button>
+        </div>
+      </div>
+
       <!-- 6. Offline Database & Data Recovery -->
       <div class="settings-section-card">
         <h3>Offline Database &amp; Data Recovery</h3>
@@ -1789,19 +1755,20 @@
 </div>
 
 <!-- Scripts -->
-<script src="js/icons.js?v=20"></script>
-<script src="js/db.js?v=20"></script>
-<script src="js/sampleData.js?v=20"></script>
-<script src="js/billing.js?v=20"></script>
-<script src="js/reading.js?v=20"></script>
-<script src="js/thermalPrinter.js?v=20"></script>
-<script src="js/a4Statement.js?v=20"></script>
-<script src="js/reports.js?v=20"></script>
-<script src="js/backup.js?v=20"></script>
-<script src="js/offlineTileEngine.js?v=20"></script>
-<script src="js/mapEngine.js?v=20"></script>
-<script src="js/maplibreEngine.js?v=20"></script>
-<script src="js/app.js?v=20"></script>
+<script src="js/icons.js?v=25"></script>
+<script src="js/db.js?v=25"></script>
+<script src="js/sampleData.js?v=25"></script>
+<script src="js/billing.js?v=25"></script>
+<script src="js/reading.js?v=25"></script>
+<script src="js/thermalPrinter.js?v=25"></script>
+<script src="js/a4Statement.js?v=25"></script>
+<script src="js/reports.js?v=25"></script>
+<script src="js/backup.js?v=25"></script>
+<script src="js/offlineTileEngine.js?v=25"></script>
+<script src="js/mapEngine.js?v=25"></script>
+<script src="js/maplibreEngine.js?v=25"></script>
+<script src="js/otaUpdater.js?v=25"></script>
+<script src="js/app.js?v=25"></script>
 
 </body>
 </html>

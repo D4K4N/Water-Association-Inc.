@@ -118,7 +118,7 @@ class ReadingModule {
       currentReading: curr,
       consumption: consumption,
       readingDate: new Date().toISOString(),
-      readerName: readerName || 'R. Fernandez',
+      readerName: readerName || '',
       notes: notes || '',
       isRolloverOverride: Boolean(isRolloverOverride),
       photoUrl: photoDataUrl || null,

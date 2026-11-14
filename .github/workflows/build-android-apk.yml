@@ -1,0 +1,85 @@
+name: Build Hybrid Android APK & Deploy Offline PWA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-hybrid-apk:
+    name: Build 100% Offline Hybrid Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java 21 (Temurin for Android Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Run Automated Verification & Billing Test Suite
+        run: node test-suite.js
+
+      - name: Assemble 100% Offline Web Bundle (./www)
+        run: node scripts/build-web.js
+
+      - name: Install Capacitor Android Builder
+        run: npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+
+      - name: Generate Native Android Wrapper Project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Inject GPS, Offline Storage & Bluetooth Thermal Printer Permissions
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            sed -i 's|<application|<!-- GPS, Bluetooth Xprinter XP-P300 & Network Sync Permissions -->\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.BLUETOOTH" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <application android:usesCleartextTraffic="true"|' "$MANIFEST"
+          fi
+
+      - name: Build Installable Hybrid Android APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare Dicklum-Water-Billing.apk
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk ./Dicklum-Water-Billing.apk
+          ls -lh ./Dicklum-Water-Billing.apk
+
+      - name: Upload Dicklum-Water-Billing.apk Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dicklum-Water-Billing-APK
+          path: ./Dicklum-Water-Billing.apk
+          retention-days: 90
+
+      - name: Publish Latest Hybrid APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Dicklum Water Association — Hybrid Offline Android APK (Latest)"
+          body: |
+            ### Dicklum Water Association, Inc. — Hybrid Offline Android `.apk`
+            - **100% Offline Boot After Phone Restart**: All HTML, CSS, JS, MapLibre WebGL Engine, and Barangay Diclum satellite/street tiles are built directly inside the `.apk`.
+            - **Automatic Live Updates from GitHub**: Whenever the phone connects to the internet, the app checks `D4K4N/Water-Association-Inc.` and updates its code automatically without needing to reinstall the `.apk`.
+            - **100% Data Safe**: Preserves all pinned houses, water meters, billing records, and JSON backups.
+          files: ./Dicklum-Water-Billing.apk
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

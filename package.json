@@ -1,12 +1,21 @@
 {
   "name": "dicklum-water-billing",
-  "version": "1.0.0",
+  "version": "2.5.0",
   "description": "Dicklum Water Association, Inc. - Mobile Water Billing & Field Operations System",
   "scripts": {
     "start": "node server.js",
-    "test": "node test-suite.js"
+    "test": "node test-suite.js",
+    "build:web": "node scripts/build-web.js"
   },
-  "keywords": ["water-billing", "gps-mapping", "field-operations", "indexeddb", "bluetooth-thermal-printer"],
+  "keywords": [
+    "water-billing",
+    "gps-mapping",
+    "field-operations",
+    "indexeddb",
+    "bluetooth-thermal-printer",
+    "offline-pwa",
+    "hybrid-apk"
+  ],
   "author": "Dicklum Water Association, Inc.",
   "license": "MIT"
 }

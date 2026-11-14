@@ -226,7 +226,7 @@ class OfflineTileEngine {
 
           const liveUrl = (layerKey === 'streets')
             ? `https://${sub}.tile.openstreetmap.org/${z}/${x}/${y}.png`
-            : `https://${sub}.google.com/vt/lyrs=s,h&x=${x}&y=${y}&z=${z}`;
+            : `https://${sub}.google.com/vt/lyrs=y&x=${x}&y=${y}&z=${z}`;
 
           list.push({ layer: layerKey, z, x, y, url: liveUrl });
         }

@@ -1,0 +1,22 @@
+{
+  "generatedAt": "2026-11-04T15:13:08.900Z",
+  "bounds": {
+    "minLat": 8.3465,
+    "maxLat": 8.4005,
+    "minLng": 124.8385,
+    "maxLng": 124.8655
+  },
+  "layers": {
+    "google_hybrid": {
+      "minZoom": 14,
+      "maxBundledZoom": 17,
+      "ext": "jpg"
+    },
+    "streets": {
+      "minZoom": 14,
+      "maxBundledZoom": 16,
+      "ext": "png"
+    }
+  },
+  "totalBundledTiles": 92
+}

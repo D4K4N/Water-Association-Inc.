@@ -1,0 +1,6778 @@
+/**
+ * Dicklum Water Association - Central Application Coordinator
+ * Connects UI, DB, Real-Time Satellite Map, Route Recording, Reading Module, Billing,
+ * Thermal Printing, Official Reports, and Offline Disaster Recovery.
+ * 100% English Language & Clean Human-Crafted Vector Icons (Zero emojis).
+ */
+
+class WaterBillingApp {
+  constructor() {
+    this.activeView = 'view-map'; // Launch directly to Unified Map Dashboard
+    this.currentMode = 'mapping';
+    this.activeConsumer = null;
+    this.activeMeter = null;
+    this.activePinType = null;
+    this.activeCluster = null;
+    this.activeBill = null;
+    this.mapEngine = null;
+    this.activeBillingPeriod = 'October 2026';
+    this.activeBillingCode = '2026-10';
+
+    // Caches
+    this.cachedConsumers = [];
+    this.cachedMeters = [];
+    this.cachedClusters = [];
+    this.cachedBills = [];
+    this.cachedRoutes = [];
+    this.cachedSettings = {};
+
+    // Geolocation & Route Recording State (Phase 2, Section 7)
+    this.gpsWatchId = null;
+    this.isRecordingRoute = false;
+    this.recordedRoutePoints = [];
+    this.routeRecordingStartTime = null;
+
+    // Office Sync, Records Filter ('today' | 'month' | 'all'), and PIN Gate State
+    this.recordsPeriodMode = 'today';
+    this.pinGateMode = 'unlock';
+    this.hasPinConfigured = false;
+    this.pinDeleteEnabled = localStorage.getItem('dicklum_pin_delete_enabled') === 'true';
+    this._pendingAdminCallback = null;
+  }
+
+  async init() {
+    console.log('Initializing Dicklum Water Billing System...');
+
+    // 1. Initialize DB and seed initial sample data if empty
+    await window.db.ready();
+
+    // Automatic clean slate guard:
+    // Only clears legacy unpinned demo seed data (Mark Zuckerberg / Pedro Penduko) if present.
+    // NEVER touches or wipes real user-pinned houses, water meters, or imported JSON backups!
+    const CLEAN_SLATE_KEY = 'dicklum_app_fresh_slate_v5';
+    if (!localStorage.getItem(CLEAN_SLATE_KEY)) {
+      const existingConsumers = await window.db.getAll('consumers');
+      const existingMeters = await window.db.getAll('meters');
+      const hasRealUserPins = existingConsumers.some(c => c.householdLat != null && c.householdLng != null) ||
+                              existingMeters.some(m => m.meterLat != null && m.meterLng != null);
+      const isLegacyMockSeed = !hasRealUserPins &&
+                               existingConsumers.some(c => c.name === 'Mark Zuckerberg' || c.name === 'Pedro Penduko');
+      if (isLegacyMockSeed) {
+        console.log('Clearing legacy unpinned demo seed data...');
+        await window.db.wipeCleanSlate();
+      }
+      localStorage.setItem(CLEAN_SLATE_KEY, 'true');
+    }
+
+    await window.seedSampleDataIfEmpty();
+
+    // 2. Load cached records
+    await this.refreshDataCache();
+
+    // 3. Initialize Satellite Map Engine (Direct Launch: MapLibre WebGL GPU or Leaflet fallback)
+    const mapContainer = document.getElementById('field-map');
+    if (mapContainer) {
+      const MapEngineClass = (typeof window.MapLibreFieldMapEngine !== 'undefined')
+        ? window.MapLibreFieldMapEngine
+        : window.FieldMapEngine;
+
+      this.mapEngine = new MapEngineClass(mapContainer, {
+        centerLat: 8.3735,
+        centerLng: 124.8505,
+        zoom: 15.0,
+        layer: 'google_hybrid'
+      });
+
+      this.mapEngine.selectPinCallback = (pin) => this.handlePinSelect(pin);
+      this.mapEngine.dropPinCallback = (lat, lng) => this.handleMapTapToPin(lat, lng);
+
+      [50, 150, 350, 800].forEach(delay => {
+        setTimeout(() => {
+          if (this.mapEngine) this.mapEngine.resize();
+        }, delay);
+      });
+
+      // Restore previous known GPS location in 1ms on startup
+      this.restoreInstantGpsCache();
+    }
+
+    // 4. Setup Bluetooth printer listener
+    window.thermalPrinter.onStatusChange((status, details) => {
+      this.updatePrinterUIStatus(status, details);
+    });
+
+    // 5. Setup DOM event listeners
+    this.bindNavigationEvents();
+    this.bindMapEvents();
+    this.bindRouteRecordingEvents();
+    this.bindConsumerEvents();
+    this.bindReadingEvents();
+    this.bindBillingEvents();
+    this.bindSettingsAndReportEvents();
+    this.bindModalEvents();
+    this.initInterruptibleButtonPhysics();
+
+    // 6. Check Online/Offline Network Status
+    this.updateOnlineBadge();
+    window.addEventListener('online', () => this.updateOnlineBadge());
+    window.addEventListener('offline', () => this.updateOnlineBadge());
+
+    // 7. Render initial pins, routes, and lists
+    this.syncPinsToMap();
+    this.syncRoutesToMap();
+    this.renderConsumerList();
+    this.renderBillingList();
+    this.renderStats();
+    this.resetReadingViewToEmpty();
+    this.populateQuickConsumerSelect();
+    await this.populateZoneDropdowns();
+    try {
+      await this.renderZoneExportCenter();
+    } catch (err) {
+      console.warn('Zone Export Center init warning:', err);
+    }
+    try {
+      await this.initSecurityPinGate();
+    } catch (err) {
+      console.warn('Security PIN Gate init warning:', err);
+    }
+
+    // 8. Auto-start real-time GPS location & compass heading tracking
+    if (navigator.geolocation) {
+      this.startRealtimeGps({ silent: true });
+    }
+
+    console.log('Dicklum Water Billing System ready.');
+  }
+
+  cleanZoneString(zoneStr) {
+    if (!zoneStr || typeof zoneStr !== 'string') return 'Zone 1';
+    if (window.db && typeof window.db.normalizeZoneName === 'function') {
+      return window.db.normalizeZoneName(zoneStr);
+    }
+    const m = zoneStr.trim().match(/^(Zone\s*\d+)\s*[-–—]\s*(Dicklum Central|San Francisco|Sayre Highway\s*&\s*Riverside|Upper Dicklum)$/i);
+    return m ? m[1].replace(/\s+/g, ' ') : zoneStr.trim();
+  }
+
+  cleanAddressString(addrStr, zoneStr) {
+    const cleanZ = this.cleanZoneString(zoneStr || 'Zone 1');
+    if (!addrStr || typeof addrStr !== 'string') {
+      return `${cleanZ}, Diclum`;
+    }
+    let cleaned = addrStr
+      .replace(/Zone\s*\d+\s*[-–—]\s*(Dicklum Central|San Francisco|Sayre Highway\s*&\s*Riverside|Upper Dicklum)/gi, cleanZ)
+      .replace(/\bDicklum\b/gi, 'Diclum')
+      .trim();
+    if (!cleaned || cleaned.toLowerCase() === cleanZ.toLowerCase()) {
+      cleaned = `${cleanZ}, Diclum`;
+    }
+    return cleaned;
+  }
+
+  async refreshDataCache() {
+    await window.db.getZones();
+    this.cachedConsumers = await window.db.getAll('consumers');
+    this.cachedMeters = await window.db.getAll('meters');
+    this.cachedClusters = await window.db.getAll('clusters');
+    this.cachedBills = await window.db.getAll('bills');
+    this.cachedRoutes = await window.db.getRoutes();
+
+    let dbUpdated = false;
+
+    // 1. Normalize legacy Zone names ("Zone 2 - San Francisco" -> "Zone 2") & Addresses across all records
+    for (const c of this.cachedConsumers) {
+      const cleanZ = this.cleanZoneString(c.zone);
+      const cleanA = this.cleanAddressString(c.address, cleanZ);
+      if (c.zone !== cleanZ || c.address !== cleanA) {
+        c.zone = cleanZ;
+        c.address = cleanA;
+        await window.db.put('consumers', c);
+        dbUpdated = true;
+      }
+    }
+    for (const m of this.cachedMeters) {
+      if (m.zone) {
+        const cleanZ = this.cleanZoneString(m.zone);
+        if (m.zone !== cleanZ) {
+          m.zone = cleanZ;
+          await window.db.put('meters', m);
+          dbUpdated = true;
+        }
+      }
+    }
+    for (const cl of this.cachedClusters) {
+      if (cl.zone) {
+        const cleanZ = this.cleanZoneString(cl.zone);
+        if (cl.zone !== cleanZ) {
+          cl.zone = cleanZ;
+          await window.db.put('clusters', cl);
+          dbUpdated = true;
+        }
+      }
+    }
+
+    // 2. Automatically link & merge same-name consumers (e.g. Household pin "paula" + Water Meter pin "paula")
+    const byName = new Map();
+    for (const c of this.cachedConsumers) {
+      const key = (c.name || '').trim().toLowerCase();
+      if (!key) continue;
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(c);
+    }
+
+    const allReadings = await window.db.getAll('readings');
+    for (const [, group] of byName.entries()) {
+      if (group.length < 2) continue;
+      // Sort so earliest account (e.g. DWA-2026-003) is primary
+      group.sort((a, b) => String(a.accountNo || '').localeCompare(String(b.accountNo || '')));
+      const primary = group[0];
+
+      for (let i = 1; i < group.length; i++) {
+        const dup = group[i];
+        // Data safety: two records with the same name but different household pins are different
+        // households. Merging would discard one pinned location, so keep both untouched.
+        const primaryHasHouse = Boolean(primary.householdLat && primary.householdLng);
+        const dupHasHouse = Boolean(dup.householdLat && dup.householdLng);
+        if (primaryHasHouse && dupHasHouse) {
+          const samePin = Math.abs(Number(primary.householdLat) - Number(dup.householdLat)) < 0.00001
+            && Math.abs(Number(primary.householdLng) - Number(dup.householdLng)) < 0.00001;
+          if (!samePin) continue;
+        }
+        if ((!primary.householdLat || !primary.householdLng) && dup.householdLat && dup.householdLng) {
+          primary.householdLat = dup.householdLat;
+          primary.householdLng = dup.householdLng;
+        }
+        if (dup.zone) {
+          primary.zone = this.cleanZoneString(dup.zone);
+          primary.address = this.cleanAddressString(dup.address, primary.zone);
+        }
+
+        // Re-link any water meters from duplicate consumer to primary consumer
+        const dupMeters = this.cachedMeters.filter(m => m.consumerId === dup.id);
+        for (const m of dupMeters) {
+          m.consumerId = primary.id;
+          m.ownerName = primary.name;
+          if (!m.zone) m.zone = primary.zone;
+          await window.db.put('meters', m);
+        }
+
+        // Re-link any readings and bills
+        const dupReadings = allReadings.filter(r => r.consumerId === dup.id);
+        for (const r of dupReadings) {
+          r.consumerId = primary.id;
+          await window.db.put('readings', r);
+        }
+        const dupBills = this.cachedBills.filter(b => b.consumerId === dup.id);
+        for (const b of dupBills) {
+          b.consumerId = primary.id;
+          await window.db.put('bills', b);
+        }
+
+        await window.db.delete('consumers', dup.id);
+        dbUpdated = true;
+      }
+
+      await window.db.put('consumers', primary);
+    }
+
+    // Also link any meter whose ownerName matches a consumer's name if consumerId is missing or mismatched
+    const currentConsumers = dbUpdated ? await window.db.getAll('consumers') : this.cachedConsumers;
+    for (const m of this.cachedMeters) {
+      const linked = currentConsumers.find(c => c.id === m.consumerId);
+      if (!linked && m.ownerName) {
+        const matchByName = currentConsumers.find(
+          c => (c.name || '').trim().toLowerCase() === m.ownerName.trim().toLowerCase()
+        );
+        if (matchByName) {
+          m.consumerId = matchByName.id;
+          await window.db.put('meters', m);
+          dbUpdated = true;
+        }
+      }
+    }
+
+    // 3. Deduplicate multiple bills for the same consumer in the same billing period & heal arrears
+    const allBillsForAudit = await window.db.getAll('bills');
+    const billsByConsumerPeriod = new Map();
+    for (const b of allBillsForAudit) {
+      if (!b.consumerId || !b.billingPeriod) continue;
+      const key = `${b.consumerId}_${b.billingPeriod}`;
+      if (!billsByConsumerPeriod.has(key)) billsByConsumerPeriod.set(key, []);
+      billsByConsumerPeriod.get(key).push(b);
+    }
+
+    for (const [, periodGroup] of billsByConsumerPeriod.entries()) {
+      if (periodGroup.length > 1) {
+        periodGroup.sort((a, b) => new Date(b.createdAt || b.billDate || 0).getTime() - new Date(a.createdAt || a.billDate || 0).getTime());
+        for (let i = 1; i < periodGroup.length; i++) {
+          await window.db.delete('bills', periodGroup[i].id);
+          dbUpdated = true;
+        }
+      }
+    }
+
+    const cleanedBills = await window.db.getAll('bills');
+    for (const b of cleanedBills) {
+      const cons = Number(b.consumption || 0);
+      let needsFix = false;
+
+      // Arrears strictly from prior billing periods (< b.billingPeriod)
+      const truePrior = cleanedBills.filter(ob => 
+        ob.consumerId === b.consumerId && 
+        ob.id !== b.id && 
+        ob.billingPeriod && 
+        ob.billingPeriod < b.billingPeriod && 
+        ob.paymentStatus !== 'PAID'
+      );
+      const trueArrears = truePrior.reduce((sum, ob) => sum + Math.max(0, (Number(ob.totalAmountDue) || 0) - (Number(ob.amountPaid) || 0)), 0);
+
+      if (Number(b.arrears || 0) !== trueArrears) {
+        b.arrears = trueArrears;
+        needsFix = true;
+      }
+
+      if (cons <= 0) {
+        if (b.currentBill !== 0 || b.minimumCharge !== 0) {
+          b.currentBill = 0.00;
+          b.minimumCharge = 0.00;
+          needsFix = true;
+        }
+      }
+
+      const expectedTotal = Math.max(0, (Number(b.currentBill) || 0) + (Number(b.arrears) || 0));
+      if (Number(b.totalAmountDue) !== expectedTotal) {
+        b.totalAmountDue = expectedTotal;
+        needsFix = true;
+      }
+
+      if (needsFix) {
+        await window.db.put('bills', b);
+        dbUpdated = true;
+      }
+    }
+
+    if (dbUpdated) {
+      this.cachedConsumers = await window.db.getAll('consumers');
+      this.cachedMeters = await window.db.getAll('meters');
+      this.cachedClusters = await window.db.getAll('clusters');
+      this.cachedBills = await window.db.getAll('bills');
+    }
+
+    // 3. Data safety: never auto-delete clusters or water meters here. Imported backups may contain
+    // clusters without their own GPS (they fall back to member meter coordinates), and empty clusters
+    // are simply not drawn on the map (see syncPinsToMap).
+
+    // 4. Purge only truly empty orphan consumers (no house pin, no pinned/clustered meter at all,
+    // and no billing or reading history). Checks EVERY meter of the consumer, so a pinned meter is never removed.
+    const historyReadings = await window.db.getAll('readings');
+    const orphanedConsumers = this.cachedConsumers.filter(c => {
+      const hasHousePin = Boolean(c.householdLat && c.householdLng);
+      const hasMeterPin = this.cachedMeters.some(m => m.consumerId === c.id && ((m.meterLat && m.meterLng) || m.isClustered));
+      const hasHistory = this.cachedBills.some(b => b.consumerId === c.id) || historyReadings.some(r => r.consumerId === c.id);
+      return !hasHousePin && !hasMeterPin && !hasHistory;
+    });
+
+    if (orphanedConsumers.length > 0) {
+      const latestReadings = await window.db.getAll('readings');
+      for (const orphan of orphanedConsumers) {
+        await window.db.delete('consumers', orphan.id);
+        const orphanMeters = this.cachedMeters.filter(m => m.consumerId === orphan.id);
+        for (const m of orphanMeters) {
+          await window.db.delete('meters', m.id);
+        }
+        const orphanBills = this.cachedBills.filter(b => b.consumerId === orphan.id);
+        for (const b of orphanBills) {
+          await window.db.delete('bills', b.id);
+        }
+        const orphanReadings = latestReadings.filter(r => r.consumerId === orphan.id);
+        for (const r of orphanReadings) {
+          await window.db.delete('readings', r.id);
+        }
+        if (this.activeConsumer && this.activeConsumer.id === orphan.id) {
+          this.activeConsumer = null;
+          this.activeMeter = null;
+        }
+      }
+      this.cachedConsumers = await window.db.getAll('consumers');
+      this.cachedMeters = await window.db.getAll('meters');
+      this.cachedBills = await window.db.getAll('bills');
+    }
+
+    const settings = await window.db.getAll('settings');
+    this.cachedSettings = {};
+    settings.forEach(s => { this.cachedSettings[s.key] = s.value; });
+
+    // Normalize tariff settings so excessRate is always configured (default PHP 15.00/m³)
+    const rawTariff = this.cachedSettings.tariff || {};
+    const normalizedTariff = {
+      minimumCharge: Number(rawTariff.minimumCharge ?? rawTariff.minimumChargePesos) || 100.00,
+      minimumAllowance: Number(rawTariff.minimumAllowance ?? rawTariff.minimumCoverageM3) || 10,
+      excessRate: Number(rawTariff.excessRate ?? rawTariff.excessPerM3Pesos) || 15.00,
+      maintenanceFee: Number(rawTariff.maintenanceFee) || 0.00,
+      penaltyPercent: Number(rawTariff.penaltyPercent) || 10,
+      dueDays: Number(rawTariff.dueDays) || 15,
+      currency: rawTariff.currency || 'PHP',
+      activeBillingPeriod: rawTariff.activeBillingPeriod || 'October 2026',
+      activeBillingCode: rawTariff.activeBillingCode || '2026-10'
+    };
+    this.cachedSettings.tariff = normalizedTariff;
+    if (!rawTariff.excessRate || isNaN(Number(rawTariff.excessRate))) {
+      await window.db.setSetting('tariff', normalizedTariff);
+    }
+
+    if (this.cachedSettings.tariff && this.cachedSettings.tariff.activeBillingPeriod) {
+      this.activeBillingPeriod = this.cachedSettings.tariff.activeBillingPeriod;
+      this.activeBillingCode = this.cachedSettings.tariff.activeBillingCode || '2026-10';
+    }
+  }
+
+  updateOnlineBadge() {
+    const badge = document.getElementById('online-status-pill');
+    if (!badge) return;
+    if (navigator.onLine) {
+      badge.innerHTML = '<span class="status-dot online"></span> Online';
+      badge.className = 'status-pill online';
+    } else {
+      badge.innerHTML = '<span class="status-dot offline"></span> Offline';
+      badge.className = 'status-pill offline';
+    }
+  }
+
+  // --- View & Mode Switching ---
+
+  switchView(viewId) {
+    // Records and Settings are restricted by Admin PIN to protect office data from field readers
+    if (viewId === 'view-settings' && !this.isAdminUnlocked()) {
+      this.openPinGateModal('admin-verify', () => {
+        this.switchView('view-settings');
+      });
+      return;
+    }
+
+    // If leaving map screen, stop GPS tracking to conserve battery (Phase 2, Section 5)
+    if (this.activeView === 'view-map' && viewId !== 'view-map' && !this.isRecordingRoute) {
+      this.stopRealtimeGps();
+    }
+
+    document.querySelectorAll('.app-view').forEach(view => {
+      view.classList.remove('active');
+    });
+    const target = document.getElementById(viewId);
+    if (target) {
+      target.classList.add('active');
+      this.activeView = viewId;
+    }
+
+    document.querySelectorAll('.nav-item').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.view === viewId);
+    });
+
+    if (viewId === 'view-reading') {
+      this.populateQuickConsumerSelect();
+      if (!this.activeConsumer) {
+        this.resetReadingViewToEmpty();
+      }
+    }
+
+    if (viewId === 'view-settings') {
+      this.renderSettingsZonesAndClusters();
+      this.renderZoneExportCenter();
+      this.refreshPinSecurityBadge();
+    }
+
+    if (viewId === 'view-map') {
+      [50, 150, 300, 600, 1000].forEach(delay => {
+        setTimeout(() => {
+          if (this.mapEngine) {
+            this.mapEngine.resize();
+            this.syncPinsToMap();
+            this.syncRoutesToMap();
+          }
+        }, delay);
+      });
+    }
+  }
+
+  // --- Shared Element Transition & Fluid Morphing Engine ---
+
+  sharedElementMorph(sourceEl, targetEl, callback) {
+    if (!sourceEl || !targetEl || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+      if (typeof callback === 'function') callback();
+      return;
+    }
+
+    try {
+      const startRect = sourceEl.getBoundingClientRect();
+      if (!startRect || startRect.width === 0 || startRect.height === 0) {
+        if (typeof callback === 'function') callback();
+        return;
+      }
+
+      if (typeof callback === 'function') callback();
+
+      requestAnimationFrame(() => {
+        const endRect = targetEl.getBoundingClientRect();
+        if (!endRect || endRect.width === 0 || endRect.height === 0) return;
+
+        const ghost = document.createElement('div');
+        ghost.className = 'shared-element-ghost';
+        ghost.style.left = `${startRect.left}px`;
+        ghost.style.top = `${startRect.top}px`;
+        ghost.style.width = `${startRect.width}px`;
+        ghost.style.height = `${startRect.height}px`;
+        document.body.appendChild(ghost);
+
+        const deltaX = endRect.left - startRect.left;
+        const deltaY = endRect.top - startRect.top;
+        const scaleX = endRect.width / startRect.width;
+        const scaleY = endRect.height / startRect.height;
+
+        const anim = ghost.animate([
+          {
+            transform: 'translate(0px, 0px) scale(1, 1)',
+            opacity: 0.95
+          },
+          {
+            transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`,
+            opacity: 1
+          }
+        ], {
+          duration: 260,
+          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+          fill: 'forwards'
+        });
+
+        anim.onfinish = () => {
+          ghost.remove();
+          targetEl.animate([
+            { transform: 'scale(0.985)' },
+            { transform: 'scale(1)' }
+          ], { duration: 150, easing: 'cubic-bezier(0.16, 1.15, 0.45, 1)' });
+        };
+      });
+    } catch (_) {
+      if (typeof callback === 'function') callback();
+    }
+  }
+
+  // --- Interruptible Button Physics Gestures ---
+
+  initInterruptibleButtonPhysics() {
+    const selector = '.btn, .nav-item, .stepper-btn, .burger-menu-btn, .map-layer-fab, .billing-mode-btn, .records-period-btn, .zone-chip, .map-filter-chip';
+    
+    document.addEventListener('pointerdown', (e) => {
+      const target = e.target.closest(selector);
+      if (!target || target.disabled) return;
+      target.style.setProperty('--press-scale', '0.94');
+      target.style.setProperty('--press-y', '1.5px');
+    }, { passive: true });
+
+    const release = (e) => {
+      const target = e.target.closest(selector);
+      if (target) {
+        target.style.setProperty('--press-scale', '1');
+        target.style.setProperty('--press-y', '0px');
+      }
+    };
+
+    document.addEventListener('pointerup', release, { passive: true });
+    document.addEventListener('pointercancel', release, { passive: true });
+    document.addEventListener('pointerleave', release, { passive: true });
+  }
+
+  setMode(mode) {
+    this.currentMode = mode || 'mapping';
+
+    const modeBadge = document.getElementById('current-mode-badge');
+    if (modeBadge) {
+      modeBadge.textContent = 'UNIFIED MAP';
+    }
+
+    if (this.mapEngine) {
+      this.mapEngine.setMappingMode(this.currentMode);
+    }
+
+    const fabPin = document.getElementById('fab-add-pin');
+    if (fabPin) {
+      fabPin.style.display = 'flex';
+    }
+  }
+
+  // --- Map Controller & Pins ---
+
+  syncPinsToMap() {
+    if (!this.mapEngine) return;
+
+    const pins = [];
+    const readConsumerIds = new Set(
+      this.cachedBills
+        .filter(b => b.billingPeriod.includes('2026-10') || b.billingPeriod.includes('October 2026'))
+        .map(b => b.consumerId)
+    );
+
+    // 1. Household Pins
+    for (const c of this.cachedConsumers) {
+      if (c.householdLat && c.householdLng) {
+        pins.push({
+          id: c.id,
+          type: 'household',
+          lat: Number(c.householdLat),
+          lng: Number(c.householdLng),
+          title: c.name,
+          data: {
+            consumerId: c.id,
+            name: c.name,
+            accountNo: c.accountNo,
+            zone: c.zone,
+            address: c.address,
+            status: c.status || 'Active',
+            isCutOff: c.status === 'Disconnected' || c.status === 'Cut-Off',
+            isUnread: !readConsumerIds.has(c.id)
+          }
+        });
+      }
+    }
+
+    // 2. Individual Water Meter Pins (plus fallback if a meter's cluster was deleted)
+    const validClusterIds = new Set((this.cachedClusters || []).map(cl => cl.id));
+    for (const m of this.cachedMeters) {
+      const belongsToValidCluster = Boolean(m.isClustered && m.clusterId && validClusterIds.has(m.clusterId));
+      if (!belongsToValidCluster && m.meterLat && m.meterLng) {
+        const consumer = this.cachedConsumers.find(c => c.id === m.consumerId);
+        const ownerDisplay = (consumer && consumer.name) ? consumer.name : (m.ownerName || m.meterNo);
+        const isCutOff = (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) || m.status === 'Disconnected' || m.status === 'Cut-Off';
+        pins.push({
+          id: m.id,
+          type: 'meter',
+          lat: Number(m.meterLat),
+          lng: Number(m.meterLng),
+          title: `${ownerDisplay} | WM`,
+          data: {
+            meterId: m.id,
+            meterNo: m.meterNo,
+            consumerId: m.consumerId,
+            name: (consumer && consumer.name) ? consumer.name : (m.ownerName || 'Unassigned'),
+            ownerName: (consumer && consumer.name) ? consumer.name : (m.ownerName || ''),
+            accountNo: consumer ? consumer.accountNo : '',
+            zone: m.zone || (consumer ? consumer.zone : ''),
+            status: (consumer && consumer.status) || m.status || 'Active',
+            isCutOff,
+            householdLat: consumer ? consumer.householdLat : null,
+            householdLng: consumer ? consumer.householdLng : null,
+            isUnread: consumer ? !readConsumerIds.has(consumer.id) : false
+          }
+        });
+      }
+    }
+
+    // 3. Clustered / Grouped Water Meter Pins
+    for (const cl of this.cachedClusters) {
+      const clusterMeters = this.cachedMeters.filter(m => m.clusterId === cl.id);
+      if (clusterMeters.length === 0) continue;
+      const firstMeterWithCoords = clusterMeters.find(m => m.meterLat && m.meterLng);
+      const cLat = cl.lat || (firstMeterWithCoords ? firstMeterWithCoords.meterLat : null);
+      const cLng = cl.lng || (firstMeterWithCoords ? firstMeterWithCoords.meterLng : null);
+
+      if (cLat && cLng) {
+        const ownerNames = clusterMeters.map(m => {
+          const con = this.cachedConsumers.find(c => c.id === m.consumerId);
+          return (con && con.name) ? con.name : (m.ownerName || m.meterNo || 'Meter');
+        }).filter(Boolean);
+
+        const ownerSummary = ownerNames.length > 0
+          ? (ownerNames.length <= 2
+              ? ownerNames.join(', ')
+              : `${ownerNames.slice(0, 2).join(', ')} +${ownerNames.length - 2}`)
+          : cl.name;
+
+        pins.push({
+          id: cl.id,
+          type: 'cluster',
+          lat: Number(cLat),
+          lng: Number(cLng),
+          title: ownerSummary || cl.name,
+          data: {
+            clusterId: cl.id,
+            name: cl.name,
+            ownerSummary: ownerSummary,
+            ownerNames: ownerNames,
+            zone: cl.zone || (firstMeterWithCoords ? firstMeterWithCoords.zone : ''),
+            description: cl.description,
+            meterCount: clusterMeters.length,
+            meters: clusterMeters
+          }
+        });
+      }
+    }
+
+    this.mapEngine.setPins(pins);
+    this.renderMapZoneChips();
+    this.updateMapTypeSegmentCounts();
+  }
+
+  syncRoutesToMap() {
+    if (!this.mapEngine) return;
+    this.mapEngine.setSavedRoutes(this.cachedRoutes);
+  }
+
+  handlePinSelect(pin) {
+    if (pin.type === 'cluster') {
+      this.openClusterSheet(pin.data.clusterId);
+    } else if (pin.type === 'meter') {
+      this.openConsumerSheet(pin.data.consumerId, pin.data.meterId, 'meter');
+    } else {
+      this.openConsumerSheet(pin.data.consumerId, null, 'household');
+    }
+  }
+
+  handleMapTapToPin(lat, lng) {
+    this.openDropPinModal(lat, lng);
+  }
+
+  openConsumerSheet(consumerId, highlightMeterId = null, pinType = null) {
+    let consumer = consumerId ? this.cachedConsumers.find(c => c.id === consumerId) : null;
+    let meter = highlightMeterId
+      ? this.cachedMeters.find(m => m.id === highlightMeterId)
+      : (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : null);
+
+    // Fallback: if consumer not found by ID or meter not linked by ID, match by owner/consumer name
+    if (!consumer && meter && meter.ownerName) {
+      consumer = this.cachedConsumers.find(
+        c => (c.name || '').trim().toLowerCase() === meter.ownerName.trim().toLowerCase()
+      ) || null;
+    }
+    if (consumer && !meter) {
+      meter = this.cachedMeters.find(
+        m => m.consumerId === consumer.id ||
+             ((m.ownerName || '').trim().toLowerCase() === (consumer.name || '').trim().toLowerCase())
+      ) || null;
+    }
+
+    if (!consumer && !meter) return;
+
+    this.activeConsumer = consumer || null;
+    this.activeMeter = meter || null;
+    this.activePinType = pinType || (highlightMeterId ? 'meter' : 'household');
+
+    const sheet = document.getElementById('map-bottom-sheet');
+    if (!sheet) return;
+
+    const btnUnpin = document.getElementById('sheet-btn-unpin');
+    if (btnUnpin) {
+      const label = this.activePinType === 'meter' ? 'Delete Meter Pin' : 'Delete House Pin';
+      btnUnpin.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+        </svg>
+        ${label}
+      `;
+    }
+
+    const activeZone = highlightMeterId
+      ? this.cleanZoneString((meter && meter.zone) || (consumer && consumer.zone) || 'Zone 1')
+      : this.cleanZoneString((consumer && consumer.zone) || (meter && meter.zone) || 'Zone 1');
+
+    const activeAddress = this.cleanAddressString(
+      (consumer && consumer.address) || `${activeZone}, Diclum`,
+      activeZone
+    );
+
+    document.getElementById('sheet-consumer-name').textContent = consumer
+      ? consumer.name
+      : (meter.ownerName || `Meter ${meter.meterNo}`);
+    document.getElementById('sheet-account-no').textContent = consumer ? consumer.accountNo : 'UNASSIGNED';
+    document.getElementById('sheet-zone').textContent = activeZone;
+    document.getElementById('sheet-address').textContent = activeAddress;
+
+    const meterNoEl = document.getElementById('sheet-meter-no');
+    if (meter) {
+      meterNoEl.textContent = meter.meterNo + (meter.isClustered ? ' (Clustered Manifold)' : ' (Individual Standpipe)');
+    } else {
+      meterNoEl.textContent = 'No meter assigned';
+    }
+
+    const latestBill = consumer ? this.cachedBills.find(b => b.consumerId === consumer.id) : null;
+    document.getElementById('sheet-prev-reading').textContent = latestBill
+      ? `${latestBill.currentReading} m³`
+      : (meter && meter.initialReading !== undefined ? `${meter.initialReading} m³` : 'N/A');
+
+    // Update Cut-Off Status Pill and Cut-Off / Reconnect Action Button
+    const isCutOff = Boolean(
+      (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) ||
+      (meter && (meter.status === 'Disconnected' || meter.status === 'Cut-Off'))
+    );
+    const statusPill = document.getElementById('sheet-status-pill');
+    if (statusPill) {
+      statusPill.textContent = isCutOff ? 'CUT-OFF / DISCONNECTED' : 'ACTIVE';
+      statusPill.className = isCutOff ? 'badge badge-danger' : 'badge badge-success';
+      statusPill.style.background = isCutOff ? '#DC2626' : '';
+      statusPill.style.color = '#FFFFFF';
+    }
+
+    const cutoffBtn = document.getElementById('sheet-btn-toggle-cutoff');
+    const cutoffLabel = document.getElementById('sheet-cutoff-btn-label');
+    if (cutoffBtn && cutoffLabel) {
+      cutoffLabel.textContent = isCutOff ? 'Reconnect' : 'Cut-off';
+      cutoffBtn.style.color = isCutOff ? '#16A34A' : '#EA580C';
+      cutoffBtn.style.borderColor = isCutOff ? 'rgba(22, 163, 74, 0.4)' : 'rgba(234, 88, 12, 0.4)';
+      cutoffBtn.title = isCutOff ? 'Restore / Reconnect water service' : 'Mark water service as Cut-Off (Disconnected)';
+    }
+
+    // Refresh Delete Pin button enabled/disabled state based on Settings
+    this.updatePinDeleteButtonsState();
+
+    sheet.classList.add('visible');
+  }
+
+  closeConsumerSheet() {
+    const sheet = document.getElementById('map-bottom-sheet');
+    if (sheet) sheet.classList.remove('visible');
+    if (this.mapEngine && typeof this.mapEngine.clearSelectedPin === 'function') {
+      this.mapEngine.clearSelectedPin();
+    }
+  }
+
+  openClusterSheet(clusterId, selectedMeterId = null) {
+    const cluster = this.cachedClusters.find(c => c.id === clusterId);
+    if (!cluster) return;
+
+    this.closeConsumerSheet();
+    this.activeCluster = cluster;
+    this.activeClusterId = cluster.id;
+    const clusterMeters = this.cachedMeters.filter(m => m.clusterId === clusterId);
+
+    const sheet = document.getElementById('cluster-bottom-sheet');
+    if (!sheet) return;
+
+    const cleanZone = this.cleanZoneString(cluster.zone || 'Zone 1');
+    const ownerNames = clusterMeters.map((m, idx) => {
+      const con = this.cachedConsumers.find(c => c.id === m.consumerId)
+        || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (m.ownerName || '').trim().toLowerCase());
+      return (con && con.name) ? con.name : (m.ownerName || m.meterNo || `Meter #${idx + 1}`);
+    }).filter(Boolean);
+
+    const shortOwners = ownerNames.slice(0, 3).join(', ') + (ownerNames.length > 3 ? ` +${ownerNames.length - 3}` : '');
+    const dynamicTitle = ownerNames.length > 0
+      ? `${cleanZone} Clustered Meters (${shortOwners})`
+      : (cluster.name || 'Clustered Water Meters');
+    const dynamicDesc = ownerNames.length > 0
+      ? `${clusterMeters.length} grouped water meter${clusterMeters.length === 1 ? '' : 's'} (${ownerNames.join(', ')})`
+      : (cluster.description || 'Tap any circle water meter below to view its owner info, record a reading, or print its individual bill receipt.');
+
+    const nameEl = document.getElementById('cluster-sheet-name');
+    const zoneEl = document.getElementById('cluster-sheet-zone');
+    const countEl = document.getElementById('cluster-sheet-count');
+    const descEl = document.getElementById('cluster-sheet-desc');
+
+    if (nameEl) nameEl.textContent = dynamicTitle;
+    if (zoneEl) zoneEl.textContent = cleanZone;
+    if (countEl) countEl.textContent = `${clusterMeters.length} Water Meter${clusterMeters.length === 1 ? '' : 's'}`;
+    if (descEl) descEl.textContent = dynamicDesc;
+
+    const activeMeterId = selectedMeterId
+      || (this._activeClusterMeterId && clusterMeters.some(m => m.id === this._activeClusterMeterId) ? this._activeClusterMeterId : null)
+      || (clusterMeters[0] ? clusterMeters[0].id : null);
+
+    this._activeClusterMeterId = activeMeterId;
+    this.renderClusterDashboardCircles(cluster, clusterMeters, activeMeterId);
+
+    sheet.classList.add('visible');
+  }
+
+  renderClusterDashboardCircles(cluster, clusterMeters, activeMeterId) {
+    const stageEl = document.getElementById('cluster-sheet-circles-row');
+    const detailPanel = document.getElementById('cluster-selected-meter-panel');
+    if (!stageEl || !detailPanel) return;
+
+    if (clusterMeters.length === 0) {
+      stageEl.innerHTML = `
+        <div style="text-align: center; padding: 12px; color: var(--text-muted); font-size: 11.5px;">
+          No water meters linked to this cluster yet. Tap <strong>"+ Add Meter"</strong> above to add water meters here.
+        </div>
+      `;
+      detailPanel.innerHTML = '';
+      return;
+    }
+
+    // FRAME 5: Render Interactive Circle Water Meters with Owner Names above each circle (Bonifacio, sarah, trix...)
+    stageEl.innerHTML = clusterMeters.map((m, idx) => {
+      const consumer = this.cachedConsumers.find(c => c.id === m.consumerId)
+        || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (m.ownerName || '').trim().toLowerCase());
+      const ownerName = (consumer && consumer.name) ? consumer.name : (m.ownerName || `Meter #${idx + 1}`);
+      const isSelected = m.id === activeMeterId;
+      const consumerBills = consumer
+        ? (this.cachedBills || []).filter(b => b.consumerId === consumer.id)
+        : [];
+      const hasBill = consumerBills.length > 0;
+
+      return `
+        <div class="cluster-dash-circle-item ${isSelected ? 'active' : ''} ${hasBill ? 'is-billed' : ''}" data-meter-id="${m.id}">
+          <span class="cluster-dash-owner-name" title="${ownerName}">${ownerName}</span>
+          <button type="button" class="cluster-dash-circle-btn" aria-label="Select water meter for ${ownerName}">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/>
+            </svg>
+            <span style="font-size: 11px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;">#${idx + 1}</span>
+            ${hasBill ? `<span class="mgb-circle-check" title="Bill Receipt Ready">✓</span>` : ''}
+          </button>
+          <span class="cluster-dash-serial">${m.meterNo || ''}</span>
+        </div>
+      `;
+    }).join('');
+
+    // Bind click on each circle water meter
+    stageEl.querySelectorAll('.cluster-dash-circle-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const mId = item.dataset.meterId;
+        this._activeClusterMeterId = mId;
+        this.renderClusterDashboardCircles(cluster, clusterMeters, mId);
+      });
+    });
+
+    // Render Selected Circle Water Meter Information & Individual Print Receipt Card
+    const selectedIndex = Math.max(0, clusterMeters.findIndex(m => m.id === activeMeterId));
+    const selectedMeter = clusterMeters[selectedIndex] || clusterMeters[0];
+    if (!selectedMeter) {
+      detailPanel.innerHTML = '';
+      return;
+    }
+
+    const consumer = this.cachedConsumers.find(c => c.id === selectedMeter.consumerId)
+      || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (selectedMeter.ownerName || '').trim().toLowerCase())
+      || null;
+    const ownerName = (consumer && consumer.name) ? consumer.name : (selectedMeter.ownerName || `Meter ${selectedMeter.meterNo}`);
+    const accountNo = consumer ? consumer.accountNo : 'UNASSIGNED';
+    const zone = this.cleanZoneString((selectedMeter && selectedMeter.zone) || (consumer && consumer.zone) || cluster.zone || 'Zone 1');
+    const address = this.cleanAddressString((consumer && consumer.address) || `${zone}, Diclum`, zone);
+
+    const consumerBills = consumer
+      ? (this.cachedBills || [])
+          .filter(b => b.consumerId === consumer.id)
+          .sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0))
+      : [];
+    const latestBill = consumerBills[0] || null;
+    const prevRdg = latestBill ? latestBill.previousReading : (selectedMeter.initialReading ?? 0);
+    const currRdg = latestBill ? latestBill.currentReading : (selectedMeter.initialReading ?? 0);
+    const consumption = latestBill ? latestBill.consumption : 0;
+    const totalDue = latestBill ? Number(latestBill.totalAmountDue || 0) : 100.00;
+    const statusLabel = latestBill ? (latestBill.paymentStatus || 'UNPAID') : 'READY TO READ';
+    const statusBadgeClass = latestBill
+      ? (latestBill.paymentStatus === 'PAID' ? 'badge-success' : 'badge-warning')
+      : 'badge-success';
+
+    detailPanel.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div class="mse-circle-badge" style="width: 28px; height: 28px; font-size: 12px;">${selectedIndex + 1}</div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <strong style="font-size: 13.5px; font-weight: 600; color: var(--text-primary);">${ownerName}</strong>
+              <span class="acct-pill">${accountNo}</span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 1px;">
+              Meter: <strong style="color: var(--primary-light); font-weight: 600;">${selectedMeter.meterNo}</strong> • ${address}
+            </div>
+          </div>
+        </div>
+        <span class="badge ${statusBadgeClass}">${statusLabel}</span>
+      </div>
+
+      <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 10px;">
+        <div class="r-cell">
+          <span class="lbl">Prev Rdg</span>
+          <span class="val">${Number(prevRdg).toLocaleString()} m³</span>
+        </div>
+        <div class="r-cell">
+          <span class="lbl">Curr Rdg</span>
+          <span class="val">${Number(currRdg).toLocaleString()} m³</span>
+        </div>
+        <div class="r-cell">
+          <span class="lbl">Consumed</span>
+          <span class="val" style="color: var(--primary-light);">${Number(consumption).toLocaleString()} m³</span>
+        </div>
+        <div class="r-cell highlight">
+          <span class="lbl">${latestBill ? 'Bill Amount' : 'Min Tariff'}</span>
+          <span class="val" style="color: var(--success-text);">PHP ${totalDue.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <button type="button" class="btn btn-sm btn-primary" style="flex: 1.3;" onclick="window.app.handleClusterMeterPrintReceipt('${consumer ? consumer.id : ''}', '${selectedMeter.id}')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+          ${latestBill ? 'Print Bill Receipt' : 'Read & Print Receipt'}
+        </button>
+        ${consumer ? `
+          <button type="button" class="btn btn-sm btn-outline" style="flex: 1;" onclick="window.app.startReadingForConsumer('${consumer.id}')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Read Meter
+          </button>
+          <button type="button" class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${consumer.id}')" title="Open ${ownerName}'s Folder & Receipts">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Folder (${consumerBills.length})
+          </button>
+        ` : ''}
+        <button type="button" class="btn btn-sm btn-outline" style="color: var(--primary-light); border-color: rgba(56, 189, 248, 0.4);" onclick="window.app.openEditConsumerModal('${consumer ? consumer.id : ''}', '${selectedMeter.id}')" title="Edit Owner Name or Meter Number">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Edit
+        </button>
+        <button type="button" class="btn btn-sm btn-outline" style="color: var(--danger-text); border-color: rgba(239,68,68,0.35);" onclick="window.app.removeSingleMeterFromCluster('${selectedMeter.id}')" title="Remove this water meter from the cluster">
+          Remove
+        </button>
+      </div>
+    `;
+  }
+
+  async handleClusterMeterPrintReceipt(consumerId, meterId) {
+    const consumer = consumerId ? this.cachedConsumers.find(c => c.id === consumerId) : null;
+    if (!consumer) {
+      alert('This water meter does not have a linked consumer record yet.');
+      return;
+    }
+
+    const consumerBills = (this.cachedBills || [])
+      .filter(b => b.consumerId === consumer.id)
+      .sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+
+    if (consumerBills.length > 0) {
+      // Immediately open the Thermal Paper Bill Receipt preview & print modal for this consumer!
+      await this.openThermalReceiptModal(consumerBills[0].id);
+      return;
+    }
+
+    // If no bill exists yet for this consumer, open Meter Reading & Computation for them so the reader can enter the reading and print the receipt
+    this.showToast(`Opening Meter Reading for ${consumer.name} to generate & print receipt...`, 2400);
+    await this.startReadingForConsumer(consumer.id);
+  }
+
+  async removeSingleMeterFromCluster(meterId) {
+    const meter = this.cachedMeters.find(m => m.id === meterId);
+    if (!meter) return;
+    const consumer = this.cachedConsumers.find(c => c.id === meter.consumerId);
+    const ownerName = consumer ? consumer.name : (meter.ownerName || meter.meterNo);
+
+    if (!confirm(`Delete Water Meter "${meter.meterNo}" (${ownerName}) from this cluster?`)) {
+      return;
+    }
+
+    const clusterId = meter.clusterId;
+    await window.db.delete('meters', meter.id);
+
+    const remainingInCluster = this.cachedMeters.filter(m => m.id !== meter.id && m.clusterId === clusterId);
+    if (clusterId && remainingInCluster.length === 0) {
+      await window.db.delete('clusters', clusterId);
+    } else if (clusterId && remainingInCluster.length > 0) {
+      const cluster = this.cachedClusters.find(c => c.id === clusterId);
+      if (cluster) {
+        const cleanZone = this.cleanZoneString(cluster.zone || 'Zone 1');
+        const remOwners = remainingInCluster.map((m, idx) => {
+          const con = this.cachedConsumers.find(c => c.id === m.consumerId);
+          return (con && con.name) ? con.name : (m.ownerName || m.meterNo || `Meter #${idx + 1}`);
+        }).filter(Boolean);
+        const shortOwners = remOwners.slice(0, 3).join(', ') + (remOwners.length > 3 ? ` +${remOwners.length - 3}` : '');
+        cluster.name = `${cleanZone} Clustered Meters (${shortOwners})`;
+        cluster.description = `${remainingInCluster.length} grouped water meter${remainingInCluster.length === 1 ? '' : 's'} (${remOwners.join(', ')})`;
+        await window.db.put('clusters', cluster);
+      }
+    }
+
+    await this.refreshDataCache();
+    await this.populateZoneDropdowns();
+    this.syncPinsToMap();
+    this.renderConsumerList();
+    this.renderBillingList();
+    this.populateQuickConsumerSelect();
+    this.renderStats();
+    try { await this.renderZoneExportCenter(); } catch (_) {}
+    this.autoSyncToOfficePcSilent();
+
+    if (clusterId && remainingInCluster.length > 0) {
+      this.openClusterSheet(clusterId);
+    } else {
+      this.closeClusterSheet();
+    }
+    this.showToast(`Removed water meter for ${ownerName}.`, 2400);
+  }
+
+  closeClusterSheet() {
+    const sheet = document.getElementById('cluster-bottom-sheet');
+    if (sheet) sheet.classList.remove('visible');
+    if (this.mapEngine && typeof this.mapEngine.clearSelectedPin === 'function') {
+      this.mapEngine.clearSelectedPin();
+    }
+  }
+
+  // --- Real-Time Geolocation & Compass Heading Tracking (Phase 2, Section 5) ---
+
+  _startCompassTracking() {
+    if (this._compassListenerBound) return;
+    this._compassListenerBound = true;
+
+    this._onDeviceOrientation = (e) => {
+      let compassHeading = null;
+      if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
+        // iOS Safari hardware compass heading (0° = North, 90° = East)
+        compassHeading = e.webkitCompassHeading;
+      } else if (e.alpha !== null && e.alpha !== undefined && !isNaN(e.alpha)) {
+        // Android / Chrome orientation alpha (counter-clockwise from North)
+        const screenAngle = (window.screen && window.screen.orientation && window.screen.orientation.angle)
+          || window.orientation
+          || 0;
+        compassHeading = (360 - Number(e.alpha) + Number(screenAngle)) % 360;
+      }
+
+      if (compassHeading !== null && this.mapEngine) {
+        this.mapEngine.setUserHeading(compassHeading, true);
+      }
+    };
+
+    if ('ondeviceorientationabsolute' in window) {
+      window.addEventListener('deviceorientationabsolute', this._onDeviceOrientation, true);
+    }
+    window.addEventListener('deviceorientation', this._onDeviceOrientation, true);
+  }
+
+  _stopCompassTracking() {
+    if (!this._compassListenerBound) return;
+    this._compassListenerBound = false;
+    if (this._onDeviceOrientation) {
+      window.removeEventListener('deviceorientationabsolute', this._onDeviceOrientation, true);
+      window.removeEventListener('deviceorientation', this._onDeviceOrientation, true);
+    }
+  }
+
+  toggleRealtimeGps() {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by this browser/device.\n\nFor GPS to work:\n• Use Chrome or Safari on mobile\n• Access the app via HTTPS\n• Enable Location Services and "Precise Location" in device settings');
+      return;
+    }
+
+    // Request iOS 13+ DeviceOrientation permission on user tap so the directional cone tracks facing angle
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission()
+        .then((state) => {
+          if (state === 'granted') this._startCompassTracking();
+        })
+        .catch(() => {});
+    } else {
+      this._startCompassTracking();
+    }
+
+    if (this.gpsWatchId !== null) {
+      // Already tracking — recenter map directly on current GPS position with deep zoom 19
+      if (this.mapEngine && this.mapEngine.userGps) {
+        const { lat, lng } = this.mapEngine.userGps;
+        this.mapEngine.panTo(lat, lng, 19);
+        const btn = document.getElementById('btn-gps-my-location');
+        if (btn) {
+          btn.innerHTML = `${window.AppIcons.crosshair()} Re-centered!`;
+          setTimeout(() => {
+            if (this.gpsWatchId !== null && this.mapEngine && this.mapEngine.userGps) {
+              const acc = Math.round(this.mapEngine.userGps.accuracy || 0);
+              const icon = acc <= 15 ? '●' : acc <= 40 ? '◉' : '○';
+              btn.innerHTML = `${window.AppIcons.crosshair()} ${icon} ±${acc}m`;
+            }
+          }, 1200);
+        }
+      } else {
+        this.stopRealtimeGps();
+      }
+    } else {
+      this.startRealtimeGps({ silent: false });
+    }
+  }
+
+  startRealtimeGps(opts = {}) {
+    const silent = Boolean(opts.silent);
+    const btn = document.getElementById('btn-gps-my-location');
+    if (btn) {
+      btn.classList.add('active');
+      btn.innerHTML = `${window.AppIcons.crosshair()} Acquiring GPS...`;
+    }
+
+    this._startCompassTracking();
+
+    // Track whether we've centered on real device location and the best accuracy seen
+    this._gpsPannedOnce = false;
+    this._bestGpsAccuracy = Infinity;
+
+    const handleGpsPosition = (pos) => {
+      const { latitude, longitude, accuracy, heading } = pos.coords;
+
+      if (this.mapEngine) {
+        // Update the GPS marker with real coordinates, accuracy circle, heading beam, and elastic Diclum border
+        this.mapEngine.setUserGps(latitude, longitude, accuracy, heading);
+
+        // Only auto-center the camera when we have an acceptable fix (<= 60m)
+        if (accuracy <= 60) {
+          if (!this._gpsPannedOnce) {
+            this._gpsPannedOnce = true;
+            this._bestGpsAccuracy = accuracy;
+            const targetZoom = accuracy <= 20 ? 19 : 18;
+            this.mapEngine.panTo(latitude, longitude, targetZoom);
+          } else if (accuracy < this._bestGpsAccuracy - 20) {
+            this._bestGpsAccuracy = accuracy;
+            this.mapEngine.panTo(latitude, longitude, 19);
+          }
+        }
+      }
+
+      if (btn) {
+        let accuracyStatus = '';
+        if (accuracy <= 25) {
+          accuracyStatus = `● ±${Math.round(accuracy)}m`;
+        } else if (accuracy <= 60) {
+          accuracyStatus = `◉ ±${Math.round(accuracy)}m`;
+        } else {
+          accuracyStatus = `○ ±${Math.round(accuracy)}m`;
+        }
+        btn.innerHTML = `${window.AppIcons.crosshair()} ${accuracyStatus}`;
+        btn.title = `GPS Status:\nLat: ${latitude.toFixed(6)}\nLng: ${longitude.toFixed(6)}\nAccuracy: ±${Math.round(accuracy)}m${accuracy > 50 ? '\nTip: Move outdoors or turn ON "Precise Location" in phone settings for pinpoint accuracy.' : '\nHigh precision satellite lock.'}`;
+      }
+
+      if (this.isRecordingRoute) {
+        this.appendRoutePoint(latitude, longitude, accuracy);
+      }
+    };
+
+    // Immediate high-accuracy position probe + continuous real-time watchPosition stream
+    navigator.geolocation.getCurrentPosition(handleGpsPosition, () => {}, {
+      enableHighAccuracy: true,
+      timeout: 12000,
+      maximumAge: 0
+    });
+
+    this.gpsWatchId = navigator.geolocation.watchPosition(
+      handleGpsPosition,
+      (err) => {
+        console.warn('GPS location error:', err);
+        let msg = '';
+        switch(err.code) {
+          case 1:
+            msg = 'Location permission denied.\n\nTo enable GPS:\n1. Tap the lock icon in the browser address bar\n2. Allow Location access (turn on "Precise Location")\n3. Refresh the page';
+            break;
+          case 2:
+            msg = 'GPS signal unavailable. Make sure:\n• Location services are enabled on your device\n• You are outdoors or near a window for better satellite lock';
+            break;
+          case 3:
+            msg = 'GPS request timed out. This can happen in areas with weak satellite coverage. Please try again outdoors.';
+            break;
+          default:
+            msg = 'Unable to acquire GPS location: ' + err.message;
+        }
+
+        if (btn) {
+          btn.classList.remove('active');
+          btn.innerHTML = `${window.AppIcons.crosshair()} Live GPS`;
+          btn.title = msg;
+        }
+        if (!silent) {
+          alert(msg);
+        }
+        this.gpsWatchId = null;
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 25000,
+        maximumAge: 0 // Always query hardware GPS, never accept stale cached coordinates
+      }
+    );
+  }
+
+  stopRealtimeGps() {
+    if (this.gpsWatchId !== null) {
+      navigator.geolocation.clearWatch(this.gpsWatchId);
+      this.gpsWatchId = null;
+    }
+    this._stopCompassTracking();
+    this._gpsPannedOnce = false;
+    this._bestGpsAccuracy = Infinity;
+    const btn = document.getElementById('btn-gps-my-location');
+    if (btn) {
+      btn.classList.remove('active');
+      btn.innerHTML = `${window.AppIcons.crosshair()} Live GPS`;
+      btn.title = 'Tap to enable GPS tracking';
+    }
+    if (this.mapEngine) {
+      this.mapEngine.clearUserGps();
+    }
+  }
+
+  restoreInstantGpsCache() {
+    try {
+      const cached = localStorage.getItem('dicklum_last_known_gps');
+      if (cached && this.mapEngine) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed.lat === 'number' && typeof parsed.lng === 'number') {
+          // Instant 1ms GPS marker restoration on startup
+          this.mapEngine.setUserGps(parsed.lat, parsed.lng, parsed.accuracy || 15, parsed.heading || null);
+          const btn = document.getElementById('btn-gps-my-location');
+          if (btn) {
+            btn.classList.add('active');
+            const acc = Math.round(parsed.accuracy || 15);
+            btn.innerHTML = `${window.AppIcons.crosshair()} ● ±${acc}m (cached)`;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not restore cached GPS:', e);
+    }
+  }
+
+  toggleAllPinsVisibility() {
+    if (!this.mapEngine) return;
+    const isCurrentlyHidden = this.mapEngine.isPinsHidden;
+    const newState = !isCurrentlyHidden;
+    this.mapEngine.setPinsHidden(newState);
+
+    const btnHeader = document.getElementById('btn-toggle-all-pins');
+    const fabBtn = document.getElementById('fab-toggle-pins');
+
+    [btnHeader, fabBtn].forEach(btn => {
+      if (!btn) return;
+      btn.classList.toggle('pins-hidden', newState);
+      if (newState) {
+        btn.title = 'Pins hidden (Search to reveal specific house/meter)';
+      } else {
+        btn.title = 'All pins visible';
+      }
+    });
+
+    if (newState) {
+      this.showToast('All pins hidden. Search consumer or meter to locate.', 2000);
+    } else {
+      this.showToast('All pins visible on map.', 1500);
+    }
+  }
+
+  // --- Walking Route Recording (Phase 2, Section 7) ---
+
+  startRouteRecording() {
+    this.isRecordingRoute = true;
+    this.recordedRoutePoints = [];
+    this.routeRecordingStartTime = new Date();
+
+    const bar = document.getElementById('route-recorder-bar');
+    bar.classList.remove('hidden');
+    bar.classList.add('recording');
+
+    document.getElementById('route-pts-counter').textContent = '0 pts';
+    document.getElementById('route-dist-counter').textContent = '0m';
+
+    // Ensure GPS is running
+    if (this.gpsWatchId === null) {
+      this.startRealtimeGps();
+    }
+  }
+
+  appendRoutePoint(lat, lng, accuracy) {
+    const numLat = Number(lat);
+    const numLng = Number(lng);
+
+    // Suppress stationary jitter: don't record route point if moved < 2.5 meters
+    if (this.recordedRoutePoints.length > 0) {
+      const last = this.recordedRoutePoints[this.recordedRoutePoints.length - 1];
+      const distFromLast = this.calculateDistanceMeters(last.lat, last.lng, numLat, numLng);
+      if (distFromLast < 2.5) {
+        return;
+      }
+    }
+
+    const pt = {
+      lat: numLat,
+      lng: numLng,
+      time: new Date().toISOString(),
+      accuracy: Math.round(accuracy || 0)
+    };
+
+    this.recordedRoutePoints.push(pt);
+
+    // Calculate approximate distance
+    let dist = 0;
+    for (let i = 1; i < this.recordedRoutePoints.length; i++) {
+      dist += this.calculateDistanceMeters(
+        this.recordedRoutePoints[i - 1].lat,
+        this.recordedRoutePoints[i - 1].lng,
+        this.recordedRoutePoints[i].lat,
+        this.recordedRoutePoints[i].lng
+      );
+    }
+
+    document.getElementById('route-pts-counter').textContent = `${this.recordedRoutePoints.length} pts`;
+    document.getElementById('route-dist-counter').textContent = `${Math.round(dist)}m`;
+
+    if (this.mapEngine) {
+      this.mapEngine.setActiveRoute(this.recordedRoutePoints);
+    }
+  }
+
+  async stopAndSaveRoute() {
+    if (!this.isRecordingRoute) return;
+
+    if (this.recordedRoutePoints.length < 2) {
+      alert('Route has too few GPS points to save. Keep moving to record your path.');
+      return;
+    }
+
+    const defaultName = `Route ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const routeName = prompt('Enter a name for this walking route:', defaultName);
+    if (!routeName) return;
+
+    let dist = 0;
+    for (let i = 1; i < this.recordedRoutePoints.length; i++) {
+      dist += this.calculateDistanceMeters(
+        this.recordedRoutePoints[i - 1].lat,
+        this.recordedRoutePoints[i - 1].lng,
+        this.recordedRoutePoints[i].lat,
+        this.recordedRoutePoints[i].lng
+      );
+    }
+
+    const newRoute = {
+      id: `route-${Date.now()}`,
+      name: routeName.trim(),
+      points: this.recordedRoutePoints,
+      pointCount: this.recordedRoutePoints.length,
+      distanceMeters: Math.round(dist),
+      startedAt: this.routeRecordingStartTime.toISOString(),
+      endedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+
+    await window.db.saveRoute(newRoute);
+    await this.refreshDataCache();
+    this.syncRoutesToMap();
+
+    // Reset recording state
+    this.isRecordingRoute = false;
+    this.recordedRoutePoints = [];
+    if (this.mapEngine) this.mapEngine.setActiveRoute(null);
+
+    const bar = document.getElementById('route-recorder-bar');
+    bar.classList.add('hidden');
+    bar.classList.remove('recording');
+
+    alert(`Walking route "${newRoute.name}" (${newRoute.distanceMeters}m) saved successfully.`);
+  }
+
+  cancelRouteRecording() {
+    if (!confirm('Are you sure you want to discard this walking route recording?')) return;
+    this.isRecordingRoute = false;
+    this.recordedRoutePoints = [];
+    if (this.mapEngine) this.mapEngine.setActiveRoute(null);
+
+    const bar = document.getElementById('route-recorder-bar');
+    bar.classList.add('hidden');
+    bar.classList.remove('recording');
+  }
+
+  calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371e3; // Earth radius in meters
+    const phi1 = lat1 * Math.PI / 180;
+    const phi2 = lat2 * Math.PI / 180;
+    const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+    const deltaLambda = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+              Math.cos(phi1) * Math.cos(phi2) *
+              Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  // --- Reading Operations Flow & Validation (Phase 4) ---
+
+  resetReadingViewToEmpty() {
+    this.activeConsumer = null;
+    this.activeMeter = null;
+
+    const nameEl = document.getElementById('rdg-consumer-name');
+    const acctEl = document.getElementById('rdg-account-no');
+    const addrEl = document.getElementById('rdg-address');
+    const zoneEl = document.getElementById('rdg-zone');
+    const meterEl = document.getElementById('rdg-meter-no');
+
+    if (nameEl) nameEl.textContent = 'No Consumer Selected';
+    if (acctEl) acctEl.textContent = '—';
+    if (addrEl) addrEl.textContent = 'Tap a water meter pin on the map or select below';
+    if (zoneEl) zoneEl.textContent = '—';
+    if (meterEl) meterEl.textContent = '—';
+
+    const delBtn = document.getElementById('rdg-btn-delete-consumer');
+    if (delBtn) delBtn.classList.add('hidden');
+
+    const prevInput = document.getElementById('rdg-previous-input');
+    const currInput = document.getElementById('rdg-current-input');
+    if (prevInput) prevInput.value = 0;
+    if (currInput) currInput.value = 0;
+
+    const quickSelect = document.getElementById('rdg-quick-consumer-select');
+    if (quickSelect) quickSelect.value = '';
+
+    const historyContainer = document.getElementById('consumer-reading-history-list');
+    if (historyContainer) {
+      historyContainer.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); padding: 6px 0;">No consumer selected.</div>';
+    }
+
+    const dupAlert = document.getElementById('rdg-duplicate-alert');
+    if (dupAlert) dupAlert.classList.add('hidden');
+
+    const errorAlert = document.getElementById('rdg-error-alert');
+    if (errorAlert) errorAlert.classList.add('hidden');
+
+    this.clearPhotoPreview();
+
+    this.updateLiveConsumption();
+  }
+
+  clearPhotoPreview() {
+    const photoInput = document.getElementById('rdg-photo-input');
+    if (photoInput) photoInput.value = '';
+    const imgPreview = document.getElementById('rdg-photo-preview');
+    if (imgPreview) {
+      imgPreview.src = '';
+      delete imgPreview.dataset.src;
+    }
+    const previewWrap = document.getElementById('rdg-photo-preview-wrap');
+    if (previewWrap) previewWrap.classList.add('hidden');
+    const photoPrompt = document.getElementById('rdg-photo-prompt');
+    if (photoPrompt) photoPrompt.style.display = 'block';
+  }
+
+  populateQuickConsumerSelect(searchFilter = '') {
+    const select = document.getElementById('rdg-quick-consumer-select');
+    if (!select) return;
+
+    const q = (searchFilter || '').toLowerCase().trim();
+    const currentVal = select.value;
+    select.innerHTML = '<option value="">-- Choose Consumer or Water Meter --</option>';
+
+    const filtered = this.cachedConsumers.filter(c => {
+      if (!q) return true;
+      const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+      const matchName = (c.name || '').toLowerCase().includes(q);
+      const matchAcct = (c.accountNo || '').toLowerCase().includes(q);
+      const matchZone = (c.zone || '').toLowerCase().includes(q);
+      const matchMeter = meter && (meter.meterNo || '').toLowerCase().includes(q);
+      return matchName || matchAcct || matchZone || matchMeter;
+    });
+
+    filtered.forEach(c => {
+      const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = `${c.name} (${c.accountNo}) - Meter: ${meter ? meter.meterNo : 'None'}`;
+      select.appendChild(opt);
+    });
+
+    if (this.activeConsumer && filtered.some(c => c.id === this.activeConsumer.id)) {
+      select.value = this.activeConsumer.id;
+    } else if (currentVal && filtered.some(c => c.id === currentVal)) {
+      select.value = currentVal;
+    } else if (filtered.length === 1) {
+      select.value = filtered[0].id;
+    }
+  }
+
+  async startReadingForConsumer(consumerId, sourceEl = null) {
+    this.closeConsumerSheet();
+    this.closeClusterSheet();
+
+    try {
+      const data = await window.readingModule.loadConsumer(consumerId);
+      this.activeConsumer = data.consumer;
+      this.activeMeter = data.meter;
+
+      document.getElementById('rdg-consumer-name').textContent = data.consumer.name;
+      document.getElementById('rdg-account-no').textContent = data.consumer.accountNo;
+      document.getElementById('rdg-address').textContent = data.consumer.address;
+      document.getElementById('rdg-zone').textContent = data.consumer.zone;
+      document.getElementById('rdg-meter-no').textContent = data.meter ? data.meter.meterNo : 'Unassigned';
+
+      const delBtn = document.getElementById('rdg-btn-delete-consumer');
+      if (delBtn) delBtn.classList.remove('hidden');
+
+      const prevInput = document.getElementById('rdg-previous-input');
+      const currInput = document.getElementById('rdg-current-input');
+      if (prevInput) prevInput.value = data.previousReading;
+      if (currInput) currInput.value = data.previousReading;
+
+      this.populateQuickConsumerSelect();
+      const quickSelect = document.getElementById('rdg-quick-consumer-select');
+      if (quickSelect) quickSelect.value = consumerId;
+
+      // Render Consumer Reading History in Reading Screen (Phase 4, Section 12)
+      this.renderConsumerReadingHistory(data.history || []);
+
+      // Duplicate Check
+      const existingReading = await window.readingModule.checkDuplicate(consumerId, this.activeBillingCode);
+      const duplicateWarning = document.getElementById('rdg-duplicate-alert');
+      if (existingReading) {
+        duplicateWarning.classList.remove('hidden');
+        duplicateWarning.innerHTML = `
+          <strong>Duplicate Notice:</strong> A reading has already been recorded for ${data.consumer.name} for ${this.activeBillingPeriod}. 
+          Previous: ${existingReading.previousReading} m³, Current: ${existingReading.currentReading} m³ (${existingReading.consumption} m³).
+        `;
+      } else {
+        duplicateWarning.classList.add('hidden');
+      }
+
+      this.updateLiveConsumption();
+
+      const targetCard = document.getElementById('rdg-consumer-card');
+      if (sourceEl && targetCard) {
+        this.sharedElementMorph(sourceEl, targetCard, () => {
+          this.switchView('view-reading');
+        });
+      } else {
+        this.switchView('view-reading');
+      }
+    } catch (err) {
+      alert(`Error loading reading: ${err.message}`);
+    }
+  }
+
+  renderConsumerReadingHistory(history) {
+    const container = document.getElementById('consumer-reading-history-list');
+    if (!container) return;
+
+    if (!history || history.length === 0) {
+      container.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); padding: 6px 0;">No prior historical readings recorded.</div>';
+      return;
+    }
+
+    container.innerHTML = history.slice(0, 5).map(h => `
+      <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-secondary);">
+        <span><strong style="color: var(--text-primary);">${h.billingPeriod}</strong> (${new Date(h.readingDate).toLocaleDateString()})</span>
+        <span>${h.previousReading} → <strong style="color: var(--text-primary);">${h.currentReading} m³</strong> (<span style="color: var(--primary-light); font-weight:700;">${h.consumption} m³</span>)</span>
+      </div>
+    `).join('');
+  }
+
+  updateLiveConsumption() {
+    const prevInput = document.getElementById('rdg-previous-input');
+    const currInput = document.getElementById('rdg-current-input');
+    const prev = prevInput ? (Number(prevInput.value) || 0) : 0;
+    const curr = currInput ? (Number(currInput.value) || 0) : 0;
+    const isOverride = document.getElementById('rdg-override-checkbox').checked;
+
+    const rawTariff = (this.cachedSettings && this.cachedSettings.tariff) ? this.cachedSettings.tariff : {};
+    const activeTariff = Object.assign({}, rawTariff, {
+      minimumCharge: Number(rawTariff.minimumCharge ?? rawTariff.minimumChargePesos) || 100.00,
+      minimumAllowance: Number(rawTariff.minimumAllowance ?? rawTariff.minimumCoverageM3) || 10,
+      excessRate: Number(rawTariff.excessRate ?? rawTariff.excessPerM3Pesos) || 15.00
+    });
+
+    const calculation = window.billingEngine.calculate(prev, curr, activeTariff);
+    const usage = curr - prev;
+
+    const errorAlert = document.getElementById('rdg-error-alert');
+    const warningBox = document.getElementById('rdg-excess-warning-box');
+    const saveBtn = document.getElementById('btn-save-reading');
+    const savePrintBtn = document.getElementById('btn-save-print-reading');
+
+    // 1. Check for Negative Consumption
+    if (usage < 0 && !isOverride) {
+      if (errorAlert) {
+        errorAlert.classList.remove('hidden');
+        errorAlert.innerHTML = `
+          <strong>Invalid Reading:</strong> Current reading (${curr} m³) cannot be lower than Previous reading (${prev} m³). 
+          Negative consumption (${usage} m³) is prohibited. Please verify the physical meter or check 'Meter Replacement / Rollover Override'.
+        `;
+      }
+      if (saveBtn) saveBtn.disabled = true;
+      if (savePrintBtn) savePrintBtn.disabled = true;
+    } else {
+      if (errorAlert) errorAlert.classList.add('hidden');
+      if (saveBtn) saveBtn.disabled = false;
+      if (savePrintBtn) savePrintBtn.disabled = false;
+    }
+
+    // 2. Check for Unconfigured Excess Rate (Phase 5, Section 13)
+    if (calculation.isExcessRateRequired) {
+      if (warningBox) {
+        warningBox.classList.remove('hidden');
+        warningBox.innerHTML = `
+          <strong>Tariff Action Required:</strong> ${calculation.formulaExplanation}
+        `;
+      }
+      if (saveBtn) saveBtn.disabled = true;
+      if (savePrintBtn) savePrintBtn.disabled = true;
+    } else {
+      if (warningBox) warningBox.classList.add('hidden');
+    }
+
+    const calcPrevEl = document.getElementById('rdg-calc-prev');
+    const calcCurrEl = document.getElementById('rdg-calc-curr');
+    const calcUsageEl = document.getElementById('rdg-calc-usage');
+    const calcMinEl = document.getElementById('rdg-calc-min-charge');
+    const calcExcessEl = document.getElementById('rdg-calc-excess-charge');
+    const calcTotalEl = document.getElementById('rdg-calc-total-due');
+    const calcExpEl = document.getElementById('rdg-calc-explanation');
+
+    if (calcPrevEl) calcPrevEl.textContent = `${prev.toLocaleString()} m³`;
+    if (calcCurrEl) calcCurrEl.textContent = `${curr.toLocaleString()} m³`;
+    if (calcUsageEl) calcUsageEl.textContent = `${Math.max(0, usage).toLocaleString()} m³`;
+    if (calcMinEl) calcMinEl.textContent = `PHP ${calculation.minimumCharge.toFixed(2)}`;
+    if (calcExcessEl) calcExcessEl.textContent = calculation.isExcessRateRequired ? 'Unset' : `PHP ${calculation.excessCharge.toFixed(2)}`;
+    if (calcTotalEl) calcTotalEl.textContent = calculation.isExcessRateRequired ? 'Requires Tariff' : `PHP ${calculation.totalAmountDue.toFixed(2)}`;
+    if (calcExpEl) calcExpEl.textContent = calculation.formulaExplanation;
+
+    // Blueprint Progressive Disclosure & Live Summary Bar Readouts
+    const quickUsageEl = document.getElementById('rdg-quick-usage');
+    const quickDueEl = document.getElementById('rdg-quick-due');
+    const dueTagEl = document.getElementById('rdg-disclosure-due-tag');
+    if (quickUsageEl) quickUsageEl.textContent = `${Math.max(0, usage).toLocaleString()} m³`;
+    if (quickDueEl) quickDueEl.textContent = calculation.isExcessRateRequired ? 'Requires Tariff' : `PHP ${calculation.totalAmountDue.toFixed(2)}`;
+    if (dueTagEl) dueTagEl.textContent = calculation.isExcessRateRequired ? 'Unset' : `PHP ${calculation.totalAmountDue.toFixed(2)}`;
+  }
+
+  async submitReading(andPrint = false) {
+    if (!this.activeConsumer) {
+      alert('Please select a consumer first before saving a reading.');
+      return;
+    }
+
+    const prevInput = document.getElementById('rdg-previous-input');
+    const currInput = document.getElementById('rdg-current-input');
+    const prev = prevInput ? (Number(prevInput.value) || 0) : 0;
+    const curr = currInput ? (Number(currInput.value) || 0) : 0;
+    const isOverride = document.getElementById('rdg-override-checkbox').checked;
+    const notes = document.getElementById('rdg-notes-input').value;
+    const photoDataUrl = document.getElementById('rdg-photo-preview').dataset.src || null;
+
+    if (curr < prev && !isOverride) {
+      alert('Cannot save reading: Current reading is less than previous reading without replacement override.');
+      return;
+    }
+
+    try {
+      const result = await window.readingModule.saveReading({
+        consumerId: this.activeConsumer.id,
+        meterId: this.activeMeter ? this.activeMeter.id : null,
+        billingPeriod: this.activeBillingCode,
+        previousReading: prev,
+        currentReading: curr,
+        readerName: (this.cachedSettings.reader && this.cachedSettings.reader.name) || '',
+        notes: notes,
+        isRolloverOverride: isOverride,
+        photoDataUrl: photoDataUrl
+      });
+
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      await this.renderZoneExportCenter();
+      this.autoSyncToOfficePcSilent();
+
+      if (andPrint) {
+        this.openThermalReceiptModal(result.bill.id);
+      } else {
+        alert(`Reading saved successfully for ${this.activeConsumer.name}.\nConsumption: ${result.reading.consumption} m³ | Amount Due: PHP ${result.bill.totalAmountDue.toFixed(2)}`);
+        this.switchView('view-map');
+      }
+    } catch (err) {
+      alert(`Cannot save reading: ${err.message}`);
+    }
+  }
+
+  // --- Printing Modals & Thermal Receipt Builder (Phase 6) ---
+
+  buildThermalReceiptHtml(bill, consumer, meter) {
+    const tp = window.thermalPrinter;
+    const is80 = tp && tp.paperWidth === '80mm';
+    const lineChars = tp && typeof tp.getLineCharacterWidth === 'function'
+      ? tp.getLineCharacterWidth()
+      : (is80 ? 44 : 32);
+    const printableMm = tp ? (tp.printableWidthMm || (is80 ? 72 : 48)) : 48;
+    const divider = '-'.repeat(lineChars);
+    const doubleDivider = '='.repeat(lineChars);
+
+    const cName = (consumer && consumer.name) || bill.consumerName || 'Consumer';
+    const cAcct = (consumer && consumer.accountNo) || bill.accountNo || 'N/A';
+    const cAddress = (consumer && consumer.address) || bill.address || `${(consumer && consumer.zone) || bill.zone || 'Zone 1'}, Dicklum`;
+    const classification = (consumer && consumer.classification) || bill.classification || 'Residential';
+    const mNo = (meter && meter.meterNo && meter.meterNo !== 'Unassigned') ? meter.meterNo : (bill.meterNo || 'N/A');
+
+    const prevRdg = Number(bill.previousReading || 0);
+    const currRdg = Number(bill.currentReading || 0);
+    const consRdg = Number(bill.consumption || 0);
+
+    let currentBill = Number(bill.currentBill !== undefined ? bill.currentBill : (bill.totalAmountDue ?? 0));
+    if (consRdg <= 0) {
+      currentBill = 0.00;
+    }
+    let arrears = Number(bill.arrears || 0);
+    if (consRdg <= 0) {
+      arrears = 0.00;
+    }
+    const totalDue = currentBill + arrears;
+
+    const isPaid = bill.paymentStatus === 'PAID';
+    const orNo = bill.orNumber || bill.officialReceiptNo || '';
+    const paidAmt = Number(bill.amountPaid || 0);
+    const paidDate = bill.paidDate || bill.paidAt || '';
+
+    // Date formatting helpers (e.g., "October 15, 2026")
+    const formatDateLong = (val) => {
+      if (!val) return '';
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return String(val);
+      return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    };
+
+    const formatPeriodLong = (val) => {
+      if (!val) return 'October 2026';
+      if (val.includes(' ')) return val;
+      const parts = String(val).split('-');
+      if (parts.length === 2) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = new Date(y, m, 1);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        }
+      }
+      return val;
+    };
+
+    const periodStr = formatPeriodLong(bill.billingPeriod);
+    const dueDateStr = formatDateLong(bill.dueDate || new Date(Date.now() + 15 * 86400000));
+    const discDateStr = formatDateLong(bill.disconnectionDate || (bill.dueDate ? new Date(new Date(bill.dueDate).getTime() + 2 * 86400000) : new Date(Date.now() + 17 * 86400000)));
+
+    const showLogo = Boolean(tp && tp.printLogo);
+    const showBarcode = tp ? Boolean(tp.printBarcode) : true;
+    const showQr = tp ? Boolean(tp.printQrCode) : true;
+
+    return `
+      <div class="thermal-receipt ${is80 ? 'w-80' : 'w-58'}" data-printable-mm="${printableMm}" style="margin: 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height: 1.38;">
+        ${showLogo ? `<div class="t-center" style="margin-bottom:4px;"><img src="assets/logo.png" alt="Logo" style="width:38px; height:38px; filter:grayscale(1) contrast(1.8);"></div>` : ''}
+        
+        <!-- Header Matching Original Paper Notice -->
+        <div class="t-center t-bold" style="font-size: 14px; letter-spacing: -0.01em;">Dicklum Water Association, Inc.</div>
+        <div class="t-center t-small" style="color: #334155;">Dicklum, Manolo Fortich, Bukidnon</div>
+        <div class="t-center t-small" style="font-style: italic; margin-top: 2px;">Statement of Account for the month of ${periodStr}</div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Account Details Matching Original Paper -->
+        <div class="t-row"><span>Account Name:</span><span class="t-bold">${cName}</span></div>
+        <div class="t-row"><span>Account No.:</span><span>${cAcct}</span></div>
+        <div class="t-row"><span>Address:</span><span>${cAddress}</span></div>
+        <div class="t-row"><span>Classification:</span><span>${classification}</span></div>
+        <div class="t-row"><span>Meter No.:</span><span>${mNo}</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Meter Reading & Usage -->
+        <div class="t-row"><span>Previous Reading:</span><span>${prevRdg.toLocaleString()}</span></div>
+        <div class="t-row"><span>Current Reading:</span><span>${currRdg.toLocaleString()}</span></div>
+        <div class="t-row t-bold" style="color: #0284C7;"><span>Usage:</span><span>${consRdg.toLocaleString()} cubic meters</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Billing Amounts -->
+        <div class="t-row"><span>Current Bill:</span><span>₱ ${currentBill.toFixed(2)}</span></div>
+        <div class="t-row"><span>Arrears:</span><span>₱ ${arrears.toFixed(2)}</span></div>
+        <div class="t-divider">${doubleDivider}</div>
+
+        <!-- Prominent Total Due -->
+        <div class="t-center t-bold t-total" style="font-size: 16px; margin: 4px 0;">TOTAL DUE: ₱ ${totalDue.toFixed(2)}</div>
+        <div class="t-divider">${doubleDivider}</div>
+
+        <!-- Important Dates -->
+        <div class="t-row"><span>Due Date:</span><span class="t-bold text-danger">${dueDateStr}</span></div>
+        <div class="t-row"><span>Disconnection Date:</span><span class="t-bold text-danger">${discDateStr}</span></div>
+        <div class="t-divider">${divider}</div>
+
+        <!-- Payment Status (if already settled) -->
+        ${isPaid ? `
+          <div class="t-center t-bold" style="color: #059669; border: 1px dashed #059669; padding: 3px; margin: 4px 0;">
+            PAID: ₱ ${paidAmt.toFixed(2)} ${orNo ? `(OR# ${orNo})` : ''} ${paidDate ? `• ${paidDate}` : ''}
+          </div>
+        ` : ''}
+
+        <!-- Official Reminders Word-for-Word from Original Dicklum Paper Notice -->
+        <div class="t-bold" style="margin-top: 6px; font-size: 11px; text-align: left;">Reminders</div>
+        <div style="font-size: 9.5px; line-height: 1.4; text-align: left; margin-top: 3px; color: #1E293B;">
+          <div>1. Disregard this notice if payment has been made.</div>
+          <div>2. This serves as Notice of Disconnection.</div>
+          <div>3. Please pay on time. Reconnection fee is Php 500.</div>
+          <div>4. Pay bills directly to the cashier.</div>
+          <div>5. Kindly report leaks or acts of vandalism on our pipeline.</div>
+        </div>
+
+        <!-- Barcode & QR (Useful for Instant Cashier Scanning) -->
+        ${showBarcode ? `
+          <div class="t-center" style="margin: 8px 0 2px 0;">
+            <svg width="160" height="30" viewBox="0 0 160 30" style="display:inline-block;">
+              <path d="M4 2h2v26H4zm4 0h1v26H8zm3 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h1v26h-1zm3 0h2v26h-2zm4 0h4v26h-4zm6 0h1v26h-1zm3 0h2v26h-2zm4 0h1v26h-1zm3 0h3v26h-3zm5 0h2v26h-2zm4 0h1v26h-1zm3 0h2v26h-2z" fill="#000"/>
+            </svg>
+            <div style="font-size:8.5px; letter-spacing:1px; color:#475569;">${bill.id}</div>
+          </div>
+        ` : ''}
+
+        ${showQr ? `
+          <div class="t-center" style="margin: 4px 0;">
+            <svg width="50" height="50" viewBox="0 0 29 29" shape-rendering="crispEdges" style="display:inline-block; border:1px solid #000; padding:2px; background:#fff;">
+              <path d="M1 1h7v7H1V1zm1 1v5h5V2H2zm1 1h3v3H3V3zm18-2h7v7h-7V1zm1 1v5h5V2h-5zm1 1h3v3h-3V3zM1 21h7v7H1v-7zm1 1v5h5v-5H2zm1 1h3v3H3v-3zM10 1h2v2h-2V1zm4 0h1v3h-1V1zm3 1h2v2h-2V2zM10 5h3v2h-3V5zm5 0h2v3h-2V5zM1 10h3v2H1v-2zm5 0h2v3H6v-3zm4 0h4v2h-4v-2zm6 0h2v4h-2v-4zm4 0h3v2h-3v-2zm5 1h3v2h-3v-2zM2 14h2v3H2v-3zm4 1h3v2H6v-2zm5-1h2v4h-2v-4zm4 1h3v3h-3v-3zm5 0h2v2h-2v-2zm4 1h3v3h-3v-3zM10 21h3v2h-3v-2zm5 0h2v3h-2v-3zm4 1h4v2h-4v-2zm6 0h2v4h-2v-4zM10 25h2v3h-2v-3zm4 1h3v2h-3v-2zm5 0h3v2h-3v-2zm5 1h3v1h-3v-1z" fill="#000"/>
+            </svg>
+          </div>
+        ` : ''}
+
+        <div class="t-center t-small" style="font-size:8px; margin-top:4px; color:#64748B;">[Xprinter XP-P300 • ${printableMm}mm • 100% Phenol-Free Paper]</div>
+      </div>
+    `;
+  }
+
+  async openThermalReceiptModal(billId) {
+    const bill = await window.db.get('bills', billId);
+    if (!bill) return;
+
+    const consumer = await window.db.get('consumers', bill.consumerId);
+    const meter = bill.meterId ? await window.db.get('meters', bill.meterId) : null;
+    this.activeBill = bill;
+
+    const paper = document.getElementById('thermal-paper-content');
+    paper.innerHTML = this.buildThermalReceiptHtml(bill, consumer, meter);
+
+    document.getElementById('modal-thermal-preview').classList.add('active');
+  }
+
+  async openA4StatementModal(billId) {
+    const bill = await window.db.get('bills', billId);
+    if (!bill) return;
+
+    const consumer = await window.db.get('consumers', bill.consumerId);
+    const meter = bill.meterId ? await window.db.get('meters', bill.meterId) : null;
+    this.activeBill = bill;
+
+    const container = document.getElementById('a4-statement-content');
+    container.innerHTML = window.a4StatementGenerator.generateHTML(bill, consumer, meter, this.cachedSettings);
+
+    document.getElementById('modal-a4-preview').classList.add('active');
+  }
+
+  // Alias methods for modal triggers from consumer history & external calls
+  openThermalReceipt(billId) {
+    return this.openThermalReceiptModal(billId);
+  }
+
+  openA4Statement(billId) {
+    return this.openA4StatementModal(billId);
+  }
+
+  async deleteConsumerRecord(consumerId) {
+    const consumer = this.cachedConsumers.find(c => c.id === consumerId);
+    const name = consumer ? consumer.name : `Consumer #${consumerId}`;
+    if (!confirm(`Permanently delete consumer "${name}"?\n\nThis will also remove their water meter registration and associated billing/reading history.`)) {
+      return;
+    }
+
+    try {
+      // 1. Delete consumer from IndexedDB
+      await window.db.delete('consumers', consumerId);
+
+      // 2. Delete associated water meters
+      const associatedMeters = this.cachedMeters.filter(m => m.consumerId === consumerId);
+      for (const m of associatedMeters) {
+        await window.db.delete('meters', m.id);
+      }
+
+      // 3. Delete associated bills and readings
+      const associatedBills = this.cachedBills.filter(b => b.consumerId === consumerId);
+      for (const b of associatedBills) {
+        await window.db.delete('bills', b.id);
+      }
+      const readings = await window.db.getAll('readings');
+      const associatedReadings = readings.filter(r => r.consumerId === consumerId);
+      for (const r of associatedReadings) {
+        await window.db.delete('readings', r.id);
+      }
+
+      // 4. Close any open sheets or modals if this consumer was active
+      if (this.activeConsumer && this.activeConsumer.id === consumerId) {
+        this.closeConsumerSheet();
+        this.resetReadingViewToEmpty();
+      }
+
+      const historyModal = document.getElementById('modal-consumer-history');
+      if (historyModal && historyModal.classList.contains('active')) {
+        historyModal.classList.remove('active');
+      }
+
+      // 5. Refresh cache and update UI
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.syncRoutesToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      this.populateQuickConsumerSelect();
+      this.renderStats();
+      if (this.activeView === 'view-settings') {
+        await this.renderSettingsZonesAndClusters();
+      }
+
+      alert(`Consumer "${name}" has been permanently deleted.`);
+    } catch (err) {
+      console.error('Error deleting consumer:', err);
+      alert(`Failed to delete consumer: ${err.message}`);
+    }
+  }
+
+  async deleteBillRecord(billId) {
+    if (!confirm(`Are you sure you want to permanently delete billing statement #${billId}?`)) {
+      return;
+    }
+
+    try {
+      const targetBill = this.cachedBills.find(b => b.id === billId);
+      const targetConsumerId = (targetBill && targetBill.consumerId) || this.activeHistoryConsumerId || (this.activeConsumer && this.activeConsumer.id);
+      await window.db.delete('bills', billId);
+      await this.refreshDataCache();
+      this.renderBillingList();
+      this.renderStats();
+      this.autoSyncToOfficePcSilent();
+
+      // If consumer folder modal is open, refresh it
+      const historyModal = document.getElementById('modal-consumer-history');
+      if (historyModal && historyModal.classList.contains('active') && targetConsumerId) {
+        await this.openConsumerHistoryModal(targetConsumerId);
+      }
+
+      this.showToast(`Billing statement #${billId} deleted.`, 2200);
+    } catch (err) {
+      console.error('Error deleting bill:', err);
+      alert(`Failed to delete billing record: ${err.message}`);
+    }
+  }
+
+  async unpinActiveConsumerOrMeter() {
+    if (!this.pinDeleteEnabled) {
+      alert('Map Pin Deletion is LOCKED for safety.\n\nTo prevent accidental pin deletion during field operations, delete buttons are disabled.\n\nTo enable pin deletion, go to Settings (requires Admin PIN) and switch ON "Enable Map Pin Deletion".');
+      return;
+    }
+
+    // 1. User tapped a WATER METER pin -> delete ONLY the Water Meter pin (keep the Household pin intact!)
+    if (this.activePinType === 'meter' && this.activeMeter) {
+      const meter = this.activeMeter;
+      const meterNo = meter.meterNo || 'Water Meter';
+      const consumer = this.activeConsumer || (meter.consumerId ? this.cachedConsumers.find(c => c.id === meter.consumerId) : null);
+      const hasHouseholdPin = Boolean(consumer && consumer.householdLat && consumer.householdLng);
+      const otherMeters = consumer
+        ? this.cachedMeters.filter(m => m.id !== meter.id && m.consumerId === consumer.id)
+        : [];
+
+      const confirmMsg = hasHouseholdPin
+        ? `Delete Water Meter pin "${meterNo}" for "${consumer.name}"?\n\nOnly the Water Meter pin will be removed — "${consumer.name}"'s Household pin will remain on the map.`
+        : `Delete Water Meter pin "${meterNo}"${consumer ? ` for "${consumer.name}"` : ''}?`;
+
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+
+      try {
+        await window.db.delete('meters', meter.id);
+
+        // Only delete the consumer record if they have NO Household pin and NO other Water Meters left
+        if (consumer && !hasHouseholdPin && otherMeters.length === 0) {
+          await window.db.delete('consumers', consumer.id);
+        }
+
+        this.activeMeter = null;
+        this.activePinType = null;
+        this.closeConsumerSheet();
+        await this.refreshDataCache();
+        this.syncPinsToMap();
+        this.renderConsumerList();
+        this.populateQuickConsumerSelect();
+        this.renderStats();
+        try { await this.renderZoneExportCenter(); } catch (_) {}
+        this.autoSyncToOfficePcSilent();
+
+        if (hasHouseholdPin) {
+          this.showToast(`Water Meter "${meterNo}" deleted. Household pin for ${consumer.name} kept on map.`, 3200);
+        } else {
+          this.showToast(`Water Meter "${meterNo}" deleted.`, 2600);
+        }
+      } catch (err) {
+        console.error('Error deleting meter pin:', err);
+        alert(`Failed to delete water meter pin: ${err.message}`);
+      }
+      return;
+    }
+
+    // 2. User tapped a HOUSEHOLD pin -> delete ONLY the Household pin if a Water Meter exists!
+    if (this.activeConsumer) {
+      const consumer = this.activeConsumer;
+      const linkedMeters = this.cachedMeters.filter(
+        m => m.consumerId === consumer.id ||
+             ((m.ownerName || '').trim().toLowerCase() === (consumer.name || '').trim().toLowerCase())
+      );
+      const hasPinnedMeter = linkedMeters.some(m => m.meterLat && m.meterLng);
+
+      if (hasPinnedMeter || linkedMeters.length > 0) {
+        const meterLabels = linkedMeters.map(m => m.meterNo).join(', ');
+        if (!confirm(`Delete Household pin for "${consumer.name}"?\n\nOnly the Household pin will be removed — Water Meter (${meterLabels}) will remain on the map.`)) {
+          return;
+        }
+        try {
+          consumer.householdLat = null;
+          consumer.householdLng = null;
+          await window.db.put('consumers', consumer);
+
+          this.activeConsumer = null;
+          this.activePinType = null;
+          this.closeConsumerSheet();
+          await this.refreshDataCache();
+          this.syncPinsToMap();
+          this.renderConsumerList();
+          this.populateQuickConsumerSelect();
+          this.renderStats();
+          try { await this.renderZoneExportCenter(); } catch (_) {}
+          this.autoSyncToOfficePcSilent();
+
+          this.showToast(`Household pin for "${consumer.name}" deleted. Water Meter (${meterLabels}) kept on map.`, 3200);
+        } catch (err) {
+          console.error('Error removing household pin:', err);
+          alert(`Failed to delete household pin: ${err.message}`);
+        }
+        return;
+      }
+
+      // Consumer has no water meters at all -> delete the consumer record completely
+      await this.deleteConsumerRecord(consumer.id);
+      return;
+    }
+
+    // Fallback for standalone unassigned meter
+    if (this.activeMeter) {
+      const meterNo = this.activeMeter.meterNo;
+      if (!confirm(`Delete Water Meter pin "${meterNo}"?`)) {
+        return;
+      }
+      try {
+        await window.db.delete('meters', this.activeMeter.id);
+        this.activeMeter = null;
+        this.activePinType = null;
+        this.closeConsumerSheet();
+        await this.refreshDataCache();
+        this.syncPinsToMap();
+        this.renderConsumerList();
+        this.populateQuickConsumerSelect();
+        this.renderStats();
+        this.showToast(`Water meter "${meterNo}" deleted.`);
+      } catch (err) {
+        console.error('Error deleting meter:', err);
+        alert(`Failed to delete meter: ${err.message}`);
+      }
+    }
+  }
+
+  async unpinActiveCluster(clusterIdParam = null) {
+    if (!this.pinDeleteEnabled) {
+      alert('Map Pin Deletion is LOCKED for safety.\n\nTo prevent accidental cluster deletion during field operations, delete buttons are disabled.\n\nTo enable pin deletion, go to Settings (requires Admin PIN) and switch ON "Enable Map Pin Deletion".');
+      return;
+    }
+
+    const targetClusterId = clusterIdParam || (this.activeCluster && this.activeCluster.id) || this.activeClusterId;
+    const cluster = (targetClusterId && this.cachedClusters.find(c => c.id === targetClusterId)) || this.activeCluster;
+    if (!cluster) return;
+
+    const clusterMeters = this.cachedMeters.filter(m => m.clusterId === cluster.id);
+    const ownerNames = clusterMeters.map((m, idx) => {
+      const con = this.cachedConsumers.find(c => c.id === m.consumerId)
+        || this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === (m.ownerName || '').trim().toLowerCase());
+      return (con && con.name) ? con.name : (m.ownerName || m.meterNo || `Meter #${idx + 1}`);
+    }).filter(Boolean);
+
+    const cleanZone = this.cleanZoneString(cluster.zone || 'Zone 1');
+    const shortOwners = ownerNames.slice(0, 3).join(', ') + (ownerNames.length > 3 ? ` +${ownerNames.length - 3}` : '');
+    const displayName = ownerNames.length > 0
+      ? `${cleanZone} Clustered Meters (${shortOwners})`
+      : (cluster.name || 'Clustered Water Meters');
+
+    const confirmMsg = clusterMeters.length > 0
+      ? `Delete Cluster Pin "${displayName}" (${clusterMeters.length} water meter${clusterMeters.length === 1 ? '' : 's'}: ${ownerNames.join(', ')})?\n\nThis cluster pin and its grouped water meters will be deleted from the map (any separate Household pins on the map will remain intact).`
+      : `Delete Cluster Pin "${displayName}"?`;
+
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+
+    try {
+      // 1. Delete all water meters belonging to this cluster pin
+      for (const m of clusterMeters) {
+        await window.db.delete('meters', m.id);
+      }
+
+      // 2. Delete the cluster record itself
+      await window.db.delete('clusters', cluster.id);
+
+      this.activeCluster = null;
+      this.activeClusterId = null;
+      this._activeClusterMeterId = null;
+      this.closeClusterSheet();
+
+      // 3. Refresh cache (which also cleans up any orphaned consumers without a Household pin) and update all views
+      await this.refreshDataCache();
+      await this.populateZoneDropdowns();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      this.populateQuickConsumerSelect();
+      this.renderStats();
+      try { await this.renderZoneExportCenter(); } catch (_) {}
+      if (this.activeView === 'view-settings') {
+        await this.renderSettingsZonesAndClusters();
+      }
+      this.autoSyncToOfficePcSilent();
+
+      this.showToast(`Cluster pin "${displayName}" deleted from map.`, 2800);
+    } catch (err) {
+      console.error('Error deleting cluster pin:', err);
+      alert(`Failed to delete cluster pin: ${err.message}`);
+    }
+  }
+
+  async downloadElementAsPdf(element, filename) {
+    if (!element) return;
+    filename = filename || 'document.pdf';
+    if (!filename.endsWith('.pdf')) filename += '.pdf';
+
+    const activeBtn = document.activeElement;
+    let origText = '';
+    if (activeBtn && activeBtn.tagName === 'BUTTON') {
+      origText = activeBtn.innerHTML;
+      activeBtn.disabled = true;
+      activeBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+        Saving PDF...
+      `;
+    }
+
+    try {
+      if (typeof html2pdf !== 'undefined') {
+        const opt = {
+          margin: [8, 8, 8, 8],
+          filename: filename,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+        await html2pdf().set(opt).from(element).save();
+      } else {
+        // Fallback: standalone print window
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <title>${filename}</title>
+              <link rel="stylesheet" href="css/styles.css">
+              <link rel="stylesheet" href="css/print-a4.css">
+              <style>
+                @page { size: A4; margin: 8mm; }
+                body { margin: 0; padding: 10px; background: #fff; font-family: sans-serif; }
+              </style>
+            </head>
+            <body>
+              ${element.innerHTML}
+              <script>
+                window.onload = function() { window.print(); }
+              <\/script>
+            </body>
+            </html>
+          `);
+          printWindow.document.close();
+        } else {
+          document.body.classList.add('printing-a4');
+          window.print();
+          setTimeout(() => document.body.classList.remove('printing-a4'), 1000);
+        }
+      }
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+      alert('PDF generation encountered an error: ' + err.message + '. Opening print preview instead.');
+      window.print();
+    } finally {
+      if (activeBtn && origText) {
+        activeBtn.disabled = false;
+        activeBtn.innerHTML = origText;
+      }
+    }
+  }
+
+  async executeThermalPrint() {
+    if (!this.activeBill) return;
+
+    const consumer = await window.db.get('consumers', this.activeBill.consumerId);
+    const meter = this.activeBill.meterId ? await window.db.get('meters', this.activeBill.meterId) : null;
+
+    const result = await window.thermalPrinter.printBill(this.activeBill, consumer, meter, this.cachedSettings);
+    if (result.success) {
+      this.showToast(`Receipt ${this.activeBill.id} printed on Xprinter XP-P300!`, 2600);
+      await this.refreshDataCache();
+      this.renderBillingList();
+    } else if (result.error) {
+      if (confirm(`${result.error}\n\nWould you like to open USB / System Browser Print instead?`)) {
+        this.executeBrowserThermalPrint();
+      }
+    }
+  }
+
+  async executeBrowserThermalPrint() {
+    document.body.classList.add('printing-thermal');
+    document.body.classList.remove('printing-a4');
+    window.print();
+    setTimeout(() => {
+      document.body.classList.remove('printing-thermal');
+    }, 1000);
+  }
+
+  updatePrinterUIStatus(status, details) {
+    const statusPill = document.getElementById('printer-status-pill');
+    const detailsEl = document.getElementById('printer-status-details');
+
+    if (statusPill) {
+      statusPill.textContent = status.toUpperCase();
+      statusPill.className = `badge badge-${status === 'connected' ? 'success' : status === 'error' ? 'danger' : 'warning'}`;
+    }
+    if (detailsEl) {
+      detailsEl.textContent = details;
+    }
+  }
+
+  // --- Payment Tracking (Phase 7, Section 17) ---
+
+  openPaymentModal(billId) {
+    const bill = this.cachedBills.find(b => b.id === billId);
+    if (!bill) return;
+
+    const consumer = this.cachedConsumers.find(c => c.id === bill.consumerId);
+    this.activeBill = bill;
+
+    document.getElementById('pay-bill-id').textContent = bill.id;
+    document.getElementById('pay-consumer-name').textContent = consumer ? consumer.name : 'Unknown';
+    document.getElementById('pay-amount-due').textContent = `PHP ${bill.totalAmountDue.toFixed(2)}`;
+    document.getElementById('pay-amount-input').value = bill.totalAmountDue;
+    document.getElementById('pay-or-input').value = `OR-${Date.now().toString().slice(-6)}`;
+    document.getElementById('pay-collector-input').value = (this.cachedSettings.reader && this.cachedSettings.reader.name) || 'Cashier';
+
+    document.getElementById('modal-record-payment').classList.add('active');
+  }
+
+  async submitPayment() {
+    if (!this.activeBill) return;
+
+    const amount = Number(document.getElementById('pay-amount-input').value);
+    const orNumber = document.getElementById('pay-or-input').value;
+    const collector = document.getElementById('pay-collector-input').value;
+
+    try {
+      await window.billingEngine.recordPayment(this.activeBill.id, {
+        amountPaid: amount,
+        orNumber: orNumber,
+        collectorName: collector,
+        paymentDate: new Date().toISOString().split('T')[0]
+      });
+
+      await this.refreshDataCache();
+      this.renderBillingList();
+      this.autoSyncToOfficePcSilent();
+      document.getElementById('modal-record-payment').classList.remove('active');
+
+      // Refresh Consumer Folder modal if currently open
+      const historyModal = document.getElementById('modal-consumer-history');
+      const targetConsumerId = this.activeBill.consumerId || this.activeHistoryConsumerId;
+      if (historyModal && historyModal.classList.contains('active') && targetConsumerId) {
+        await this.openConsumerHistoryModal(targetConsumerId);
+      }
+
+      this.showToast(`Payment of PHP ${amount.toFixed(2)} recorded (OR# ${orNumber})`, 2800);
+    } catch (err) {
+      alert(`Error recording payment: ${err.message}`);
+    }
+  }
+
+  // --- Consumer Management & Pinning (Phase 2 & 3) ---
+
+  showToast(message, durationMs = 2400) {
+    const host = document.getElementById('toast-host');
+    if (!host) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = message;
+    host.appendChild(el);
+    setTimeout(() => {
+      el.classList.add('out');
+      setTimeout(() => el.remove(), 260);
+    }, durationMs);
+  }
+
+  shortZoneLabel(zoneName) {
+    if (!zoneName) return 'Zone';
+    const parts = String(zoneName).split(/\s*[–—-]\s*/);
+    return parts[0].trim();
+  }
+
+  zoneSubtitle(zoneName) {
+    if (!zoneName) return '';
+    const parts = String(zoneName).split(/\s*[–—-]\s*/);
+    return parts.slice(1).join(' – ').trim();
+  }
+
+  async renderMapZoneChips() {
+    const container = document.getElementById('map-zone-chips');
+    if (!container) return;
+
+    const zones = await window.db.getZones();
+    const allPins = (this.mapEngine && this.mapEngine._pins) ? this.mapEngine._pins : [];
+    const activeZone = (this.mapEngine && this.mapEngine._zoneFilter) ? this.mapEngine._zoneFilter : '';
+
+    // Count pins per zone
+    const countForZone = (z) => allPins.filter(p => {
+      const pz = (p.data && p.data.zone) || p.zone || '';
+      return z ? pz === z : true;
+    }).length;
+
+    container.innerHTML = '';
+
+    const allChip = document.createElement('button');
+    allChip.type = 'button';
+    allChip.className = `zone-chip ${activeZone === '' ? 'active' : ''}`;
+    allChip.dataset.zone = '';
+    allChip.innerHTML = `<span>All Zones</span><span class="zc-count">${countForZone('')}</span>`;
+    container.appendChild(allChip);
+
+    zones.forEach(z => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = `zone-chip ${activeZone === z ? 'active' : ''}`;
+      chip.dataset.zone = z;
+      chip.title = z;
+      chip.innerHTML = `<span>${this.shortZoneLabel(z)}</span><span class="zc-count">${countForZone(z)}</span>`;
+      container.appendChild(chip);
+    });
+  }
+
+  updateMapTypeSegmentCounts() {
+    const allPins = (this.mapEngine && this.mapEngine._pins) ? this.mapEngine._pins : [];
+    const zf = (this.mapEngine && this.mapEngine._zoneFilter) ? this.mapEngine._zoneFilter : null;
+
+    const inZone = allPins.filter(p => {
+      if (!zf) return true;
+      const pz = (p.data && p.data.zone) || p.zone || '';
+      return pz === zf;
+    });
+
+    const houseCount = inZone.filter(p => p.type === 'household').length;
+    const meterCount = inZone.filter(p => p.type === 'meter' || p.type === 'cluster').length;
+
+    const elHouse = document.getElementById('seg-count-household');
+    const elMeter = document.getElementById('seg-count-meter');
+    if (elHouse) elHouse.textContent = houseCount;
+    if (elMeter) elMeter.textContent = meterCount;
+  }
+
+  async populateZoneDropdowns(selectedZone = null) {
+    const zones = await window.db.getZones();
+    const zoneSelect = document.getElementById('pin-zone-select');
+    if (zoneSelect) {
+      const prevVal = selectedZone || zoneSelect.value;
+      zoneSelect.innerHTML = '';
+      zones.forEach(z => {
+        const opt = document.createElement('option');
+        opt.value = z;
+        opt.textContent = z;
+        zoneSelect.appendChild(opt);
+      });
+      if (prevVal && zones.includes(prevVal)) {
+        zoneSelect.value = prevVal;
+      } else if (zones.length > 0) {
+        zoneSelect.value = zones[0];
+      }
+    }
+
+    const currentZone = zoneSelect ? zoneSelect.value : null;
+    await this.updateClusterDropdownForZone(currentZone);
+    await this.renderSettingsZonesAndClusters();
+    await this.renderMapZoneChips();
+  }
+
+  async updateClusterDropdownForZone(zone, selectedClusterId = null) {
+    const selectCluster = document.getElementById('pin-cluster-select');
+    if (!selectCluster) return;
+
+    const clustersInZone = await window.db.getClustersByZone(zone);
+    selectCluster.innerHTML = '<option value="">-- Individual Standalone Meter (No Cluster) --</option>';
+    clustersInZone.forEach(cl => {
+      const opt = document.createElement('option');
+      opt.value = cl.id;
+      opt.textContent = `${cl.name} (Purok/Zone: ${cl.zone || 'Unassigned'})`;
+      selectCluster.appendChild(opt);
+    });
+
+    if (selectedClusterId) {
+      selectCluster.value = selectedClusterId;
+    }
+
+    const badge = document.getElementById('pin-cluster-zone-badge');
+    if (badge) {
+      if (!zone) {
+        badge.textContent = 'Showing clusters across all zones. Standalone meters do not belong to a cluster manifold.';
+      } else if (clustersInZone.length === 0) {
+        badge.innerHTML = `No clusters in <strong>${zone}</strong> yet. Tap <em>"+ New Cluster in Zone"</em> to create one.`;
+      } else {
+        badge.innerHTML = `<strong>${clustersInZone.length} cluster manifold(s)</strong> available in <strong>${zone}</strong>.`;
+      }
+    }
+  }
+
+  async renderSettingsZonesAndClusters() {
+    const zonesList = document.getElementById('settings-zones-list');
+    const clustersList = document.getElementById('settings-clusters-list');
+    const zonesCountBadge = document.getElementById('settings-zones-count');
+    if (!zonesList && !clustersList) return;
+
+    const zones = await window.db.getZones();
+    const clusters = await window.db.getAll('clusters');
+    const consumers = this.cachedConsumers || [];
+
+    if (zonesCountBadge) {
+      zonesCountBadge.textContent = `${zones.length} ZONES`;
+    }
+
+    if (zonesList) {
+      zonesList.innerHTML = '';
+      zones.forEach(zone => {
+        const zoneConsumers = consumers.filter(c => c.zone === zone);
+        const zoneClusters = clusters.filter(cl => cl.zone === zone);
+        const item = document.createElement('div');
+        item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; background: var(--surface-alt); padding: 6px 10px; border-radius: var(--radius-xs); border: 1px solid var(--border-color); font-size: 11.5px;';
+        item.innerHTML = `
+          <div>
+            <strong>${zone}</strong>
+            <span style="font-size: 10px; color: var(--text-muted); margin-left: 6px;">(${zoneConsumers.length} consumers, ${zoneClusters.length} clusters)</span>
+          </div>
+          <button type="button" class="btn btn-xs btn-outline btn-delete-zone" data-zone="${zone}" style="color: var(--danger); padding: 1px 6px;">Delete</button>
+        `;
+        zonesList.appendChild(item);
+      });
+    }
+
+    if (clustersList) {
+      clustersList.innerHTML = '';
+      if (clusters.length === 0) {
+        clustersList.innerHTML = '<div style="font-size: 11px; color: var(--text-muted); padding: 4px;">No meter clusters registered yet. Clusters group multiple meters sharing a single physical water manifold.</div>';
+      } else {
+        clusters.forEach(cl => {
+          const item = document.createElement('div');
+          item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; background: var(--surface-alt); padding: 6px 10px; border-radius: var(--radius-xs); border: 1px solid var(--border-color); font-size: 11.5px;';
+          item.innerHTML = `
+            <div>
+              <strong>${cl.name}</strong>
+              <div style="font-size: 10px; color: var(--text-secondary);">Zone: ${cl.zone || 'Unassigned'}</div>
+            </div>
+            <button type="button" class="btn btn-xs btn-outline btn-delete-cluster" data-cluster-id="${cl.id}" style="color: var(--danger); padding: 1px 6px;">Delete</button>
+          `;
+          clustersList.appendChild(item);
+        });
+      }
+    }
+  }
+
+  async openAddPinWizard(lat, lng, opts = {}) {
+    if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+      if (this.mapEngine && this.mapEngine._map) {
+        const center = this.mapEngine._map.getCenter();
+        lat = center.lat;
+        lng = center.lng;
+      } else {
+        lat = 8.3688;
+        lng = 124.8630;
+      }
+    }
+
+    this._wizardLat = Number(lat);
+    this._wizardLng = Number(lng);
+    this._wizardFromGps = Boolean(opts.fromGpsButton);
+
+    // Default pin type: use active map filter if set to household/meter, otherwise opts.pinType or 'household'
+    const mapFilterType = (this.mapEngine && (this.mapEngine._filterMode === 'household' || this.mapEngine._filterMode === 'meter'))
+      ? this.mapEngine._filterMode
+      : null;
+    this._wizardPinType = opts.pinType || mapFilterType || this._wizardPinType || 'household';
+
+    const locText = document.getElementById('wizard-location-text');
+    if (locText) {
+      locText.textContent = this._wizardFromGps
+        ? `GPS Standing Location · ${this._wizardLat.toFixed(5)}, ${this._wizardLng.toFixed(5)}`
+        : `Map Location · ${this._wizardLat.toFixed(5)}, ${this._wizardLng.toFixed(5)}`;
+    }
+
+    const gpsBtn = document.getElementById('btn-wizard-use-gps');
+    const gpsLabel = document.getElementById('wizard-gps-label');
+    if (gpsBtn && gpsLabel) {
+      if (this._wizardFromGps) {
+        gpsBtn.classList.add('locked');
+        gpsLabel.textContent = `GPS Locked (${this._wizardLat.toFixed(5)}, ${this._wizardLng.toFixed(5)}) — Choose Zone below`;
+      } else {
+        gpsBtn.classList.remove('locked', 'locking');
+        gpsLabel.textContent = 'Use my current GPS (where I am standing)';
+      }
+    }
+
+    document.querySelectorAll('.wizard-type-card').forEach(card => {
+      card.classList.toggle('active', card.dataset.type === this._wizardPinType);
+    });
+
+    await this.renderWizardZoneCards();
+
+    const dropModal = document.getElementById('modal-drop-pin');
+    if (dropModal) dropModal.classList.remove('active');
+
+    const wizModal = document.getElementById('modal-add-pin-wizard');
+    if (wizModal) wizModal.classList.add('active');
+  }
+
+  async renderWizardZoneCards() {
+    const grid = document.getElementById('wizard-zone-grid');
+    if (!grid) return;
+
+    const zones = await window.db.getZones();
+    const consumers = this.cachedConsumers || [];
+    const meters = this.cachedMeters || [];
+    const suggestedZone = (this.mapEngine && this.mapEngine._zoneFilter) || this._lastSelectedZone || zones[0] || '';
+
+    grid.innerHTML = '';
+
+    zones.forEach(z => {
+      const houseCount = consumers.filter(c => c.zone === z && c.householdLat && c.householdLng).length;
+      const meterCount = meters.filter(m => {
+        const c = consumers.find(con => con.id === m.consumerId);
+        const mz = m.zone || (c ? c.zone : '');
+        return mz === z && m.meterLat && m.meterLng;
+      }).length;
+
+      const isSuggested = z === suggestedZone;
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `wizard-zone-card ${isSuggested ? 'suggested' : ''}`;
+      card.dataset.zone = z;
+      card.innerHTML = `
+        ${isSuggested ? `<span class="wz-badge">Selected</span>` : ''}
+        <span class="wz-name">${this.shortZoneLabel(z)}</span>
+        <span class="wz-desc">${this.zoneSubtitle(z) || 'Association District'}</span>
+        <span class="wz-stats">${houseCount} house${houseCount === 1 ? '' : 's'} · ${meterCount} meter${meterCount === 1 ? '' : 's'}</span>
+      `;
+      grid.appendChild(card);
+    });
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'wizard-zone-card add-new';
+    addBtn.dataset.action = 'new-zone';
+    addBtn.innerHTML = `+ Add New Zone`;
+    grid.appendChild(addBtn);
+  }
+
+  updatePinContextBar(pinType, zone) {
+    const isHouse = pinType === 'household';
+    const iconEl = document.getElementById('pin-context-icon');
+    const typeEl = document.getElementById('pin-context-type');
+    const zoneEl = document.getElementById('pin-context-zone');
+    const titleEl = document.getElementById('modal-drop-pin-title');
+
+    if (iconEl) {
+      iconEl.style.background = isHouse ? '#CCFBF1' : '#DBEAFE';
+      iconEl.style.color = isHouse ? '#0F766E' : '#2563EB';
+      iconEl.innerHTML = isHouse
+        ? `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>`
+        : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/></svg>`;
+    }
+    if (typeEl) {
+      typeEl.textContent = isHouse ? 'Consumer Household Pin' : 'Water Meter Pin';
+    }
+    if (zoneEl) {
+      zoneEl.textContent = this.cleanZoneString(zone || 'Zone 1');
+    }
+    if (titleEl) {
+      titleEl.textContent = isHouse ? 'Add Consumer Household' : 'Add Water Meter';
+    }
+  }
+
+  getNextMeterNo(extraUsedSet = null) {
+    const existing = new Set((this.cachedMeters || []).map(m => (m.meterNo || '').trim().toUpperCase()));
+    if (extraUsedSet) {
+      extraUsedSet.forEach(v => existing.add(String(v).trim().toUpperCase()));
+    }
+    let num = (this.cachedMeters ? this.cachedMeters.length : 0) + 1;
+    while (existing.has(`WM-2026-${String(num).padStart(3, '0')}`)) {
+      num++;
+    }
+    return `WM-2026-${String(num).padStart(3, '0')}`;
+  }
+
+  getNextAccountNo(extraUsedSet = null) {
+    const existing = new Set((this.cachedConsumers || []).map(c => (c.accountNo || '').trim().toUpperCase()));
+    if (extraUsedSet) {
+      extraUsedSet.forEach(v => existing.add(String(v).trim().toUpperCase()));
+    }
+    let num = (this.cachedConsumers ? this.cachedConsumers.length : 0) + 1;
+    while (existing.has(`DWA-2026-${String(num).padStart(3, '0')}`)) {
+      num++;
+    }
+    return `DWA-2026-${String(num).padStart(3, '0')}`;
+  }
+
+  _createBlankMeterSlot(slotIndex, defaultZone = '') {
+    const usedSerials = new Set((this._meterSlots || []).map(s => (s && s.meterNo) || '').filter(Boolean));
+    const meterNo = this.getNextMeterNo(usedSerials);
+    return {
+      ownerName: '',
+      existingConsumerId: '',
+      meterNo: meterNo,
+      initialReading: 0,
+      address: defaultZone || '',
+      linkHousehold: false,
+      notes: '',
+      saved: false
+    };
+  }
+
+  syncCurrentFormToActiveMeterSlot() {
+    if (!this._meterSlots || !this._meterSlots.length) return;
+    const idx = Math.min(Math.max(0, this._activeMeterSlotIdx || 0), this._meterSlots.length - 1);
+    const slot = this._meterSlots[idx];
+    if (!slot) return;
+
+    const ownerInput = document.getElementById('pin-meter-owner-name');
+    const selectConsumer = document.getElementById('pin-meter-consumer-select');
+    const meterNoInput = document.getElementById('pin-meter-no');
+    const initRdgInput = document.getElementById('pin-meter-initial-reading');
+    const meterAddrInput = document.getElementById('pin-meter-address');
+    const linkHouseCheckbox = document.getElementById('pin-meter-link-household');
+    const meterNotesInput = document.getElementById('pin-meter-notes');
+
+    if (ownerInput) slot.ownerName = ownerInput.value;
+    if (selectConsumer) {
+      slot.existingConsumerId = selectConsumer.value;
+      if (selectConsumer.value && (!slot.ownerName || !slot.ownerName.trim())) {
+        const c = this.cachedConsumers.find(con => con.id === selectConsumer.value);
+        if (c) slot.ownerName = c.name;
+      }
+    }
+    if (meterNoInput) slot.meterNo = meterNoInput.value;
+    if (initRdgInput) slot.initialReading = Number(initRdgInput.value) || 0;
+    if (meterAddrInput) slot.address = meterAddrInput.value;
+    if (linkHouseCheckbox) slot.linkHousehold = Boolean(linkHouseCheckbox.checked);
+    if (meterNotesInput) slot.notes = meterNotesInput.value;
+  }
+
+  loadMeterSlotIntoForm(slotIndex, animate = false) {
+    if (!this._meterSlots || !this._meterSlots.length) return;
+    const idx = Math.min(Math.max(0, slotIndex), this._meterSlots.length - 1);
+    this._activeMeterSlotIdx = idx;
+    const slot = this._meterSlots[idx];
+    const total = this._meterSlots.length;
+
+    const ownerInput = document.getElementById('pin-meter-owner-name');
+    const selectConsumer = document.getElementById('pin-meter-consumer-select');
+    const meterNoInput = document.getElementById('pin-meter-no');
+    const initRdgInput = document.getElementById('pin-meter-initial-reading');
+    const meterAddrInput = document.getElementById('pin-meter-address');
+    const linkHouseCheckbox = document.getElementById('pin-meter-link-household');
+    const meterNotesInput = document.getElementById('pin-meter-notes');
+
+    if (ownerInput) ownerInput.value = slot.ownerName || '';
+    if (selectConsumer) selectConsumer.value = slot.existingConsumerId || '';
+    if (meterNoInput) meterNoInput.value = slot.meterNo || this.getNextMeterNo();
+    if (initRdgInput) initRdgInput.value = slot.initialReading ?? 0;
+    if (meterAddrInput) meterAddrInput.value = slot.address || '';
+    if (linkHouseCheckbox) linkHouseCheckbox.checked = Boolean(slot.linkHousehold);
+    if (meterNotesInput) meterNotesInput.value = slot.notes || '';
+
+    const circleBadge = document.getElementById('active-meter-circle-badge');
+    const slotTitle = document.getElementById('active-meter-slot-title');
+    const slotSub = document.getElementById('active-meter-slot-subtitle');
+    const slotStatus = document.getElementById('active-meter-slot-status');
+    const navBar = document.getElementById('mse-slot-nav-bar');
+    const btnPrev = document.getElementById('btn-mse-prev-slot');
+    const btnNext = document.getElementById('btn-mse-save-next-slot');
+    const btnSaveFooter = document.getElementById('btn-save-drop-pin');
+
+    if (circleBadge) circleBadge.textContent = String(idx + 1);
+    const hasOwner = Boolean((slot.ownerName || '').trim() || slot.existingConsumerId);
+    if (slotTitle) {
+      slotTitle.textContent = total > 1
+        ? `Water Meter #${idx + 1} of ${total}${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`
+        : `Water Meter #1${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`;
+    }
+    if (slotSub) {
+      slotSub.textContent = total > 1
+        ? `Enter owner name & details for Circle #${idx + 1}`
+        : `Enter water meter owner name & details below`;
+    }
+    if (slotStatus) {
+      slotStatus.textContent = hasOwner ? `Ready (#${idx + 1})` : `Editing #${idx + 1}`;
+      slotStatus.className = `badge ${hasOwner ? 'badge-success' : 'badge-warning'}`;
+    }
+
+    if (navBar) {
+      navBar.classList.toggle('hidden', total <= 1);
+    }
+    if (btnPrev) {
+      btnPrev.disabled = idx === 0;
+      btnPrev.style.opacity = idx === 0 ? '0.45' : '1';
+    }
+    if (btnNext) {
+      btnNext.textContent = idx < total - 1
+        ? `Save Meter #${idx + 1} & Next →`
+        : `✓ Confirm Meter #${idx + 1}`;
+    }
+    if (btnSaveFooter) {
+      const checkedRadio = document.querySelector('input[name="pin-type"]:checked');
+      const isMeterMode = !checkedRadio || checkedRadio.value === 'meter';
+      btnSaveFooter.textContent = (isMeterMode && total > 1)
+        ? `Save ${total} Clustered Meters`
+        : 'Save Pin';
+    }
+
+    if (animate) {
+      const editorCard = document.getElementById('meter-slot-editor-card');
+      if (editorCard) {
+        editorCard.classList.remove('slot-switch-anim');
+        void editorCard.offsetWidth;
+        editorCard.classList.add('slot-switch-anim');
+      }
+    }
+
+    this.renderPinMeterCirclesStage();
+  }
+
+  renderPinMeterCirclesStage() {
+    const stageEl = document.getElementById('pin-meter-circles-stage');
+    const countEl = document.getElementById('pin-meter-count-display');
+    const hintEl = document.getElementById('pin-meter-circles-hint');
+    if (!stageEl || !this._meterSlots) return;
+
+    const total = this._meterSlots.length;
+    if (countEl) countEl.textContent = String(total);
+
+    if (hintEl) {
+      const configuredCount = this._meterSlots.filter(s => (s.ownerName || '').trim() || s.existingConsumerId).length;
+      hintEl.innerHTML = total > 1
+        ? `<strong>${configuredCount} of ${total}</strong> clustered water meters configured. Tap any circle above to inspect or edit.`
+        : `Tap <strong>+</strong> above to group multiple water meters at this location (each with its own owner).`;
+    }
+
+    stageEl.innerHTML = this._meterSlots.map((slot, idx) => {
+      const isActive = idx === this._activeMeterSlotIdx;
+      const rawOwner = (slot.ownerName || '').trim();
+      const isConfigured = Boolean(rawOwner || slot.existingConsumerId);
+      const topLabel = rawOwner || String(idx + 1);
+
+      return `
+        <div class="mgb-circle-item ${isActive ? 'active' : ''} ${isConfigured ? 'configured' : ''}" data-slot-idx="${idx}">
+          <span class="mgb-circle-owner-label" title="${rawOwner || `Water Meter #${idx + 1}`}">${topLabel}</span>
+          <button type="button" class="mgb-circle-btn" aria-label="Water Meter Circle ${idx + 1}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style="margin-bottom: 1px;">
+              <path d="M12 2.7c3.6 4.2 6 7.5 6 10.8a6 6 0 0 1-12 0c0-3.3 2.4-6.6 6-10.8z"/>
+            </svg>
+            <span class="mgb-circle-num">${idx + 1}</span>
+            ${isConfigured ? `<span class="mgb-circle-check">✓</span>` : ''}
+          </button>
+          <span class="mgb-circle-serial">${slot.meterNo || ''}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  setPinMeterCount(newCount) {
+    this.syncCurrentFormToActiveMeterSlot();
+    const clamped = Math.min(20, Math.max(1, Number(newCount) || 1));
+    const activeZone = this.cleanZoneString(
+      (document.getElementById('pin-zone-select') && document.getElementById('pin-zone-select').value)
+        || this._lastSelectedZone
+        || 'Zone 1'
+    );
+
+    if (!this._meterSlots || !this._meterSlots.length) {
+      this._meterSlots = [this._createBlankMeterSlot(0, activeZone)];
+    }
+
+    while (this._meterSlots.length < clamped) {
+      this._meterSlots.push(this._createBlankMeterSlot(this._meterSlots.length, activeZone));
+    }
+    if (this._meterSlots.length > clamped) {
+      this._meterSlots.length = clamped;
+    }
+
+    const countEl = document.getElementById('pin-meter-count-display');
+    if (countEl) {
+      countEl.classList.remove('pulse');
+      void countEl.offsetWidth;
+      countEl.classList.add('pulse');
+    }
+
+    if (this._activeMeterSlotIdx >= clamped) {
+      this._activeMeterSlotIdx = clamped - 1;
+    }
+
+    this.loadMeterSlotIntoForm(this._activeMeterSlotIdx, false);
+  }
+
+  selectPinMeterSlot(slotIdx) {
+    this.syncCurrentFormToActiveMeterSlot();
+    this.loadMeterSlotIntoForm(slotIdx, true);
+    setTimeout(() => {
+      const ownerInput = document.getElementById('pin-meter-owner-name');
+      if (ownerInput) ownerInput.focus();
+    }, 50);
+  }
+
+  saveCurrentMeterSlotAndAdvance() {
+    this.syncCurrentFormToActiveMeterSlot();
+    const idx = this._activeMeterSlotIdx || 0;
+    const slot = this._meterSlots[idx];
+    if (!slot) return;
+
+    if (!(slot.ownerName || '').trim() && !slot.existingConsumerId) {
+      alert(`Please enter the Water Meter Owner / Consumer Name for Circle #${idx + 1}.`);
+      const ownerInput = document.getElementById('pin-meter-owner-name');
+      if (ownerInput) ownerInput.focus();
+      return;
+    }
+
+    slot.saved = true;
+    this.renderPinMeterCirclesStage();
+
+    if (idx + 1 < this._meterSlots.length) {
+      this.selectPinMeterSlot(idx + 1);
+      this.showToast(`Meter #${idx + 1} (${slot.ownerName.trim()}) ready — now enter Meter #${idx + 2}`, 1800);
+    } else {
+      this.loadMeterSlotIntoForm(idx, false);
+      this.showToast(`All ${this._meterSlots.length} water meters configured! Tap "Save ${this._meterSlots.length} Clustered Meters" below.`, 2400);
+    }
+  }
+
+  _isLocalOfficeServer() {
+    const host = (window.location && window.location.hostname) || '';
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      /^192\.168\./.test(host) ||
+      /^10\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    );
+  }
+
+  async openDropPinModal(lat, lng, opts = {}) {
+    if (!opts.skipWizard) {
+      return this.openAddPinWizard(lat, lng, opts);
+    }
+
+    if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+      if (this.mapEngine && this.mapEngine._map) {
+        const center = this.mapEngine._map.getCenter();
+        lat = center.lat;
+        lng = center.lng;
+      } else {
+        lat = 8.3688;
+        lng = 124.8630;
+      }
+    }
+
+    const chosenType = opts.pinType || this._wizardPinType || 'household';
+    const chosenZone = opts.zone ? this.cleanZoneString(opts.zone) : (this._lastSelectedZone || null);
+    if (chosenZone) {
+      this._lastSelectedZone = chosenZone;
+    }
+
+    const latInput = document.getElementById('pin-lat-input');
+    const lngInput = document.getElementById('pin-lng-input');
+    if (latInput) latInput.value = Number(lat).toFixed(6);
+    if (lngInput) lngInput.value = Number(lng).toFixed(6);
+
+    // Hide inline add boxes
+    const addZoneBox = document.getElementById('pin-add-zone-box');
+    if (addZoneBox) addZoneBox.style.display = 'none';
+    const addClusterBox = document.getElementById('pin-add-cluster-box');
+    if (addClusterBox) addClusterBox.style.display = 'none';
+
+    // Populate zones and zone-separated clusters
+    await this.populateZoneDropdowns(chosenZone);
+
+    const activeZone = this.cleanZoneString(
+      (document.getElementById('pin-zone-select') && document.getElementById('pin-zone-select').value)
+        || chosenZone
+        || 'Zone 1'
+    );
+
+    // Reset fields when opening fresh (preserve typed name if returning from GPS re-zone)
+    if (!opts.preserveInputs) {
+      const nextMeterNo = this.getNextMeterNo();
+      this._targetClusterIdForPin = opts.targetClusterId || null;
+
+      this._meterSlots = [
+        {
+          ownerName: '',
+          existingConsumerId: '',
+          meterNo: nextMeterNo,
+          initialReading: 0,
+          address: activeZone,
+          linkHousehold: false,
+          notes: '',
+          saved: false
+        }
+      ];
+      this._activeMeterSlotIdx = 0;
+
+      const houseNameInput = document.getElementById('pin-house-name');
+      const houseAddrInput = document.getElementById('pin-house-address');
+      const houseContactInput = document.getElementById('pin-house-contact');
+      const houseNotesInput = document.getElementById('pin-house-notes');
+      const houseLinkMeterCheckbox = document.getElementById('pin-house-link-meter');
+      const houseMeterNoInput = document.getElementById('pin-house-meter-no');
+      const houseMeterInitInput = document.getElementById('pin-house-meter-initial');
+
+      if (houseNameInput) houseNameInput.value = '';
+      if (houseAddrInput) houseAddrInput.value = '';
+      if (houseContactInput) houseContactInput.value = '';
+      if (houseNotesInput) houseNotesInput.value = '';
+      if (houseLinkMeterCheckbox) houseLinkMeterCheckbox.checked = false;
+      if (houseMeterNoInput) houseMeterNoInput.value = nextMeterNo;
+      if (houseMeterInitInput) houseMeterInitInput.value = 0;
+    }
+
+    if (this._targetClusterIdForPin) {
+      const selectCluster = document.getElementById('pin-cluster-select');
+      if (selectCluster) {
+        selectCluster.value = this._targetClusterIdForPin;
+      }
+    }
+
+    this.loadMeterSlotIntoForm(this._activeMeterSlotIdx || 0, false);
+
+    // Existing consumers dropdown
+    const selectConsumer = document.getElementById('pin-meter-consumer-select');
+    const existingRow = document.getElementById('pin-meter-existing-consumer-row');
+    if (selectConsumer) {
+      selectConsumer.innerHTML = '<option value="">-- Or Link to Existing Registered Consumer --</option>';
+      if (this.cachedConsumers.length > 0) {
+        this.cachedConsumers.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.id;
+          opt.textContent = `${c.name} (${c.accountNo}) - ${c.zone}`;
+          selectConsumer.appendChild(opt);
+        });
+        if (existingRow) existingRow.classList.remove('hidden');
+      } else {
+        if (existingRow) existingRow.classList.add('hidden');
+      }
+    }
+
+    // Activate selected pin type (Household vs Water Meter)
+    const isHouse = chosenType === 'household';
+    const targetRadio = document.querySelector(`input[name="pin-type"][value="${isHouse ? 'household' : 'meter'}"]`);
+    if (targetRadio) targetRadio.checked = true;
+
+    const formMeter = document.getElementById('form-pin-meter');
+    const formHouse = document.getElementById('form-pin-household');
+    if (formMeter) formMeter.style.display = isHouse ? 'none' : 'block';
+    if (formHouse) formHouse.style.display = isHouse ? 'block' : 'none';
+
+    this.updatePinContextBar(isHouse ? 'household' : 'meter', activeZone);
+
+    document.getElementById('modal-drop-pin').classList.add('active');
+
+    setTimeout(() => {
+      const focusEl = document.getElementById(isHouse ? 'pin-house-name' : 'pin-meter-owner-name');
+      if (focusEl) focusEl.focus();
+    }, 80);
+  }
+
+  async saveDroppedPin() {
+    const checkedRadio = document.querySelector('input[name="pin-type"]:checked');
+    const pinType = checkedRadio ? checkedRadio.value : 'household';
+    const lat = Number(document.getElementById('pin-lat-input').value);
+    const lng = Number(document.getElementById('pin-lng-input').value);
+
+    if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+      alert('Please provide valid Latitude and Longitude coordinates (tap the map or use GPS).');
+      return;
+    }
+
+    // Obtain selected Zone from the Add-Pin popup / selector
+    const rawZone = (document.getElementById('pin-zone-select') && document.getElementById('pin-zone-select').value)
+      ? document.getElementById('pin-zone-select').value
+      : (this._lastSelectedZone || 'Zone 1');
+    const zone = this.cleanZoneString(rawZone);
+
+    let targetConsumerId = null;
+    let targetConsumerName = '';
+    let savedMeterNo = '';
+    let autoLinkedExisting = false;
+    let savedClusterId = null;
+    let savedClusterOwners = [];
+
+    if (pinType === 'meter') {
+      this.syncCurrentFormToActiveMeterSlot();
+      const slots = (this._meterSlots && this._meterSlots.length > 0) ? this._meterSlots : [];
+      const selectedClusterId = document.getElementById('pin-cluster-select')?.value || this._targetClusterIdForPin || null;
+      const isClusteredGroup = slots.length > 1 || Boolean(selectedClusterId);
+
+      // Validate all circles/slots
+      const seenSerialsInBatch = new Set();
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const sOwner = (s.ownerName || '').trim();
+        const sSerial = (s.meterNo || '').trim();
+
+        if (!s.existingConsumerId && !sOwner) {
+          this.selectPinMeterSlot(i);
+          alert(
+            slots.length > 1
+              ? `Please enter the Water Meter Owner / Consumer Name for Circle #${i + 1}.`
+              : 'Please enter the Water Meter Owner / Consumer Full Name.'
+          );
+          return;
+        }
+
+        if (!sSerial) {
+          this.selectPinMeterSlot(i);
+          alert(`Please enter the Meter Serial Number for Circle #${i + 1}.`);
+          return;
+        }
+
+        const upperSerial = sSerial.toUpperCase();
+        if (seenSerialsInBatch.has(upperSerial)) {
+          this.selectPinMeterSlot(i);
+          alert(`Duplicate Meter Serial Number "${sSerial}" in Circle #${i + 1}. Each water meter must have its own serial number.`);
+          return;
+        }
+        seenSerialsInBatch.add(upperSerial);
+
+        const matchedC = s.existingConsumerId
+          ? this.cachedConsumers.find(c => c.id === s.existingConsumerId)
+          : this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === sOwner.toLowerCase());
+
+        const dupMeter = await window.db.findDuplicateMeterNo(sSerial);
+        if (dupMeter && (!matchedC || dupMeter.consumerId !== matchedC.id)) {
+          this.selectPinMeterSlot(i);
+          alert(`Water meter serial number "${sSerial}" (Circle #${i + 1}) is already registered to another consumer.`);
+          return;
+        }
+      }
+
+      // Resolve or create the Cluster Manifold if 2+ meters or a cluster was selected
+      let activeClusterId = selectedClusterId;
+      if (isClusteredGroup) {
+        const ownerPreviewList = slots.map((s, idx) => {
+          if (s.existingConsumerId) {
+            const c = this.cachedConsumers.find(con => con.id === s.existingConsumerId);
+            if (c) return c.name;
+          }
+          return (s.ownerName || '').trim() || `Meter #${idx + 1}`;
+        });
+
+        if (activeClusterId) {
+          const existingCl = this.cachedClusters.find(cl => cl.id === activeClusterId);
+          if (existingCl) {
+            if (!existingCl.lat || !existingCl.lng) {
+              existingCl.lat = lat;
+              existingCl.lng = lng;
+            }
+            if (!existingCl.zone) existingCl.zone = zone;
+            const prevMeters = this.cachedMeters.filter(m => m.clusterId === existingCl.id);
+            const prevOwners = prevMeters.map(m => {
+              const c = this.cachedConsumers.find(con => con.id === m.consumerId);
+              return (c && c.name) ? c.name : (m.ownerName || m.meterNo);
+            }).filter(Boolean);
+            const combinedOwners = [...prevOwners, ...ownerPreviewList];
+            const shortOwners = combinedOwners.slice(0, 3).join(', ') + (combinedOwners.length > 3 ? ` +${combinedOwners.length - 3}` : '');
+            existingCl.name = `${zone} Clustered Meters (${shortOwners})`;
+            existingCl.description = `${combinedOwners.length} grouped water meters (${combinedOwners.join(', ')})`;
+            await window.db.put('clusters', existingCl);
+          }
+        } else {
+          const shortOwners = ownerPreviewList.slice(0, 3).join(', ') + (ownerPreviewList.length > 3 ? ` +${ownerPreviewList.length - 3}` : '');
+          const newCluster = await window.db.saveCluster({
+            name: `${zone} Clustered Meters (${shortOwners})`,
+            zone: zone,
+            description: `${slots.length} grouped water meters (${ownerPreviewList.join(', ')})`,
+            lat: lat,
+            lng: lng,
+            createdAt: new Date().toISOString()
+          });
+          activeClusterId = newCluster.id;
+        }
+        savedClusterId = activeClusterId;
+      }
+
+      const batchAccountNos = new Set();
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const ownerName = (s.ownerName || '').trim();
+        const existingConsumerId = s.existingConsumerId || '';
+        const meterNo = (s.meterNo || '').trim();
+        const initialReading = Number(s.initialReading) || 0;
+        const address = (s.address || '').trim();
+        const linkHousehold = Boolean(s.linkHousehold);
+        const notes = (s.notes || '').trim();
+
+        const matchedConsumer = existingConsumerId
+          ? this.cachedConsumers.find(c => c.id === existingConsumerId)
+          : this.cachedConsumers.find(c => (c.name || '').trim().toLowerCase() === ownerName.toLowerCase());
+
+        let slotConsumerId = null;
+        let slotConsumerName = '';
+
+        if (matchedConsumer) {
+          slotConsumerId = matchedConsumer.id;
+          slotConsumerName = matchedConsumer.name;
+          autoLinkedExisting = true;
+
+          matchedConsumer.zone = zone;
+          matchedConsumer.address = address ? (address.toLowerCase().includes(zone.toLowerCase()) ? `${address}, Diclum` : `${address}, ${zone}, Diclum`) : `${zone}, Diclum`;
+          if (linkHousehold && (!matchedConsumer.householdLat || !matchedConsumer.householdLng)) {
+            matchedConsumer.householdLat = lat;
+            matchedConsumer.householdLng = lng;
+          }
+          await window.db.put('consumers', matchedConsumer);
+        } else {
+          slotConsumerId = `c-${Date.now().toString().slice(-5)}-${i + 1}`;
+          slotConsumerName = ownerName;
+          const accountNo = this.getNextAccountNo(batchAccountNos);
+          batchAccountNos.add(accountNo);
+
+          const newConsumer = {
+            id: slotConsumerId,
+            accountNo: accountNo,
+            name: ownerName,
+            zone: zone,
+            address: address ? (address.toLowerCase().includes(zone.toLowerCase()) ? `${address}, Diclum` : `${address}, ${zone}, Diclum`) : `${zone}, Diclum`,
+            contact: '',
+            status: 'Active',
+            householdLat: linkHousehold ? lat : null,
+            householdLng: linkHousehold ? lng : null,
+            notes: notes,
+            createdAt: new Date().toISOString()
+          };
+          await window.db.put('consumers', newConsumer);
+          this.cachedConsumers.push(newConsumer);
+        }
+
+        const existingConsumerMeter = this.cachedMeters.find(m => m.consumerId === slotConsumerId);
+        const meterId = existingConsumerMeter ? existingConsumerMeter.id : `m-${Date.now().toString().slice(-5)}-${i + 1}`;
+        const newMeter = {
+          id: meterId,
+          meterNo: meterNo,
+          consumerId: slotConsumerId,
+          ownerName: slotConsumerName,
+          zone: zone,
+          meterLat: lat,
+          meterLng: lng,
+          isClustered: Boolean(activeClusterId),
+          clusterId: activeClusterId || null,
+          installDate: new Date().toISOString().split('T')[0],
+          initialReading: initialReading,
+          status: 'Operational',
+          notes: notes
+        };
+        await window.db.put('meters', newMeter);
+
+        targetConsumerId = slotConsumerId;
+        targetConsumerName = slotConsumerName;
+        savedMeterNo = meterNo;
+        savedClusterOwners.push(slotConsumerName);
+      }
+
+      this._targetClusterIdForPin = null;
+    } else {
+      // Consumer Household Pin — requires Full Name; automatically links if a Water Meter or Consumer with the same name already exists
+      const name = document.getElementById('pin-house-name').value.trim();
+
+      if (!name) {
+        alert('Please enter Consumer Full Name.');
+        return;
+      }
+
+      const matchedConsumer = this.cachedConsumers.find(
+        c => (c.name || '').trim().toLowerCase() === name.toLowerCase()
+      );
+      const matchedMeterByOwner = !matchedConsumer
+        ? this.cachedMeters.find(m => (m.ownerName || '').trim().toLowerCase() === name.toLowerCase())
+        : null;
+
+      if (matchedConsumer) {
+        targetConsumerId = matchedConsumer.id;
+        targetConsumerName = matchedConsumer.name;
+        autoLinkedExisting = true;
+
+        matchedConsumer.householdLat = lat;
+        matchedConsumer.householdLng = lng;
+        matchedConsumer.zone = zone;
+        matchedConsumer.address = `${zone}, Diclum`;
+        await window.db.put('consumers', matchedConsumer);
+
+        const linkedMeter = this.cachedMeters.find(m => m.consumerId === matchedConsumer.id);
+        if (linkedMeter) {
+          savedMeterNo = linkedMeter.meterNo;
+          if (!linkedMeter.zone) {
+            linkedMeter.zone = zone;
+            await window.db.put('meters', linkedMeter);
+          }
+        }
+      } else {
+        targetConsumerId = `c-${Date.now().toString().slice(-5)}`;
+        targetConsumerName = name;
+        const accountNo = this.getNextAccountNo();
+
+        const newConsumer = {
+          id: targetConsumerId,
+          accountNo: accountNo,
+          name: name,
+          zone: zone,
+          address: `${zone}, Diclum`,
+          contact: '',
+          status: 'Active',
+          householdLat: lat,
+          householdLng: lng,
+          notes: '',
+          createdAt: new Date().toISOString()
+        };
+        await window.db.put('consumers', newConsumer);
+
+        if (matchedMeterByOwner) {
+          matchedMeterByOwner.consumerId = targetConsumerId;
+          matchedMeterByOwner.ownerName = name;
+          if (!matchedMeterByOwner.zone) matchedMeterByOwner.zone = zone;
+          await window.db.put('meters', matchedMeterByOwner);
+          savedMeterNo = matchedMeterByOwner.meterNo;
+          autoLinkedExisting = true;
+        }
+      }
+    }
+
+    await this.refreshDataCache();
+    this.syncPinsToMap();
+    this.renderConsumerList();
+    this.populateQuickConsumerSelect();
+    try {
+      await this.renderZoneExportCenter();
+    } catch (err) {
+      console.warn('Zone export refresh warning:', err);
+    }
+    this.autoSyncToOfficePcSilent();
+    document.getElementById('modal-drop-pin').classList.remove('active');
+
+    if (pinType === 'household') {
+      if (autoLinkedExisting && savedMeterNo) {
+        this.showToast(`Household pin linked to ${targetConsumerName} (Meter: ${savedMeterNo}) in ${zone}!`, 3500);
+      } else {
+        this.showToast(`Household pin added for ${targetConsumerName} (${zone})`);
+      }
+    } else if (savedClusterId) {
+      this.showToast(`Saved ${savedClusterOwners.length} Clustered Water Meter${savedClusterOwners.length === 1 ? '' : 's'} (${savedClusterOwners.join(', ')}) in ${zone}!`, 3800);
+      this.openClusterSheet(savedClusterId);
+    } else {
+      const meterText = savedMeterNo ? ` (${savedMeterNo})` : '';
+      if (autoLinkedExisting) {
+        this.showToast(`Water Meter${meterText} linked to ${targetConsumerName}'s Household (${zone})!`, 3500);
+      } else {
+        this.showToast(`Water meter${meterText} added in ${zone}`);
+      }
+      if (confirm(`Water Meter${meterText} saved${autoLinkedExisting ? ' & linked to existing household' : ''} for ${targetConsumerName} in ${zone}!\n\nWould you like to open "Meter Reading & Computation" for this consumer now?`)) {
+        this.startReadingForConsumer(targetConsumerId);
+      }
+    }
+  }
+
+  // --- Official Reports & PDF Viewer (Phase 7, Section 18) ---
+
+  openBillingSummaryReport() {
+    const period = this.activeBillingPeriod || (this.cachedBills.length > 0 ? this.cachedBills[0].billingPeriod : 'Consolidated');
+    const html = window.reportsEngine.generateBillingSummaryHTML(
+      period,
+      this.cachedBills,
+      this.cachedConsumers,
+      this.cachedMeters
+    );
+    document.getElementById('report-content-container').innerHTML = html;
+    document.getElementById('report-modal-title').textContent = `Monthly Billing Summary — ${period}`;
+    document.getElementById('modal-report-preview').classList.add('active');
+  }
+
+  openConsumerDirectoryReport() {
+    const html = window.reportsEngine.generateConsumerDirectoryHTML(
+      this.cachedConsumers,
+      this.cachedMeters,
+      this.cachedClusters
+    );
+    document.getElementById('report-content-container').innerHTML = html;
+    document.getElementById('report-modal-title').textContent = 'Master Consumer & Water Meter Directory';
+    document.getElementById('modal-report-preview').classList.add('active');
+  }
+
+  // --- Zone-Separated & Consumer-Specific Records Export (PDF & Excel) + Office PC Sync ---
+
+  async renderZoneExportCenter() {
+    const container = document.getElementById('zone-export-cards-container');
+    const consumerSelect = document.getElementById('export-consumer-select');
+    const periodHintEl = document.getElementById('records-period-hint');
+    if (!container && !consumerSelect) return;
+
+    const allReadings = await window.db.getAll('readings');
+    const periodMode = this.recordsPeriodMode || 'today';
+    const todayIso = new Date().toISOString().split('T')[0];
+
+    if (periodHintEl) {
+      if (periodMode === 'today') {
+        periodHintEl.innerHTML = `Showing <strong>Records I Made Today (${todayIso})</strong> — ready to download by Zone or Consumer in PDF or Excel.`;
+      } else if (periodMode === 'month') {
+        periodHintEl.innerHTML = `Showing <strong>Records of This Month (${this.activeBillingPeriod})</strong> — ready to download by Zone or Consumer in PDF or Excel.`;
+      } else {
+        periodHintEl.innerHTML = `Showing <strong>All Historical Records</strong> across all billing periods.`;
+      }
+    }
+
+    // 1. Render Zone 1, Zone 2, Zone 3, Zone 4, and All Zones cards
+    if (container && window.reportsEngine && typeof window.reportsEngine.filterRecords === 'function') {
+      const zones = await window.db.getZones();
+      const targetZones = [...zones, 'ALL'];
+
+      container.innerHTML = targetZones.map(z => {
+        const isAll = z === 'ALL';
+        const rows = window.reportsEngine.filterRecords({
+          zone: z,
+          periodMode: periodMode,
+          consumerId: null,
+          consumers: this.cachedConsumers,
+          meters: this.cachedMeters,
+          bills: this.cachedBills,
+          readings: allReadings,
+          activeBillingPeriod: this.activeBillingPeriod
+        });
+
+        const totalConsumersInZone = isAll
+          ? this.cachedConsumers.length
+          : this.cachedConsumers.filter(c => this.cleanZoneString(c.zone) === this.cleanZoneString(z)).length;
+
+        const readCount = rows.filter(r => r.readingDate !== '—' || Number(r.totalAmountDue) > 0 || Number(r.consumption) > 0).length;
+        const totalM3 = rows.reduce((acc, r) => acc + (Number(r.consumption) || 0), 0);
+        const totalBilled = rows.reduce((acc, r) => acc + (Number(r.totalAmountDue ?? r.billAmount) || 0), 0);
+        const displayTitle = isAll ? 'All Zones (Combined Master Sheet)' : z;
+
+        return `
+          <div style="background: var(--surface-alt); border: 1px solid ${isAll ? 'var(--primary)' : 'var(--border)'}; border-radius: 6px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <strong style="font-size: 12.5px; font-weight: 600; color: var(--text-primary);">${displayTitle}</strong>
+                <span class="acct-pill">
+                  ${readCount} Read / ${totalConsumersInZone} Total
+                </span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums;">
+                Consumption: <strong style="color: var(--text-primary); font-weight: 600;">${totalM3.toLocaleString()} m³</strong> • Total Billed: <strong style="color: var(--primary-light); font-weight: 600;">PHP ${totalBilled.toFixed(2)}</strong>
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" class="btn btn-xs btn-primary btn-zone-export" data-zone="${z}" data-format="pdf">
+                PDF Table
+              </button>
+              <button type="button" class="btn btn-xs btn-outline btn-zone-export" data-zone="${z}" data-format="excel">
+                Excel (.xls)
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 2. Populate Individual Consumer / Water Meter Owner dropdown (e.g., mario)
+    if (consumerSelect) {
+      const prevSelected = consumerSelect.value;
+      consumerSelect.innerHTML = '<option value="">-- Select Consumer / Water Meter Owner --</option>';
+      const sortedConsumers = [...this.cachedConsumers].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      sortedConsumers.forEach(c => {
+        const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = `${c.name} — ${meter ? meter.meterNo : 'No Meter'} (${this.cleanZoneString(c.zone)})`;
+        consumerSelect.appendChild(opt);
+      });
+      if (prevSelected && sortedConsumers.some(c => c.id === prevSelected)) {
+        consumerSelect.value = prevSelected;
+      }
+    }
+  }
+
+  async exportZoneOrConsumerReport({ zone = 'ALL', consumerId = null, format = 'pdf' }) {
+    const allReadings = await window.db.getAll('readings');
+    const periodMode = consumerId ? (this.recordsPeriodMode || 'all') : (this.recordsPeriodMode || 'today');
+
+    const opts = {
+      zone: zone,
+      periodMode: periodMode,
+      consumerId: consumerId,
+      consumers: this.cachedConsumers,
+      meters: this.cachedMeters,
+      bills: this.cachedBills,
+      readings: allReadings,
+      activeBillingPeriod: this.activeBillingPeriod
+    };
+
+    if (format === 'excel') {
+      const res = window.reportsEngine.downloadExcelReport(opts);
+      this.showToast(`Downloaded Excel table: ${res.filename} (${res.count} row${res.count === 1 ? '' : 's'})`, 3200);
+      return;
+    }
+
+    // Open Printable A4 PDF Preview Modal & allow immediate PDF download
+    const html = window.reportsEngine.generateZoneOrConsumerReportHTML(opts);
+    const consumer = consumerId ? this.cachedConsumers.find(c => c.id === consumerId) : null;
+    const periodTag = periodMode === 'today' ? 'Today' : (periodMode === 'month' ? this.activeBillingPeriod : 'All_Records');
+    const title = consumer
+      ? `Consumer Reading & Billing Ledger — ${consumer.name} (${periodTag})`
+      : `${zone === 'ALL' ? 'All Zones' : zone} Current Bills & Readings (${periodTag})`;
+
+    document.getElementById('report-content-container').innerHTML = html;
+    document.getElementById('report-modal-title').textContent = title;
+    document.getElementById('modal-report-preview').classList.add('active');
+  }
+
+  getOfficePcSyncEndpoint() {
+    const savedBase = (localStorage.getItem('dicklum_office_pc_url') || '').trim().replace(/\/+$/, '');
+    if (savedBase && !this._isLocalOfficeServer()) {
+      return `${savedBase}/api/sync`;
+    }
+    return '/api/sync';
+  }
+
+  async uploadReadingsToOfficePc() {
+    const statusBadge = document.getElementById('pc-sync-status-badge') || document.getElementById('office-sync-status-badge');
+    const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
+    try {
+      const readings = await window.db.getAll('readings');
+      const payload = {
+        deviceLabel: navigator.userAgent.includes('Mobile') ? 'Field Reader Mobile' : 'Office Workstation',
+        consumers: this.cachedConsumers,
+        meters: this.cachedMeters,
+        clusters: this.cachedClusters,
+        readings: readings,
+        bills: this.cachedBills,
+        routes: this.cachedRoutes,
+        settings: await window.db.getAll('settings')
+      };
+
+      const syncUrl = this.getOfficePcSyncEndpoint();
+      const resp = await fetch(syncUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (resp.ok) {
+        const result = await resp.json();
+        const stamp = new Date(result.syncedAt || Date.now()).toLocaleString();
+        localStorage.setItem('dicklum_last_pc_sync', stamp);
+        if (statusBadge) {
+          statusBadge.textContent = 'SYNCED TO OFFICE PC';
+          statusBadge.className = 'badge badge-success';
+        }
+        if (lastSyncEl) {
+          lastSyncEl.innerHTML = `Last synced to Office PC (<code>data/dicklum_master_db.json</code>): <strong>${stamp}</strong> (${result.counts.consumers} consumers, ${result.counts.readings} readings, ${result.counts.bills} bills)`;
+        }
+        this.showToast('Uploaded all current readings & consumer folders to Office PC!', 3200);
+        alert(
+          `Successfully uploaded all current readings & bills to the Office PC!\n\n` +
+          `Saved on PC Hard Drive:\n` +
+          `• Master DB: data/dicklum_master_db.json\n` +
+          `• Consumer Folders: data/consumer_folders/ (${result.consumerFoldersUpdated || result.counts.consumers} folders)\n` +
+          `• Daily Backup: data/backups/\n\n` +
+          `Records Uploaded:\n` +
+          `• ${result.counts.consumers} Consumers\n` +
+          `• ${result.counts.meters} Water Meters\n` +
+          `• ${result.counts.readings} Meter Readings\n` +
+          `• ${result.counts.bills} Billing Statements`
+        );
+        return;
+      }
+      throw new Error(`Server responded with status ${resp.status}`);
+    } catch (err) {
+      console.warn('Direct /api/sync not reachable, offering portable file export fallback:', err);
+      if (confirm('Could not reach the Office PC server directly over Wi-Fi.\n\nWould you like to download the Field Readings Sync File (.json) to your phone so you can transfer or load it on the Office PC?')) {
+        const exp = await window.backupEngine.exportBackup();
+        this.showToast(`Exported field readings file: ${exp.filename}`, 3000);
+      }
+    }
+  }
+
+  async pullReadingsFromOfficePc() {
+    const statusBadge = document.getElementById('pc-sync-status-badge') || document.getElementById('office-sync-status-badge');
+    const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
+    try {
+      const syncUrl = this.getOfficePcSyncEndpoint();
+      const resp = await fetch(syncUrl, { method: 'GET' });
+      if (!resp.ok) throw new Error(`Server status ${resp.status}`);
+      const json = await resp.json();
+      if (!json.success || !json.data) {
+        alert('No uploaded field records found on the Office PC yet. Upload readings from the field reader phone first.');
+        return;
+      }
+
+      const d = json.data;
+      const cCount = (d.consumers || []).length;
+      const mCount = (d.meters || []).length;
+      const rCount = (d.readings || []).length;
+      const bCount = (d.bills || []).length;
+
+      if (!confirm(
+        `Load uploaded field records from Office PC (Last uploaded: ${d.updatedAt ? new Date(d.updatedAt).toLocaleString() : 'Recently'})?\n\n` +
+        `• ${cCount} Consumers\n` +
+        `• ${mCount} Water Meters\n` +
+        `• ${rCount} Meter Readings\n` +
+        `• ${bCount} Bills\n\n` +
+        `Click OK to load these records into your screen.`
+      )) {
+        return;
+      }
+
+      for (const c of (d.consumers || [])) await window.db.put('consumers', c);
+      for (const m of (d.meters || [])) await window.db.put('meters', m);
+      for (const cl of (d.clusters || [])) await window.db.put('clusters', cl);
+      for (const r of (d.readings || [])) await window.db.put('readings', r);
+      for (const b of (d.bills || [])) await window.db.put('bills', b);
+      for (const rt of (d.routes || [])) await window.db.put('routes', rt);
+
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.syncRoutesToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      this.renderStats();
+      await this.renderZoneExportCenter();
+
+      const stamp = new Date().toLocaleString();
+      if (statusBadge) {
+        statusBadge.textContent = 'LOADED FROM PC';
+        statusBadge.className = 'badge badge-success';
+      }
+      if (lastSyncEl) {
+        lastSyncEl.innerHTML = `Loaded from Office PC Master DB at <strong>${stamp}</strong> (${cCount} consumers, ${rCount} readings, ${bCount} bills).`;
+      }
+      this.showToast('Loaded all field readings & bills from Office PC!', 3000);
+    } catch (err) {
+      alert('Could not connect to Office PC server (/api/sync). You can also use "Import / Restore Backup File" below to load a transferred file.');
+    }
+  }
+
+  async autoSyncToOfficePcSilent() {
+    if (!this._isLocalOfficeServer()) return;
+    try {
+      const readings = await window.db.getAll('readings');
+      const payload = {
+        deviceLabel: 'Auto-Sync',
+        consumers: this.cachedConsumers,
+        meters: this.cachedMeters,
+        clusters: this.cachedClusters,
+        readings: readings,
+        bills: this.cachedBills,
+        routes: this.cachedRoutes,
+        settings: await window.db.getAll('settings')
+      };
+      const resp = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (resp.ok) {
+        const stamp = new Date().toLocaleString();
+        localStorage.setItem('dicklum_last_pc_sync', stamp);
+        const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
+        if (lastSyncEl) {
+          lastSyncEl.innerHTML = `Auto-saved to Office PC (<code>data/dicklum_master_db.json</code>): <strong>${stamp}</strong>`;
+        }
+      }
+    } catch (_) {
+      // Silent when out in the field away from Office Wi-Fi
+    }
+  }
+
+  // --- Server-Enforced + Offline-Capable Security PIN Gate ---
+
+  async hashPinLocal(pin) {
+    const clean = String(pin || '').trim();
+    if (window.crypto && window.crypto.subtle) {
+      const buf = new TextEncoder().encode(`dicklum_salt_v1:${clean}`);
+      const digest = await window.crypto.subtle.digest('SHA-256', buf);
+      return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    // Simple fallback hash if subtle crypto is unavailable on non-HTTPS LAN IP
+    let h = 2166136261;
+    const str = `dicklum_salt_v1:${clean}`;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  }
+
+  async initSecurityPinGate() {
+    let serverHasPin = false;
+    let serverAuthenticated = false;
+    let serverHint = '';
+
+    if (this._isLocalOfficeServer()) {
+      try {
+        const resp = await fetch('/api/auth/status');
+        if (resp.ok && (resp.headers.get('content-type') || '').includes('application/json')) {
+          const status = await resp.json();
+          serverHasPin = Boolean(status.hasPinConfigured);
+          serverAuthenticated = Boolean(status.authenticated);
+          serverHint = status.hint || '';
+        }
+      } catch (_) {
+        // Offline in the field: check local PIN storage
+      }
+    }
+
+    const localPinHash = localStorage.getItem('dicklum_pin_hash_v1');
+    const localSessionUnlocked = sessionStorage.getItem('dicklum_pin_unlocked_session') === 'true';
+    const localHint = localStorage.getItem('dicklum_pin_hint_v1') || '';
+
+    this.hasPinConfigured = serverHasPin || Boolean(localPinHash);
+    this.pinHint = serverHint || localHint;
+    this.refreshPinSecurityBadge();
+    this.updatePinDeleteButtonsState();
+
+    // Do NOT lock the entire app on startup!
+    // Meter Readers can freely use the Map and Readings tabs to do field work without entering a PIN.
+    // Secret Admin PIN is only challenged when entering the "Records" tab or "Settings" drawer.
+
+    const savedSyncStamp = localStorage.getItem('dicklum_last_pc_sync');
+    const lastSyncEl = document.getElementById('pc-sync-last-timestamp');
+    if (savedSyncStamp && lastSyncEl) {
+      lastSyncEl.innerHTML = `Last synced to Office PC: <strong>${savedSyncStamp}</strong>`;
+    }
+  }
+
+  isAdminUnlocked() {
+    if (!this.hasPinConfigured) return true; // If no PIN configured yet, allow access to configure
+    return sessionStorage.getItem('dicklum_admin_unlocked') === 'true' || sessionStorage.getItem('dicklum_pin_unlocked_session') === 'true';
+  }
+
+  lockAdminSession() {
+    sessionStorage.removeItem('dicklum_admin_unlocked');
+    sessionStorage.removeItem('dicklum_pin_unlocked_session');
+    document.getElementById('modal-settings-burger')?.classList.remove('active');
+    if (this.activeView === 'view-settings') {
+      this.switchView('view-map');
+    }
+    this.showToast('Admin Locked. Meter Reader mode active.', 2200);
+  }
+
+  updatePinDeleteButtonsState() {
+    const pill = document.getElementById('pin-delete-status-pill');
+    if (pill) {
+      pill.textContent = this.pinDeleteEnabled ? 'ENABLED (ACTIVE)' : 'LOCKED (SAFE)';
+      pill.className = this.pinDeleteEnabled ? 'badge badge-success' : 'badge badge-warning';
+    }
+    const toggleEl = document.getElementById('toggle-pin-delete-allow');
+    if (toggleEl && toggleEl.checked !== this.pinDeleteEnabled) {
+      toggleEl.checked = this.pinDeleteEnabled;
+    }
+    const btns = [
+      document.getElementById('sheet-btn-unpin'),
+      document.getElementById('btn-unpin-cluster')
+    ].filter(Boolean);
+
+    btns.forEach(b => {
+      if (this.pinDeleteEnabled) {
+        b.classList.remove('btn-disabled-safety');
+        b.removeAttribute('disabled');
+        b.title = 'Remove this GPS pin from map';
+      } else {
+        b.classList.add('btn-disabled-safety');
+        b.title = 'Pin Deletion is Locked for safety. Turn ON in Settings to enable.';
+      }
+    });
+  }
+
+  async toggleConsumerCutoffStatus(consumerIdParam = null) {
+    const consumer = (consumerIdParam && this.cachedConsumers.find(c => c.id === consumerIdParam)) || this.activeConsumer;
+    const meter = this.activeMeter || (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : null);
+    if (!consumer && !meter) return;
+
+    const currentStatus = (consumer && consumer.status) || (meter && meter.status) || 'Active';
+    const isNowCutOff = currentStatus === 'Active';
+    const newStatus = isNowCutOff ? 'Disconnected' : 'Active';
+    const actionWord = isNowCutOff ? 'Cut-Off (Disconnect)' : 'Reconnect';
+    const name = consumer ? consumer.name : (meter.ownerName || meter.meterNo);
+
+    if (!confirm(`${actionWord} water connection for "${name}"?\n\n(GPS satellite pins will stay exactly where they are on the map)`)) {
+      return;
+    }
+
+    try {
+      if (consumer) {
+        consumer.status = newStatus;
+        await window.db.update('consumers', consumer);
+      }
+      if (meter) {
+        meter.status = newStatus;
+        await window.db.update('meters', meter);
+      }
+      if (consumer) {
+        const otherMeters = this.cachedMeters.filter(m => m.consumerId === consumer.id);
+        for (const om of otherMeters) {
+          om.status = newStatus;
+          await window.db.update('meters', om);
+        }
+      }
+
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+
+      if (this.activeConsumer && consumer && this.activeConsumer.id === consumer.id) {
+        this.openConsumerSheet(consumer.id, meter ? meter.id : null, this.activePinType);
+      } else if (this.activeMeter && meter && this.activeMeter.id === meter.id) {
+        this.openConsumerSheet(consumer ? consumer.id : null, meter.id, this.activePinType);
+      }
+
+      const msg = isNowCutOff
+        ? `"${name}" water connection marked as CUT-OFF / DISCONNECTED.`
+        : `"${name}" water connection restored to ACTIVE.`;
+      this.showToast(msg, 2600);
+      this.autoSyncToOfficePcSilent();
+    } catch (err) {
+      console.error('Error toggling cutoff status:', err);
+      alert(`Failed to update connection status: ${err.message}`);
+    }
+  }
+
+  openEditConsumerModal(consumerId = null, meterId = null) {
+    const cId = consumerId || (this.activeConsumer && this.activeConsumer.id);
+    const mId = meterId || (this.activeMeter && this.activeMeter.id);
+    const consumer = cId ? this.cachedConsumers.find(c => c.id === cId) : null;
+    const meter = mId ? this.cachedMeters.find(m => m.id === mId) : (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : null);
+
+    if (!consumer && !meter) {
+      alert('Please select a consumer or water meter first.');
+      return;
+    }
+
+    const modal = document.getElementById('modal-edit-consumer');
+    if (!modal) return;
+
+    document.getElementById('edit-consumer-id').value = consumer ? consumer.id : '';
+    document.getElementById('edit-meter-id').value = meter ? meter.id : '';
+    document.getElementById('edit-consumer-name').value = consumer ? consumer.name : (meter.ownerName || '');
+    document.getElementById('edit-consumer-account-no').value = consumer ? (consumer.accountNo || '') : '';
+    document.getElementById('edit-consumer-address').value = consumer ? (consumer.address || '') : '';
+    document.getElementById('edit-consumer-meter-no').value = meter ? (meter.meterNo || '') : '';
+
+    const statusVal = (consumer && consumer.status) || (meter && meter.status) || 'Active';
+    const statusSelect = document.getElementById('edit-consumer-status');
+    if (statusSelect) {
+      statusSelect.value = (statusVal === 'Disconnected' || statusVal === 'Cut-Off') ? 'Disconnected' : 'Active';
+    }
+
+    const zoneSelect = document.getElementById('edit-consumer-zone');
+    if (zoneSelect) {
+      const activeZone = this.cleanZoneString((consumer && consumer.zone) || (meter && meter.zone) || 'Zone 1');
+      const zones = (this.cachedZones && this.cachedZones.length > 0)
+        ? this.cachedZones.map(z => z.name || z)
+        : ['Zone 1', 'Zone 2', 'Zone 3', 'Zone 4'];
+      zoneSelect.innerHTML = zones.map(z => `<option value="${z}" ${z === activeZone ? 'selected' : ''}>${z}</option>`).join('');
+    }
+
+    modal.classList.add('active');
+    setTimeout(() => {
+      document.getElementById('edit-consumer-name')?.focus();
+    }, 80);
+  }
+
+  async saveConsumerEdits() {
+    const cId = document.getElementById('edit-consumer-id')?.value;
+    const mId = document.getElementById('edit-meter-id')?.value;
+    const newName = (document.getElementById('edit-consumer-name')?.value || '').trim();
+    const newAcct = (document.getElementById('edit-consumer-account-no')?.value || '').trim();
+    const newZone = (document.getElementById('edit-consumer-zone')?.value || 'Zone 1').trim();
+    const newAddr = (document.getElementById('edit-consumer-address')?.value || '').trim();
+    const newMeterNo = (document.getElementById('edit-consumer-meter-no')?.value || '').trim();
+    const newStatus = (document.getElementById('edit-consumer-status')?.value || 'Active').trim();
+
+    if (!newName) {
+      alert('Please enter a consumer / owner name.');
+      return;
+    }
+
+    try {
+      let consumer = cId ? this.cachedConsumers.find(c => c.id === cId) : null;
+      let meter = mId ? this.cachedMeters.find(m => m.id === mId) : null;
+
+      if (consumer) {
+        consumer.name = newName;
+        if (newAcct) consumer.accountNo = newAcct;
+        consumer.zone = newZone;
+        if (newAddr) consumer.address = newAddr;
+        consumer.status = newStatus;
+        await window.db.update('consumers', consumer);
+      }
+
+      if (meter) {
+        if (newMeterNo) meter.meterNo = newMeterNo;
+        meter.ownerName = newName;
+        meter.zone = newZone;
+        meter.status = newStatus;
+        await window.db.update('meters', meter);
+      }
+
+      if (consumer && !meter) {
+        const linkedMeters = this.cachedMeters.filter(m => m.consumerId === consumer.id);
+        for (const lm of linkedMeters) {
+          lm.ownerName = newName;
+          lm.zone = newZone;
+          lm.status = newStatus;
+          if (newMeterNo) lm.meterNo = newMeterNo;
+          await window.db.update('meters', lm);
+        }
+      }
+
+      document.getElementById('modal-edit-consumer')?.classList.remove('active');
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+      this.renderBillingList();
+      this.populateQuickConsumerSelect();
+
+      if (this.activeConsumer && consumer && this.activeConsumer.id === consumer.id) {
+        this.openConsumerSheet(consumer.id, meter ? meter.id : null, this.activePinType);
+      } else if (this.activeMeter && meter && this.activeMeter.id === meter.id) {
+        this.openConsumerSheet(consumer ? consumer.id : null, meter.id, this.activePinType);
+      }
+
+      this.showToast(`Details updated for "${newName}". Pins preserved.`, 2500);
+      this.autoSyncToOfficePcSilent();
+    } catch (err) {
+      console.error('Error saving consumer edits:', err);
+      alert(`Failed to save edits: ${err.message}`);
+    }
+  }
+
+  refreshPinSecurityBadge() {
+    const badge = document.getElementById('pin-security-status-badge') || document.getElementById('security-pin-status-badge');
+    const btnSetup = document.getElementById('btn-open-pin-setup');
+    const btnLock = document.getElementById('btn-lock-app-now');
+    if (badge) {
+      if (this.hasPinConfigured) {
+        badge.textContent = 'PIN ACTIVE & PROTECTED';
+        badge.className = 'badge badge-success';
+      } else {
+        badge.textContent = 'NO PIN SET YET';
+        badge.className = 'badge badge-warning';
+      }
+    }
+    if (btnSetup) {
+      btnSetup.innerHTML = this.hasPinConfigured
+        ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> Change Secret PIN`
+        : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Create / Set Secret PIN`;
+    }
+    if (btnLock) {
+      btnLock.style.display = this.hasPinConfigured ? 'inline-flex' : 'none';
+    }
+  }
+
+  openPinGateModal(mode = 'unlock', onVerifiedCallback = null) {
+    if (mode === 'auto') {
+      mode = this.hasPinConfigured ? 'change' : 'setup';
+    }
+    this.pinGateMode = mode;
+    this._pendingAdminCallback = onVerifiedCallback || null;
+
+    const modal = document.getElementById('modal-security-pin-gate');
+    const titleEl = document.getElementById('pin-gate-title');
+    const bannerEl = document.getElementById('pin-gate-info-banner');
+    const currentGroup = document.getElementById('pin-gate-current-group');
+    const mainLabel = document.getElementById('pin-gate-main-label');
+    const confirmGroup = document.getElementById('pin-gate-confirm-group');
+    const hintDisplay = document.getElementById('pin-gate-hint-display');
+    const errorEl = document.getElementById('pin-gate-error');
+    const btnClose = document.getElementById('btn-close-pin-gate');
+    const btnCancel = document.getElementById('btn-cancel-pin-gate');
+    const btnSubmit = document.getElementById('btn-submit-pin-gate');
+
+    const currInput = document.getElementById('pin-gate-current-input');
+    const mainInput = document.getElementById('pin-gate-main-input');
+    const confInput = document.getElementById('pin-gate-confirm-input');
+    const hintInput = document.getElementById('pin-gate-hint-input');
+
+    if (currInput) currInput.value = '';
+    if (mainInput) mainInput.value = '';
+    if (confInput) confInput.value = '';
+    if (hintInput) hintInput.value = this.pinHint || '';
+    if (errorEl) {
+      errorEl.style.display = 'none';
+      errorEl.textContent = '';
+    }
+
+    if (mode === 'unlock' || mode === 'admin-verify') {
+      if (titleEl) titleEl.textContent = 'Admin PIN Required';
+      if (bannerEl) bannerEl.textContent = 'Restricted to Office Admins & Developers. Enter your Secret PIN to access records, reports, and system settings.';
+      if (currentGroup) currentGroup.style.display = 'none';
+      if (mainLabel) mainLabel.textContent = 'Secret PIN *';
+      if (confirmGroup) confirmGroup.style.display = 'none';
+      if (btnClose) btnClose.style.display = 'inline-flex';
+      if (btnCancel) btnCancel.style.display = 'inline-flex';
+      if (btnSubmit) btnSubmit.textContent = 'Unlock Admin Access';
+      if (hintDisplay) {
+        if (this.pinHint) {
+          hintDisplay.style.display = 'block';
+          hintDisplay.textContent = `PIN Hint: ${this.pinHint}`;
+        } else {
+          hintDisplay.style.display = 'none';
+        }
+      }
+    } else if (mode === 'setup') {
+      if (titleEl) titleEl.textContent = 'Create Secret Admin PIN';
+      if (bannerEl) bannerEl.textContent = 'Set a 4 to 8 digit Secret PIN. Once created, anyone attempting to access Records or Settings must enter this PIN.';
+      if (currentGroup) currentGroup.style.display = 'none';
+      if (mainLabel) mainLabel.textContent = 'New Secret PIN (4–8 digits) *';
+      if (confirmGroup) confirmGroup.style.display = 'block';
+      if (btnClose) btnClose.style.display = 'inline-flex';
+      if (btnCancel) btnCancel.style.display = 'inline-flex';
+      if (btnSubmit) btnSubmit.textContent = 'Save & Activate Secret PIN';
+      if (hintDisplay) hintDisplay.style.display = 'none';
+    } else if (mode === 'change') {
+      if (titleEl) titleEl.textContent = 'Change Secret Admin PIN';
+      if (bannerEl) bannerEl.textContent = 'Enter your current PIN first, then enter your new 4 to 8 digit Secret PIN.';
+      if (currentGroup) currentGroup.style.display = 'block';
+      if (mainLabel) mainLabel.textContent = 'New Secret PIN (4–8 digits) *';
+      if (confirmGroup) confirmGroup.style.display = 'block';
+      if (btnClose) btnClose.style.display = 'inline-flex';
+      if (btnCancel) btnCancel.style.display = 'inline-flex';
+      if (btnSubmit) btnSubmit.textContent = 'Update Secret PIN';
+      if (hintDisplay) hintDisplay.style.display = 'none';
+    }
+
+    if (modal) {
+      modal.classList.add('active');
+      setTimeout(() => {
+        if (mode === 'change' && currInput) currInput.focus();
+        else if (mainInput) mainInput.focus();
+      }, 80);
+    }
+  }
+
+  async submitPinGate() {
+    const mode = this.pinGateMode || 'unlock';
+    const currPin = (document.getElementById('pin-gate-current-input')?.value || '').trim();
+    const mainPin = (document.getElementById('pin-gate-main-input')?.value || '').trim();
+    const confPin = (document.getElementById('pin-gate-confirm-input')?.value || '').trim();
+    const hint = (document.getElementById('pin-gate-hint-input')?.value || '').trim();
+    const errorEl = document.getElementById('pin-gate-error');
+
+    const showErr = (msg) => {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.style.display = 'block';
+      } else {
+        alert(msg);
+      }
+    };
+
+    if (mode === 'unlock' || mode === 'admin-verify') {
+      if (!mainPin) return showErr('Please enter your Secret PIN.');
+
+      // 1. Try server-enforced login first
+      try {
+        const resp = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: mainPin })
+        });
+        if (resp.ok) {
+          const localHash = await this.hashPinLocal(mainPin);
+          localStorage.setItem('dicklum_pin_hash_v1', localHash);
+          sessionStorage.setItem('dicklum_admin_unlocked', 'true');
+          sessionStorage.setItem('dicklum_pin_unlocked_session', 'true');
+          document.getElementById('modal-security-pin-gate')?.classList.remove('active');
+          this.showToast('Admin Access Granted — Welcome!', 2200);
+          if (typeof this._pendingAdminCallback === 'function') {
+            const cb = this._pendingAdminCallback;
+            this._pendingAdminCallback = null;
+            cb();
+          }
+          return;
+        } else if (resp.status === 401) {
+          return showErr('Incorrect PIN. Access denied.');
+        }
+      } catch (_) {
+        // Fallback to local offline verification
+      }
+
+      // 2. Local offline PIN verification
+      const savedHash = localStorage.getItem('dicklum_pin_hash_v1');
+      const enteredHash = await this.hashPinLocal(mainPin);
+      if (savedHash && enteredHash === savedHash) {
+        sessionStorage.setItem('dicklum_admin_unlocked', 'true');
+        sessionStorage.setItem('dicklum_pin_unlocked_session', 'true');
+        document.getElementById('modal-security-pin-gate')?.classList.remove('active');
+        this.showToast('Admin Access Granted (Offline Mode)', 2200);
+        if (typeof this._pendingAdminCallback === 'function') {
+          const cb = this._pendingAdminCallback;
+          this._pendingAdminCallback = null;
+          cb();
+        }
+      } else {
+        showErr('Incorrect Secret PIN. Please try again.');
+      }
+      return;
+    }
+
+    // Setup or Change Mode
+    if (mainPin.length < 4) {
+      return showErr('Secret PIN must be at least 4 digits/characters.');
+    }
+    if (mainPin !== confPin) {
+      return showErr('New PIN and Confirm PIN do not match.');
+    }
+
+    if (mode === 'change') {
+      if (!currPin) return showErr('Please enter your current PIN.');
+      let changedOnServer = false;
+      try {
+        const resp = await fetch('/api/auth/change-pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ currentPin: currPin, newPin: mainPin, hint })
+        });
+        if (resp.ok) {
+          changedOnServer = true;
+        } else if (resp.status === 401) {
+          return showErr('Current PIN is incorrect.');
+        }
+      } catch (_) {
+        // Offline fallback check
+      }
+
+      if (!changedOnServer) {
+        const savedHash = localStorage.getItem('dicklum_pin_hash_v1');
+        const currHash = await this.hashPinLocal(currPin);
+        if (savedHash && currHash !== savedHash) {
+          return showErr('Current PIN is incorrect.');
+        }
+      }
+    } else {
+      // First-time setup on server
+      try {
+        await fetch('/api/auth/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin: mainPin, hint })
+        });
+      } catch (_) {
+        // Saved locally below as well
+      }
+    }
+
+    const newHash = await this.hashPinLocal(mainPin);
+    localStorage.setItem('dicklum_pin_hash_v1', newHash);
+    localStorage.setItem('dicklum_pin_hint_v1', hint);
+    sessionStorage.setItem('dicklum_pin_unlocked_session', 'true');
+    sessionStorage.setItem('dicklum_admin_unlocked', 'true');
+    this.hasPinConfigured = true;
+    this.pinHint = hint;
+    this.refreshPinSecurityBadge();
+
+    document.getElementById('modal-security-pin-gate')?.classList.remove('active');
+    this.showToast('Secret PIN saved & Security Gate activated!', 3000);
+    alert('Secret Office & Reader PIN is now active!\n\nWhenever the app is locked or opened in a new session, it will require this PIN before anyone can view the map or records.');
+  }
+
+  async lockAppNow() {
+    if (!this.hasPinConfigured) {
+      this.openPinGateModal('setup');
+      return;
+    }
+    sessionStorage.removeItem('dicklum_pin_unlocked_session');
+    sessionStorage.removeItem('dicklum_admin_unlocked');
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (_) {}
+    document.getElementById('modal-settings-burger')?.classList.remove('active');
+    this.switchView('view-map');
+    this.showToast('Application & Admin locked. Returning to Map.', 2200);
+  }
+
+  // --- Individual Consumer Folder: Saved Thermal Paper Bills & Monthly Payment Ledger ---
+
+  switchConsumerFolderTab(tabName = 'thermal') {
+    const btnThermal = document.getElementById('hist-tab-btn-thermal');
+    const btnLedger = document.getElementById('hist-tab-btn-ledger');
+    const panelThermal = document.getElementById('hist-panel-thermal');
+    const panelLedger = document.getElementById('hist-panel-ledger');
+
+    const isThermal = tabName === 'thermal';
+    if (btnThermal) {
+      btnThermal.classList.toggle('active', isThermal);
+      btnThermal.style.background = isThermal ? 'var(--primary)' : 'transparent';
+      btnThermal.style.color = isThermal ? '#FFFFFF' : 'var(--text-secondary)';
+    }
+    if (btnLedger) {
+      btnLedger.classList.toggle('active', !isThermal);
+      btnLedger.style.background = !isThermal ? 'var(--primary)' : 'transparent';
+      btnLedger.style.color = !isThermal ? '#FFFFFF' : 'var(--text-secondary)';
+    }
+    if (panelThermal) panelThermal.style.display = isThermal ? 'block' : 'none';
+    if (panelLedger) panelLedger.style.display = !isThermal ? 'block' : 'none';
+  }
+
+  async openConsumerHistoryModal(consumerId, sourceEl = null) {
+    const consumer = this.cachedConsumers.find(c => c.id === consumerId);
+    if (!consumer) return;
+    this.activeHistoryConsumerId = consumerId;
+
+    const meter = this.cachedMeters.find(m => m.consumerId === consumerId) || { meterNo: 'Unassigned', isClustered: false };
+    const cluster = meter.clusterId ? this.cachedClusters.find(cl => cl.id === meter.clusterId) : null;
+
+    let readings = [];
+    try {
+      readings = await window.db.getReadingsByConsumer(consumerId);
+      readings.sort((a, b) => new Date(b.readingDate || 0) - new Date(a.readingDate || 0));
+    } catch (e) {
+      readings = [];
+    }
+
+    // Ensure every finished reading for this consumer has a saved Bill record in their folder
+    let bills = (this.cachedBills || []).filter(b => b.consumerId === consumerId);
+    let recoveredAnyBill = false;
+    for (const r of readings) {
+      const hasMatchingBill = bills.some(b =>
+        b.readingId === r.id ||
+        (b.billingPeriod === r.billingPeriod && Number(b.currentReading) === Number(r.currentReading) && Number(b.previousReading) === Number(r.previousReading))
+      );
+      if (!hasMatchingBill && window.billingEngine) {
+        try {
+          const newBill = await window.billingEngine.generateBillRecord(r, consumer);
+          bills.push(newBill);
+          recoveredAnyBill = true;
+        } catch (_) {}
+      }
+    }
+    if (recoveredAnyBill) {
+      this.cachedBills = await window.db.getAll('bills');
+      bills = (this.cachedBills || []).filter(b => b.consumerId === consumerId);
+    }
+
+    bills.sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+
+    document.getElementById('hist-modal-consumer-name').textContent = consumer.name;
+    document.getElementById('hist-modal-acct-pill').textContent = consumer.accountNo;
+
+    const totalConsumedFromBills = bills.reduce((acc, b) => acc + (Number(b.consumption) || 0), 0);
+    const totalConsumedFromReadings = readings.reduce((acc, r) => acc + (Number(r.consumption) || 0), 0);
+    const totalConsumed = Math.max(totalConsumedFromBills, totalConsumedFromReadings);
+
+    const totalBilled = bills.reduce((acc, b) => acc + (Number(b.totalAmountDue) || 0), 0);
+    const totalPaid = bills.reduce((acc, b) => acc + (Number(b.amountPaid) || 0), 0);
+    const balanceDue = Math.max(0, totalBilled - totalPaid);
+
+    const elConsumed = document.getElementById('hist-stat-consumed');
+    if (elConsumed) elConsumed.textContent = `${totalConsumed.toLocaleString()} m³`;
+    document.getElementById('hist-stat-billed').textContent = `PHP ${totalBilled.toFixed(2)}`;
+    document.getElementById('hist-stat-paid').textContent = `PHP ${totalPaid.toFixed(2)}`;
+    document.getElementById('hist-stat-balance').textContent = `PHP ${balanceDue.toFixed(2)}`;
+    document.getElementById('hist-stat-balance').style.color = balanceDue > 0 ? '#F87171' : '#34D399';
+
+    const summaryBox = document.getElementById('hist-consumer-summary-box');
+    const hasHouseGps = Boolean(consumer.householdLat && consumer.householdLng);
+    const hasMeterGps = Boolean(meter.meterLat && meter.meterLng);
+
+    summaryBox.innerHTML = `
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; color: var(--text-secondary);">
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">Consumer / Owner:</strong><br><strong style="color:var(--text-primary);">${consumer.name}</strong></div>
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">District / Zone:</strong><br><span style="color:var(--text-primary);">${consumer.zone || 'Dicklum'}</span></div>
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">Water Meter No:</strong><br><strong style="color:var(--text-primary);">${meter.meterNo}</strong> ${cluster ? `(${cluster.name})` : ''}</div>
+        <div><strong style="color:var(--text-muted); font-size:9.5px; text-transform:uppercase;">GPS Pin Status:</strong><br>
+          <span style="color:${hasHouseGps ? '#34D399' : '#F87171'}; font-weight:700;">House: ${hasHouseGps ? 'Pinned' : 'Unpinned'}</span> • 
+          <span style="color:${hasMeterGps ? '#34D399' : '#F87171'}; font-weight:700;">Meter: ${hasMeterGps ? 'Pinned' : 'Unpinned'}</span>
+        </div>
+      </div>
+    `;
+
+    // TAB 1: Saved Thermal Paper Bill Notices (Visual copies matching thermal paper receipt)
+    const billsContainer = document.getElementById('hist-bills-list-container');
+    const billsCountEl = document.getElementById('hist-bills-count');
+    if (billsCountEl) billsCountEl.textContent = `${bills.length}`;
+
+    if (bills.length === 0) {
+      billsContainer.innerHTML = `
+        <div style="padding:18px; text-align:center; color:var(--text-secondary); font-size:12px; background:var(--surface); border:1px dashed var(--border); border-radius:10px;">
+          <div style="margin-bottom:6px; color:var(--primary-light);">${window.AppIcons.receipt('', 24)}</div>
+          <strong style="color:var(--text-primary);">No Thermal Paper Water Bills recorded in ${consumer.name}'s folder yet.</strong>
+          <div style="font-size:11px; margin-top:4px; color:var(--text-muted);">Tap <strong style="color:var(--text-primary);">"+ Read Meter"</strong> below to record a water meter reading and generate their official thermal paper water bill notice.</div>
+        </div>
+      `;
+    } else {
+      billsContainer.innerHTML = bills.map((b, idx) => {
+        const isPaid = b.paymentStatus === 'PAID';
+        const isPartial = b.paymentStatus === 'PARTIAL';
+        const unpaidAmount = Math.max(0, (Number(b.totalAmountDue) || 0) - (Number(b.amountPaid) || 0));
+        const statusBadgeClass = isPaid ? 'badge-success' : (isPartial ? 'badge-warning' : 'badge-danger');
+        const orNo = b.orNumber || b.officialReceiptNo || '';
+        const paidDate = b.paidDate || b.paidAt || '';
+
+        return `
+          <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px;">
+            <!-- Folder Receipt Header Bar -->
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:10px; background:var(--surface-alt); padding:8px 10px; border-radius:6px; border:1px solid var(--border);">
+              <div>
+                <span style="font-size:10px; font-weight:600; color:var(--primary-light); text-transform:uppercase;">Receipt #${bills.length - idx}</span>
+                <strong style="font-size:12.5px; font-weight:600; color:var(--text-primary); margin-left:6px;">Period: ${b.billingPeriod || b.billDate}</strong>
+                <span style="font-size:10.5px; color:var(--text-muted); margin-left:6px;">(${b.billDate || ''})</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="badge ${statusBadgeClass}">${b.paymentStatus || 'UNPAID'}</span>
+                ${unpaidAmount > 0
+                  ? `<span style="font-size:11px; font-weight:600; color:var(--danger-text); font-variant-numeric:tabular-nums;">Due: PHP ${unpaidAmount.toFixed(2)}</span>`
+                  : `<span style="font-size:11px; font-weight:600; color:var(--success-text);">Settled${orNo ? ` (${orNo})` : ''}</span>`}
+              </div>
+            </div>
+
+            <!-- Visual Thermal Paper Receipt Copy (Exact match to physical thermal roll) -->
+            <div style="padding: 4px 0 10px 0;">
+              ${this.buildThermalReceiptHtml(b, consumer, meter)}
+            </div>
+
+            ${isPaid || Number(b.amountPaid) > 0 ? `
+              <div style="background:var(--success-bg); border:1px solid rgba(16, 185, 129, 0.3); color:var(--success-text); border-radius:6px; padding:7px 10px; font-size:11px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:4px;">
+                <span><strong>Official Payment Recorded:</strong> PHP ${Number(b.amountPaid || 0).toFixed(2)}</span>
+                <span>OR #: <strong>${orNo || 'Recorded'}</strong> • Collector: <strong>${b.collectorName || 'Office'}</strong> ${paidDate ? `(${paidDate})` : ''}</span>
+              </div>
+            ` : ''}
+
+            <!-- Action Buttons on this Thermal Bill Copy -->
+            <div style="display:flex; gap:6px; flex-wrap:wrap; justify-content:center; background:var(--surface-alt); padding:8px; border-radius:6px; border:1px solid var(--border);">
+              <button class="btn btn-sm btn-primary" onclick="window.app.openThermalReceipt('${b.id}')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect width="12" height="8" x="6" y="14"/></svg>
+                Print Thermal Bill
+              </button>
+              ${!isPaid ? `
+                <button class="btn btn-sm btn-success" onclick="window.app.openPaymentModal('${b.id}')">
+                  ${window.AppIcons.creditCard('', 13)} Record Payment
+                </button>
+              ` : ''}
+              <button class="btn btn-sm btn-outline" onclick="window.app.openA4Statement('${b.id}')">
+                ${window.AppIcons.fileText('', 13)} A4 Copy
+              </button>
+              <button class="btn btn-sm btn-outline" onclick="window.app.deleteBillRecord('${b.id}')" style="color:var(--danger-text); border-color:rgba(239,68,68,0.35);" title="Delete this billing record">
+                Delete
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // TAB 2: Monthly Consumption & Payment History Ledger Table + Raw Readings Log
+    const ledgerTableContainer = document.getElementById('hist-ledger-table-container');
+    const readingsContainer = document.getElementById('hist-readings-list-container');
+    const readingsCountEl = document.getElementById('hist-readings-count');
+    if (readingsCountEl) readingsCountEl.textContent = `${ Math.max(bills.length, readings.length) }`;
+
+    if (ledgerTableContainer) {
+      if (bills.length === 0) {
+        ledgerTableContainer.innerHTML = '<div style="padding:12px; text-align:center; color:var(--text-muted); font-size:11.5px; background:var(--surface); border:1px solid var(--border); border-radius:8px;">No monthly billing or payment ledger entries yet.</div>';
+      } else {
+        ledgerTableContainer.innerHTML = `
+          <table style="width:100%; border-collapse:collapse; background:var(--surface); color:var(--text-primary); border:1px solid var(--border); border-radius:8px; overflow:hidden; font-size:11px;">
+            <thead>
+              <tr style="background:var(--surface-muted); color:#FFFFFF; text-align:left; border-bottom:1px solid var(--border);">
+                <th style="padding:7px 8px;">Period / Date</th>
+                <th style="padding:7px 8px;">Prev → Curr</th>
+                <th style="padding:7px 8px;">Consumed</th>
+                <th style="padding:7px 8px;">Billed</th>
+                <th style="padding:7px 8px;">Paid</th>
+                <th style="padding:7px 8px;">OR # / Date</th>
+                <th style="padding:7px 8px;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${bills.map(b => {
+                const isPaid = b.paymentStatus === 'PAID';
+                const orNo = b.orNumber || b.officialReceiptNo || '-';
+                const pDate = b.paidDate || b.paidAt || '';
+                return `
+                  <tr style="border-bottom:1px solid var(--border);">
+                    <td style="padding:6px 8px;"><strong>${b.billingPeriod || ''}</strong><br><span style="font-size:9.5px;color:var(--text-muted);">${b.billDate || ''}</span></td>
+                    <td style="padding:6px 8px; font-family:var(--font-mono); color:var(--text-secondary);">${Number(b.previousReading || 0).toLocaleString()} → ${Number(b.currentReading || 0).toLocaleString()} m³</td>
+                    <td style="padding:6px 8px; font-weight:800; color:#38BDF8;">${Number(b.consumption || 0).toLocaleString()} m³</td>
+                    <td style="padding:6px 8px; font-weight:700; color:var(--text-primary);">PHP ${Number(b.totalAmountDue || 0).toFixed(2)}</td>
+                    <td style="padding:6px 8px; font-weight:700; color:#34D399;">PHP ${Number(b.amountPaid || 0).toFixed(2)}</td>
+                    <td style="padding:6px 8px; font-size:10px;"><strong>${orNo}</strong>${pDate ? `<br><span style="color:var(--text-muted);">${pDate}</span>` : ''}</td>
+                    <td style="padding:6px 8px;">
+                      <span class="badge ${isPaid ? 'badge-success' : 'badge-danger'}" style="font-size:9px;">${b.paymentStatus || 'UNPAID'}</span>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+    }
+
+    if (readingsContainer) {
+      if (readings.length === 0) {
+        readingsContainer.innerHTML = '<div style="padding:10px; text-align:center; color:var(--text-muted); font-size:11px; background:var(--surface); border:1px solid var(--border); border-radius:6px;">No meter readings recorded yet.</div>';
+      } else {
+        readingsContainer.innerHTML = readings.map(r => `
+          <div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface); color:var(--text-primary); border:1px solid var(--border); border-radius:6px; padding:7px 10px; font-size:11.5px;">
+            <div>
+              <strong>${r.readingDate ? new Date(r.readingDate).toLocaleDateString() : 'N/A'}</strong>
+              <span style="color:var(--text-muted); margin-left:6px; font-size:10px;">Period: ${r.billingPeriod || ''}</span>
+            </div>
+            <div>
+              <span style="color:var(--text-muted); font-size:10.5px;">Prev ${Number(r.previousReading || 0).toLocaleString()} → Curr</span>
+              <strong style="color:#38BDF8; font-size:12.5px;">${Number(r.currentReading || 0).toLocaleString()} m³</strong>
+              ${r.consumption != null ? `<span style="color:#34D399; font-weight:800; margin-left:4px;">(${r.consumption} m³)</span>` : ''}
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+
+    // Wire Folder Modal Tabs & Footer Buttons
+    const btnTabThermal = document.getElementById('hist-tab-btn-thermal');
+    const btnTabLedger = document.getElementById('hist-tab-btn-ledger');
+    if (btnTabThermal) btnTabThermal.onclick = () => this.switchConsumerFolderTab('thermal');
+    if (btnTabLedger) btnTabLedger.onclick = () => this.switchConsumerFolderTab('ledger');
+    this.switchConsumerFolderTab('thermal');
+
+    const btnReadNow = document.getElementById('hist-btn-read-meter');
+    if (btnReadNow) {
+      btnReadNow.onclick = () => {
+        document.getElementById('modal-consumer-history')?.classList.remove('active');
+        this.startReadingForConsumer(consumer.id);
+      };
+    }
+
+    const btnSaveFolderPdf = document.getElementById('hist-btn-download-folder-pdf');
+    if (btnSaveFolderPdf) {
+      btnSaveFolderPdf.onclick = () => {
+        const printable = document.getElementById('consumer-folder-printable-area');
+        const safeName = String(consumer.name || 'Consumer').replace(/[^a-zA-Z0-9_-]/g, '_');
+        if (printable) {
+          this.downloadElementAsPdf(printable, `Consumer_Folder_${safeName}_${consumer.accountNo}.pdf`);
+        }
+      };
+    }
+
+    const btnExportFolderExcel = document.getElementById('hist-btn-export-folder-excel');
+    if (btnExportFolderExcel) {
+      btnExportFolderExcel.onclick = () => {
+        this.exportZoneOrConsumerReport({ zone: 'ALL', consumerId: consumer.id, format: 'excel' });
+      };
+    }
+
+    const btnA4 = document.getElementById('hist-btn-print-statement');
+    if (btnA4) {
+      btnA4.onclick = () => {
+        if (bills.length > 0) {
+          this.openA4Statement(bills[0].id);
+        } else {
+          alert('No bills recorded for this consumer yet. Tap "+ Read Meter" to record their first reading.');
+        }
+      };
+    }
+
+    const modalHist = document.getElementById('modal-consumer-history');
+    const modalCard = modalHist ? modalHist.querySelector('.modal-card') : null;
+    if (sourceEl && modalCard) {
+      this.sharedElementMorph(sourceEl, modalCard, () => {
+        modalHist.classList.add('active');
+      });
+    } else if (modalHist) {
+      modalHist.classList.add('active');
+    }
+  }
+
+  // --- Map Layer Switcher & Offline Diclum Tile Downloader ---
+
+  openLayerModal() {
+    this.updateOfflineMapStatsUI();
+    document.getElementById('modal-map-layers').classList.add('active');
+  }
+
+  async updateOfflineMapStatsUI() {
+    if (!window.offlineTileEngine) return;
+    try {
+      const stats = await window.offlineTileEngine.getCacheStats();
+      const statsEl = document.getElementById('offline-cache-stats-text');
+      const badgeEl = document.getElementById('offline-cache-badge');
+      const mbSize = (stats.totalBytes / (1024 * 1024)).toFixed(1);
+      if (statsEl) {
+        statsEl.textContent = `Offline Diclum Tile Storage: ${stats.count} tiles cached (${mbSize} MB). Works 100% offline with zero data or Wi-Fi.`;
+      }
+      if (badgeEl) {
+        badgeEl.textContent = stats.count > 0 ? `${stats.count} TILES READY` : 'READY';
+      }
+    } catch (e) {
+      console.warn('Could not read offline tile stats:', e);
+    }
+  }
+
+  async startOfflineDiclumDownload() {
+    if (!window.offlineTileEngine) return;
+    const progressBox = document.getElementById('offline-download-progress-box');
+    const progressBar = document.getElementById('offline-download-bar');
+    const percentEl = document.getElementById('offline-download-percent');
+    const labelEl = document.getElementById('offline-download-label');
+    const btnDownload = document.getElementById('btn-download-offline-diclum');
+    const btnCancel = document.getElementById('btn-cancel-offline-diclum');
+
+    if (progressBox) progressBox.style.display = 'block';
+    if (btnCancel) btnCancel.classList.remove('hidden');
+    if (btnDownload) {
+      btnDownload.disabled = true;
+      btnDownload.textContent = 'Downloading Tiles...';
+    }
+
+    try {
+      this.showToast('Starting Barangay Diclum offline map download...', 2000);
+      const res = await window.offlineTileEngine.downloadDiclumMapPack({
+        minZoom: 14,
+        maxZoom: 18,
+        onProgress: (p) => {
+          if (progressBar) progressBar.style.width = `${p.percent}%`;
+          if (percentEl) percentEl.textContent = `${p.percent}% (${p.current}/${p.total})`;
+          if (labelEl) labelEl.textContent = `Caching Diclum zoom ${p.zoom}...`;
+        }
+      });
+
+      if (labelEl) labelEl.textContent = 'Offline Diclum Map 100% Cached!';
+      this.showToast(`Diclum Map Download Complete! ${res.saved} new tiles saved for 100% offline use.`, 3500);
+      await this.updateOfflineMapStatsUI();
+    } catch (err) {
+      console.error('Offline map download failed:', err);
+      this.showToast('Offline download cancelled or paused: ' + err.message, 3000);
+    } finally {
+      if (btnDownload) {
+        btnDownload.disabled = false;
+        btnDownload.textContent = 'Download Deep Zoom (Zooms 14–18)';
+      }
+      if (btnCancel) btnCancel.classList.add('hidden');
+    }
+  }
+
+  cancelOfflineDiclumDownload() {
+    if (window.offlineTileEngine) {
+      window.offlineTileEngine.cancelDownload();
+      this.showToast('Offline map download cancelled.', 1500);
+    }
+    const btnCancel = document.getElementById('btn-cancel-offline-diclum');
+    if (btnCancel) btnCancel.classList.add('hidden');
+    const btnDownload = document.getElementById('btn-download-offline-diclum');
+    if (btnDownload) {
+      btnDownload.disabled = false;
+      btnDownload.textContent = 'Download Deep Zoom (Zooms 14–18)';
+    }
+  }
+
+  setMapLayer(layerKey) {
+    if (this.mapEngine) {
+      this.mapEngine.setLayer(layerKey);
+    }
+    const currentLayerName = this.mapEngine.layerProviders[layerKey].name;
+    document.getElementById('map-current-layer-label').textContent = currentLayerName;
+    document.querySelectorAll('.layer-choice-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.layer === layerKey);
+    });
+    document.getElementById('modal-map-layers').classList.remove('active');
+  }
+
+  // --- Rendering UI Lists ---
+
+  renderConsumerList(filterQuery = '') {
+    const list = document.getElementById('consumers-list-container');
+    if (!list) return;
+
+    const query = filterQuery.toLowerCase();
+    const filtered = this.cachedConsumers.filter(c => {
+      const matchName = c.name.toLowerCase().includes(query);
+      const matchAcct = c.accountNo.toLowerCase().includes(query);
+      const matchZone = c.zone.toLowerCase().includes(query);
+      return matchName || matchAcct || matchZone;
+    });
+
+    const countBadge = document.getElementById('consumer-records-count-badge');
+    if (countBadge) {
+      countBadge.textContent = `${this.cachedConsumers.length} CONSUMERS`;
+    }
+
+    list.innerHTML = '';
+    if (filtered.length === 0) {
+      list.innerHTML = '<div style="padding: 14px; text-align: center; color: var(--text-muted); font-size: 11.5px;">No consumers registered. Tap any spot on the Map to add water meters or consumers.</div>';
+      return;
+    }
+
+    filtered.forEach(c => {
+      const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+      const hasHousePin = Boolean(c.householdLat && c.householdLng);
+      const hasMeterPin = Boolean(meter && meter.meterLat && meter.meterLng);
+
+      const card = document.createElement('div');
+      card.className = 'consumer-card';
+      card.innerHTML = `
+        <div class="c-header">
+          <div>
+            <strong>${c.name}</strong>
+            <span class="acct-pill">${c.accountNo}</span>
+          </div>
+          <div style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
+            <span class="badge ${c.status === 'Active' ? 'badge-success' : 'badge-danger'}">${c.status || 'Active'}</span>
+            <button class="btn btn-xs btn-outline" onclick="window.app.openEditConsumerModal('${c.id}')" style="color: var(--primary-light); border-color: rgba(56,189,248,0.4); padding: 2px 6px;" title="Edit consumer name, meter, or zone">
+              Edit
+            </button>
+            <button class="btn btn-xs btn-outline" onclick="window.app.toggleConsumerCutoffStatus('${c.id}')" style="color: ${c.status === 'Disconnected' ? '#16A34A' : '#EA580C'}; border-color: ${c.status === 'Disconnected' ? 'rgba(22,163,74,0.4)' : 'rgba(234,88,12,0.4)'}; padding: 2px 6px;" title="Cut-off or Reconnect water service">
+              ${c.status === 'Disconnected' ? 'Reconnect' : 'Cut-off'}
+            </button>
+            <button class="btn btn-xs btn-outline" onclick="window.app.deleteConsumerRecord('${c.id}')" style="color: #F87171; border-color: rgba(239,68,68,0.4); padding: 2px 6px;" title="Delete consumer record">
+              Delete
+            </button>
+          </div>
+        </div>
+        <div class="c-body">
+          <div class="c-row"><span>Address:</span> <span>${c.address}</span></div>
+          <div class="c-row"><span>District:</span> <span>${c.zone}</span></div>
+          <div class="c-row">
+            <span>Water Meter:</span> 
+            <span>${meter ? meter.meterNo + (meter.isClustered ? ' (Clustered Manifold)' : ' (Individual Standpipe)') : '<em class="text-muted">Unassigned</em>'}</span>
+          </div>
+          <div class="pins-status-row">
+            <span class="pin-tag ${hasHousePin ? 'pinned' : 'unpinned'}">
+              ${hasHousePin ? 'House Pinned' : 'No House GPS'}
+            </span>
+            <span class="pin-tag ${hasMeterPin ? 'pinned' : 'unpinned'}">
+              ${hasMeterPin ? 'Meter Pinned' : 'No Meter GPS'}
+            </span>
+          </div>
+        </div>
+        <div class="c-actions">
+          <button class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${c.id}')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Folder &amp; Bills
+          </button>
+          <button class="btn btn-sm btn-outline" onclick="window.app.focusConsumerOnMap('${c.id}')">
+            ${window.AppIcons.mapPin('', 13)} View on Map
+          </button>
+          <button class="btn btn-sm btn-primary" onclick="window.app.startReadingForConsumer('${c.id}')">
+            ${window.AppIcons.reading('', 13)} Read Meter
+          </button>
+        </div>
+      `;
+      list.appendChild(card);
+    });
+  }
+
+  focusConsumerOnMap(consumerId) {
+    const consumer = this.cachedConsumers.find(c => c.id === consumerId);
+    if (!consumer) return;
+
+    this.switchView('view-map');
+    if (consumer.householdLat && consumer.householdLng) {
+      this.mapEngine.panTo(consumer.householdLat, consumer.householdLng, 17.5);
+      this.mapEngine.selectPinById(consumer.id, 'household');
+    } else {
+      const meter = this.cachedMeters.find(m => m.consumerId === consumerId);
+      if (meter && meter.meterLat) {
+        this.mapEngine.panTo(meter.meterLat, meter.meterLng, 18.2);
+        if (meter.isClustered && meter.clusterId) {
+          this._activeClusterMeterId = meter.id;
+          this.mapEngine.selectPinById(meter.clusterId, 'cluster');
+        } else {
+          this.mapEngine.selectPinById(meter.id, 'meter');
+        }
+      }
+    }
+  }
+
+  renderBillingList(filterStatus, searchQuery) {
+    const list = document.getElementById('billing-list-container');
+    if (!list) return;
+
+    this.billingViewMode = this.billingViewMode || 'folders';
+    if (filterStatus !== undefined) this.billingFilterStatus = filterStatus;
+    if (searchQuery !== undefined) this.billingSearchQuery = searchQuery;
+
+    const status = (this.billingFilterStatus || 'all').toLowerCase();
+    const q = (this.billingSearchQuery || '').toLowerCase().trim();
+    const countBadge = document.getElementById('billing-folders-count-badge');
+
+    // MODE 1: SEPARATED CONSUMER FOLDERS DASHBOARD (Default)
+    if (this.billingViewMode === 'folders') {
+      const folderItems = this.cachedConsumers.map(c => {
+        const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+        const cBills = (this.cachedBills || [])
+          .filter(b => b.consumerId === c.id)
+          .sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+        const totalConsumed = cBills.reduce((s, b) => s + (Number(b.consumption) || 0), 0);
+        const totalBilled = cBills.reduce((s, b) => s + (Number(b.totalAmountDue) || 0), 0);
+        const totalPaid = cBills.reduce((s, b) => s + (Number(b.amountPaid) || 0), 0);
+        const balanceDue = Math.max(0, totalBilled - totalPaid);
+        return {
+          consumer: c,
+          meter,
+          bills: cBills,
+          latestBill: cBills[0] || null,
+          totalConsumed,
+          totalBilled,
+          totalPaid,
+          balanceDue
+        };
+      }).filter(item => {
+        const c = item.consumer;
+        const m = item.meter;
+        if (q) {
+          const matchName = (c.name || '').toLowerCase().includes(q);
+          const matchAcct = (c.accountNo || '').toLowerCase().includes(q);
+          const matchZone = (c.zone || '').toLowerCase().includes(q);
+          const matchAddr = (c.address || '').toLowerCase().includes(q);
+          const matchMeter = m && (m.meterNo || '').toLowerCase().includes(q);
+          if (!matchName && !matchAcct && !matchZone && !matchAddr && !matchMeter) return false;
+        }
+        if (status === 'billed') return item.bills.length > 0;
+        if (status === 'unpaid') return item.balanceDue > 0;
+        if (status === 'paid') return item.bills.length > 0 && item.balanceDue <= 0;
+        return true;
+      });
+
+      // Sort: consumers with bills first (most recent bill on top), then alphabetically by name
+      folderItems.sort((a, b) => {
+        if (a.bills.length > 0 && b.bills.length === 0) return -1;
+        if (a.bills.length === 0 && b.bills.length > 0) return 1;
+        if (a.latestBill && b.latestBill) {
+          const tA = new Date(a.latestBill.createdAt || a.latestBill.billDate || 0).getTime();
+          const tB = new Date(b.latestBill.createdAt || b.latestBill.billDate || 0).getTime();
+          if (tB !== tA) return tB - tA;
+        }
+        return String(a.consumer.name || '').localeCompare(String(b.consumer.name || ''));
+      });
+
+      if (countBadge) {
+        countBadge.textContent = `${folderItems.length} FOLDER${folderItems.length === 1 ? '' : 'S'}`;
+      }
+
+      list.innerHTML = '';
+      if (folderItems.length === 0) {
+        list.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-secondary); background: var(--surface); border: 1px dashed var(--border); border-radius: 12px; margin: 8px 0;">
+            <div style="margin-bottom: 6px; color: var(--primary-light);">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <strong style="color: var(--text-primary);">No matching consumer folder found${q ? ` for "${this.billingSearchQuery}"` : ''}.</strong>
+            <div style="font-size: 11.5px; margin-top: 4px; color: var(--text-muted);">Try another name, account number, or switch the filter above to "All Consumers".</div>
+          </div>
+        `;
+        return;
+      }
+
+      folderItems.forEach(item => {
+        const c = item.consumer;
+        const m = item.meter;
+        const bCount = item.bills.length;
+        const hasUnpaid = item.balanceDue > 0;
+        const latest = item.latestBill;
+
+        let badgeHtml = `<span class="badge" style="background:var(--surface-alt); color:var(--text-secondary); border:1px solid var(--border);">0 Bills</span>`;
+        if (bCount > 0) {
+          badgeHtml = hasUnpaid
+            ? `<span class="badge badge-danger">${bCount} Bill${bCount === 1 ? '' : 's'} • Unpaid</span>`
+            : `<span class="badge badge-success">${bCount} Bill${bCount === 1 ? '' : 's'} • Settled</span>`;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'bill-card';
+        card.innerHTML = `
+          <div class="b-header" style="cursor: pointer;" onclick="window.app.openConsumerHistoryModal('${c.id}', this.closest('.bill-card'))">
+            <div style="flex: 1; min-width: 0;">
+              <strong style="font-size: 13.5px; font-weight: 600; color: var(--text-primary); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${c.name}</strong>
+              <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 3px;">
+                <span class="acct-pill" style="margin-left: 0;">${c.accountNo}</span>
+                <span class="blueprint-tag">${c.zone || 'Dicklum'}</span>
+                <span class="blueprint-tag" style="color: var(--text-muted); border-color: var(--border);">Mtr: ${m ? m.meterNo : 'N/A'}</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0;">
+              ${badgeHtml}
+              ${hasUnpaid ? `<span style="font-size: 11px; font-weight: 700; color: var(--danger-text); font-variant-numeric: tabular-nums;">Due: PHP ${item.balanceDue.toFixed(2)}</span>` : `<span style="font-size: 10px; color: var(--text-muted);">Settled</span>`}
+            </div>
+          </div>
+
+          <!-- Progressive Disclosure Toggle Trigger -->
+          <div style="padding: 0 10px 8px 10px;">
+            <button type="button" class="btn btn-xs btn-outline btn-toggle-details" onclick="event.stopPropagation(); this.closest('.bill-card').classList.toggle('details-expanded');" style="width: 100%; height: 26px; font-size: 10.5px; display: flex; align-items: center; justify-content: center; gap: 5px; border-color: rgba(56, 189, 248, 0.2); background: rgba(15, 20, 31, 0.5);">
+              <span>Show Details &amp; Metrics</span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+          </div>
+
+          <!-- Progressively Disclosed Drawer -->
+          <div class="card-details-drawer">
+            <div class="b-body" style="cursor: pointer; padding: 0 10px;" onclick="window.app.openConsumerHistoryModal('${c.id}', this.closest('.bill-card'))">
+              <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr);">
+                <div class="r-cell">
+                  <span class="lbl">Saved Bills</span>
+                  <span class="val">${bCount}</span>
+                </div>
+                <div class="r-cell">
+                  <span class="lbl">Consumed</span>
+                  <span class="val" style="color: var(--primary-light);">${item.totalConsumed.toLocaleString()} m³</span>
+                </div>
+                <div class="r-cell">
+                  <span class="lbl">Total Paid</span>
+                  <span class="val" style="color: var(--success-text);">PHP ${item.totalPaid.toFixed(2)}</span>
+                </div>
+                <div class="r-cell ${hasUnpaid ? 'highlight' : ''}">
+                  <span class="lbl">Balance Due</span>
+                  <span class="val" style="color: ${hasUnpaid ? 'var(--danger-text)' : 'var(--text-primary)'};">PHP ${item.balanceDue.toFixed(2)}</span>
+                </div>
+              </div>
+
+              ${latest ? `
+                <div style="margin-top: 6px; padding: 6px 8px; background: var(--surface-alt); border: 1px solid var(--border); color: var(--text-secondary); border-radius: 6px; font-size: 11px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px; font-variant-numeric: tabular-nums;">
+                  <span><strong style="color: var(--text-primary); font-weight: 600;">Latest Bill:</strong> ${latest.billingPeriod} (${Number(latest.previousReading || 0).toLocaleString()} → ${Number(latest.currentReading || 0).toLocaleString()} m³ = <strong style="color: var(--primary-light); font-weight: 600;">${Number(latest.consumption || 0)} m³</strong>)</span>
+                  <strong style="color: var(--primary-light); font-weight: 600;">PHP ${Number(latest.totalAmountDue || 0).toFixed(2)} (${latest.paymentStatus})</strong>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="b-actions" style="display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px 10px 10px;">
+              <button class="btn btn-sm btn-primary" onclick="window.app.openConsumerHistoryModal('${c.id}', this.closest('.bill-card'))" style="flex: 1;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                Open Folder (${bCount} Receipt${bCount === 1 ? '' : 's'})
+              </button>
+              <button class="btn btn-sm btn-outline" onclick="window.app.startReadingForConsumer('${c.id}', this.closest('.bill-card'))">
+                ${window.AppIcons.reading('', 13)} Read Meter
+              </button>
+            </div>
+          </div>
+        `;
+        list.appendChild(card);
+      });
+      return;
+    }
+
+    // MODE 2: ALL THERMAL BILL NOTICES STREAM
+    const filteredBills = (this.cachedBills || []).filter(b => {
+      const consumer = this.cachedConsumers.find(c => c.id === b.consumerId);
+      const meter = this.cachedMeters.find(m => m.consumerId === b.consumerId);
+      if (q) {
+        const cName = ((consumer && consumer.name) || b.consumerName || '').toLowerCase();
+        const cAcct = ((consumer && consumer.accountNo) || b.accountNo || '').toLowerCase();
+        const cZone = ((consumer && consumer.zone) || b.zone || '').toLowerCase();
+        const mNo = ((meter && meter.meterNo) || b.meterNo || '').toLowerCase();
+        const bId = (b.id || '').toLowerCase();
+        if (!cName.includes(q) && !cAcct.includes(q) && !cZone.includes(q) && !mNo.includes(q) && !bId.includes(q)) {
+          return false;
+        }
+      }
+      if (status === 'all' || status === 'billed') return true;
+      return (b.paymentStatus || '').toLowerCase() === status;
+    }).sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0));
+
+    if (countBadge) {
+      countBadge.textContent = `${filteredBills.length} BILL${filteredBills.length === 1 ? '' : 'S'}`;
+    }
+
+    list.innerHTML = '';
+    if (filteredBills.length === 0) {
+      list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No thermal billing records found matching your filter.</div>';
+      return;
+    }
+
+    filteredBills.forEach(b => {
+      const consumer = this.cachedConsumers.find(c => c.id === b.consumerId);
+      const isPaid = b.paymentStatus === 'PAID';
+
+      const card = document.createElement('div');
+      card.className = `bill-card`;
+      card.innerHTML = `
+        <div class="b-header">
+          <div>
+            <strong>${consumer ? consumer.name : (b.consumerName || 'Unknown')}</strong>
+            <span class="acct-pill">${b.id} • ${b.billingPeriod}</span>
+          </div>
+          <div style="display: flex; gap: 4px; align-items: center;">
+            <span class="badge ${isPaid ? 'badge-success' : 'badge-danger'}">
+              ${b.paymentStatus}
+            </span>
+            <button class="btn btn-xs btn-outline" onclick="window.app.deleteBillRecord('${b.id}')" style="color: #F87171; border-color: rgba(239,68,68,0.4); padding: 2px 6px;" title="Delete this billing statement">
+              Delete
+            </button>
+          </div>
+        </div>
+        <div class="b-body">
+          <div class="b-readings-grid">
+            <div class="r-cell">
+              <span class="lbl">Previous</span>
+              <span class="val">${Number(b.previousReading || 0).toLocaleString()} m³</span>
+            </div>
+            <div class="r-cell">
+              <span class="lbl">Current</span>
+              <span class="val">${Number(b.currentReading || 0).toLocaleString()} m³</span>
+            </div>
+            <div class="r-cell highlight">
+              <span class="lbl">Consumption</span>
+              <span class="val">${Number(b.consumption || 0).toLocaleString()} m³</span>
+            </div>
+          </div>
+          <div class="b-summary-row" style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+            <span style="font-size: 11px; color: var(--text-muted);">Due: <strong style="color: var(--text-secondary);">${b.dueDate}</strong></span>
+            <span style="font-size: 13px; color: #38BDF8;">Total Due: <strong>PHP ${Number(b.totalAmountDue || 0).toFixed(2)}</strong></span>
+          </div>
+        </div>
+        <div class="b-actions">
+          <button class="btn btn-sm btn-outline" onclick="window.app.openConsumerHistoryModal('${b.consumerId}', this.closest('.bill-card'))" style="border-color:var(--primary); color:#38BDF8; font-weight:700;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Folder
+          </button>
+          <button class="btn btn-sm btn-outline" onclick="window.app.openThermalReceiptModal('${b.id}')">
+            ${window.AppIcons.printer('', 13)} Thermal Bill
+          </button>
+          <button class="btn btn-sm btn-outline" onclick="window.app.openA4StatementModal('${b.id}')">
+            ${window.AppIcons.fileText('', 13)} A4 Copy
+          </button>
+          ${!isPaid ? `
+            <button class="btn btn-sm btn-success" onclick="window.app.openPaymentModal('${b.id}')">
+              ${window.AppIcons.creditCard('', 13)} Pay
+            </button>
+          ` : `
+            <span style="font-size: 10.5px; color: #34D399; font-weight: 600;">OR: ${b.orNumber || b.officialReceiptNo || 'N/A'}</span>
+          `}
+        </div>
+      `;
+      list.appendChild(card);
+    });
+  }
+
+  renderStats() {
+    const badge = document.getElementById('consumer-records-count-badge');
+    if (badge) {
+      badge.textContent = `${this.cachedConsumers.length} CONSUMERS`;
+    }
+  }
+
+  // --- Event Binding ---
+
+  bindNavigationEvents() {
+    document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.setMode(e.target.dataset.mode);
+      });
+    });
+
+    document.querySelectorAll('.nav-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.switchView(btn.dataset.view);
+      });
+    });
+
+    document.querySelectorAll('.btn-back-home').forEach(btn => {
+      btn.addEventListener('click', () => this.switchView('view-map'));
+    });
+  }
+
+  focusSearchMatchOnMap(match) {
+    if (!match || !this.mapEngine) return;
+
+    const { consumerId, meterId, pinId, pinType, lat, lng, name, zone } = match;
+    if (this.activeView !== 'view-map') {
+      this.switchView('view-map');
+    }
+
+    // If pins are currently hidden, isolate this searched pin so ONLY this pin is shown on the map!
+    if (this.mapEngine.isPinsHidden && pinId) {
+      this.mapEngine.isolateSinglePin(pinId, pinType);
+    }
+
+    // Ensure active zone/type filters do not hide the searched pin
+    if (this.mapEngine._zoneFilter && zone && this.mapEngine._zoneFilter !== zone) {
+      this.mapEngine.setZoneFilter(null);
+      const zoneChipsContainer = document.getElementById('map-zone-chips');
+      if (zoneChipsContainer) {
+        zoneChipsContainer.querySelectorAll('.zone-chip').forEach(c => {
+          c.classList.toggle('active', (c.dataset.zone || '') === '');
+        });
+      }
+    }
+    if (this.mapEngine._filter && this.mapEngine._filter !== 'all' && this.mapEngine._filter !== pinType) {
+      this.mapEngine.setFilter('all');
+      const typeSegment = document.getElementById('map-type-segment');
+      if (typeSegment) {
+        typeSegment.querySelectorAll('.type-seg-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.type === 'all');
+        });
+      }
+    }
+    this.updateMapTypeSegmentCounts();
+
+    if (lat && lng) {
+      this.mapEngine.panTo(lat, lng, 19);
+    }
+
+    // Highlight / hover the pin on the map and open its bottom sheet
+    setTimeout(() => {
+      if (pinType === 'cluster' && meterId) {
+        this._activeClusterMeterId = meterId;
+      }
+      if (pinId && pinType) {
+        this.mapEngine.selectPinById(pinId, pinType);
+      } else if (consumerId) {
+        this.openConsumerSheet(consumerId, meterId || null);
+      }
+    }, 120);
+
+    if (name) {
+      this.showToast(`Located ${name}${zone ? ' • ' + this.shortZoneLabel(zone) : ''}`, 1800);
+    }
+  }
+
+  bindMapEvents() {
+    const searchInput = document.getElementById('map-search-input');
+    const searchResults = document.getElementById('map-search-results');
+    if (searchInput && searchResults) {
+      this._lastSearchMatches = [];
+
+      const computeSearchMatches = (rawQuery) => {
+        const q = (rawQuery || '').toLowerCase().trim();
+        if (!q) return [];
+        const matches = [];
+
+        this.cachedConsumers.forEach(c => {
+          const meter = this.cachedMeters.find(m => m.consumerId === c.id);
+          const nameMatch = c.name && c.name.toLowerCase().includes(q);
+          const acctMatch = c.accountNo && c.accountNo.toLowerCase().includes(q);
+          const meterMatch = meter && meter.meterNo && meter.meterNo.toLowerCase().includes(q);
+          const addressMatch = c.address && c.address.toLowerCase().includes(q);
+          const zoneMatch = c.zone && c.zone.toLowerCase().includes(q);
+
+          if (nameMatch || acctMatch || meterMatch || addressMatch || zoneMatch) {
+            const hasHouseCoords = Boolean(c.householdLat && c.householdLng);
+            const hasMeterCoords = Boolean(meter && meter.meterLat && meter.meterLng);
+            // Prefer household pin when searching by owner name unless only meter is pinned or query matched meterNo specifically
+            const preferMeter = (!hasHouseCoords && hasMeterCoords) || (meterMatch && !nameMatch && hasMeterCoords);
+            const isClusteredMeter = Boolean(preferMeter && meter && meter.isClustered && meter.clusterId);
+            const pinType = isClusteredMeter ? 'cluster' : (preferMeter ? 'meter' : 'household');
+            const pinId = isClusteredMeter ? meter.clusterId : (preferMeter && meter ? meter.id : c.id);
+            const lat = preferMeter ? Number(meter.meterLat) : Number(c.householdLat || (meter && meter.meterLat) || 0);
+            const lng = preferMeter ? Number(meter.meterLng) : Number(c.householdLng || (meter && meter.meterLng) || 0);
+
+            matches.push({
+              consumer: c,
+              meter,
+              consumerId: c.id,
+              meterId: meter ? meter.id : '',
+              pinId,
+              pinType,
+              lat,
+              lng,
+              name: c.name,
+              zone: c.zone || (meter && meter.zone) || 'Dicklum'
+            });
+          }
+        });
+
+        // Check standalone / unassigned meters
+        this.cachedMeters.forEach(m => {
+          if (!m.consumerId && m.meterNo && m.meterNo.toLowerCase().includes(q)) {
+            matches.push({
+              consumer: null,
+              meter: m,
+              consumerId: '',
+              meterId: m.id,
+              pinId: m.id,
+              pinType: 'meter',
+              lat: Number(m.meterLat || 0),
+              lng: Number(m.meterLng || 0),
+              name: `Meter ${m.meterNo}`,
+              zone: m.zone || 'Dicklum'
+            });
+          }
+        });
+
+        return matches;
+      };
+
+      searchInput.addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        if (!q) {
+          this._lastSearchMatches = [];
+          searchResults.classList.add('hidden');
+          searchResults.innerHTML = '';
+          // If pins are in hidden mode, clearing search clears any isolated pin
+          if (this.mapEngine && this.mapEngine.isPinsHidden) {
+            this.mapEngine.clearPinIsolation();
+          }
+          return;
+        }
+
+        const matches = computeSearchMatches(q);
+        this._lastSearchMatches = matches;
+
+        if (matches.length === 0) {
+          searchResults.innerHTML = '<div style="padding: 12px; font-size: 12px; color: #64748B; text-align: center;">No matching water meters or consumers found.</div>';
+          searchResults.classList.remove('hidden');
+          return;
+        }
+
+        searchResults.innerHTML = matches.slice(0, 8).map((item, idx) => {
+          const c = item.consumer;
+          const m = item.meter;
+          const name = c ? c.name : `Meter ${m ? m.meterNo : ''}`;
+          const acct = c ? c.accountNo : 'Unassigned';
+          const meterNo = m ? m.meterNo : 'Household Only';
+          const zone = item.zone || 'Dicklum';
+          const badgeColor = item.pinType === 'household' ? '#0F766E' : '#2563EB';
+          const badgeLabel = item.pinType === 'household' ? 'House Pin' : 'Meter Pin';
+
+          return `
+            <div class="search-result-item" data-match-idx="${idx}" data-consumer-id="${item.consumerId}" data-meter-id="${item.meterId}" data-pin-id="${item.pinId}" data-pin-type="${item.pinType}" data-lat="${item.lat}" data-lng="${item.lng}">
+              <div>
+                <div class="search-result-title" style="display:flex; align-items:center; gap:6px;">
+                  <span>${name}</span>
+                  <span style="font-size:9.5px; font-weight:700; padding:1px 6px; border-radius:999px; background:${badgeColor}18; color:${badgeColor};">${badgeLabel}</span>
+                </div>
+                <div class="search-result-meta">
+                  <span>${acct}</span>
+                  <span>•</span>
+                  <span>Meter: <strong>${meterNo}</strong></span>
+                  <span>•</span>
+                  <span>${zone}</span>
+                </div>
+              </div>
+              <div class="search-result-action" style="display:flex; align-items:center; gap:6px;">
+                <span style="font-size:11px; font-weight:700; color:var(--primary);">Locate ↵</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        searchResults.classList.remove('hidden');
+      });
+
+      // Pressing Enter flies directly to the top matching owner/water meter on the map and hovers/highlights it
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const q = searchInput.value.trim();
+          if (!q) return;
+          const matches = (this._lastSearchMatches && this._lastSearchMatches.length > 0)
+            ? this._lastSearchMatches
+            : computeSearchMatches(q);
+          if (matches.length > 0) {
+            const topMatch = matches[0];
+            searchResults.classList.add('hidden');
+            searchInput.blur();
+            this.focusSearchMatchOnMap(topMatch);
+          } else {
+            this.showToast(`No consumer or water meter matching "${q}"`, 2000);
+          }
+        } else if (e.key === 'Escape') {
+          searchResults.classList.add('hidden');
+          searchInput.blur();
+        }
+      });
+
+      // Clicking a search result flies to and hovers the pin on the map
+      searchResults.addEventListener('click', (e) => {
+        const item = e.target.closest('.search-result-item');
+        if (!item) return;
+
+        const idx = Number(item.dataset.matchIdx);
+        const match = (this._lastSearchMatches && this._lastSearchMatches[idx]) || {
+          consumerId: item.dataset.consumerId,
+          meterId: item.dataset.meterId,
+          pinId: item.dataset.pinId,
+          pinType: item.dataset.pinType,
+          lat: Number(item.dataset.lat),
+          lng: Number(item.dataset.lng),
+          name: item.querySelector('.search-result-title span') ? item.querySelector('.search-result-title span').textContent : 'Pin',
+          zone: ''
+        };
+
+        searchResults.classList.add('hidden');
+        this.focusSearchMatchOnMap(match);
+      });
+
+      // Hide dropdown when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.map-search-row')) {
+          searchResults.classList.add('hidden');
+        }
+      });
+    }
+
+    // Map Filter Chips (legacy fallback)
+    document.querySelectorAll('.map-filter-chip').forEach(chip => {
+      if (chip.classList.contains('billing-filter-chip')) return;
+      chip.addEventListener('click', (e) => {
+        document.querySelectorAll('.map-filter-chip:not(.billing-filter-chip)').forEach(c => c.classList.remove('active'));
+        e.target.classList.add('active');
+        if (this.mapEngine) this.mapEngine.setFilter(e.target.dataset.filter);
+      });
+    });
+
+    // Zone Chip Filter Bar on Map (All Zones, Zone 1, Zone 2, Zone 3, Zone 4...)
+    const zoneChipsContainer = document.getElementById('map-zone-chips');
+    if (zoneChipsContainer) {
+      zoneChipsContainer.addEventListener('click', (e) => {
+        const chip = e.target.closest('.zone-chip');
+        if (!chip) return;
+        const zone = chip.dataset.zone || '';
+        zoneChipsContainer.querySelectorAll('.zone-chip').forEach(c => {
+          c.classList.toggle('active', (c.dataset.zone || '') === zone);
+        });
+        if (this.mapEngine) {
+          this.mapEngine.setZoneFilter(zone || null);
+          this.updateMapTypeSegmentCounts();
+          this.mapEngine.fitToVisiblePins(18);
+        }
+        this.showToast(zone ? `Viewing ${this.shortZoneLabel(zone)}` : 'Viewing All Zones', 1600);
+      });
+    }
+
+    // Type Segmented Control on Map (All / Houses / Meters)
+    const typeSegment = document.getElementById('map-type-segment');
+    if (typeSegment) {
+      typeSegment.addEventListener('click', (e) => {
+        const btn = e.target.closest('.type-seg-btn');
+        if (!btn) return;
+        const type = btn.dataset.type || 'all';
+        typeSegment.querySelectorAll('.type-seg-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.type === type);
+        });
+        if (this.mapEngine) {
+          this.mapEngine.setFilter(type);
+        }
+      });
+    }
+
+    const btnGps = document.getElementById('btn-gps-my-location');
+    if (btnGps) {
+      btnGps.addEventListener('click', () => this.toggleRealtimeGps());
+    }
+
+    const btnCompass = document.getElementById('btn-map-compass');
+    if (btnCompass) {
+      btnCompass.addEventListener('click', () => {
+        if (this.mapEngine) {
+          this.mapEngine.resetNorth();
+          this.showToast('Compass reset to North (0°)', 1500);
+        }
+      });
+    }
+
+    const btnLayers = document.getElementById('btn-map-layers');
+    if (btnLayers) {
+      btnLayers.addEventListener('click', () => this.openLayerModal());
+    }
+
+    document.querySelectorAll('.layer-choice-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const layerKey = e.currentTarget.dataset.layer;
+        this.setMapLayer(layerKey);
+      });
+    });
+
+    // Smooth 0.5x / 1x Zoom Presets
+    const btnZoom05x = document.getElementById('btn-zoom-05x');
+    const btnZoom1x = document.getElementById('btn-zoom-1x');
+
+    if (btnZoom05x) {
+      btnZoom05x.addEventListener('click', () => {
+        if (this.mapEngine && this.mapEngine._map) {
+          btnZoom05x.classList.add('active');
+          if (btnZoom1x) btnZoom1x.classList.remove('active');
+          if (typeof this.mapEngine.fitToDicklumBoundary === 'function') {
+            this.mapEngine.fitToDicklumBoundary(15.2);
+          } else {
+            this.mapEngine._map.flyTo([8.3735, 124.8505], 15.0, { animate: true, duration: 0.5 });
+          }
+        }
+      });
+    }
+
+    if (btnZoom1x) {
+      btnZoom1x.addEventListener('click', () => {
+        if (this.mapEngine && this.mapEngine._map) {
+          btnZoom1x.classList.add('active');
+          if (btnZoom05x) btnZoom05x.classList.remove('active');
+          if (this.mapEngine.userGps) {
+            this.mapEngine._map.flyTo([this.mapEngine.userGps.lat, this.mapEngine.userGps.lng], 18.0, { animate: true, duration: 0.5 });
+          } else {
+            const center = this.mapEngine._map.getCenter();
+            this.mapEngine._map.flyTo(center, 18.0, { animate: true, duration: 0.5 });
+          }
+        }
+      });
+    }
+
+    if (this.mapEngine && this.mapEngine._map) {
+      this.mapEngine._map.on('zoomend', () => {
+        const zoom = this.mapEngine._map.getZoom();
+        if (zoom >= 17) {
+          if (btnZoom1x) btnZoom1x.classList.add('active');
+          if (btnZoom05x) btnZoom05x.classList.remove('active');
+        } else {
+          if (btnZoom05x) btnZoom05x.classList.add('active');
+          if (btnZoom1x) btnZoom1x.classList.remove('active');
+        }
+      });
+    }
+
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+      if (this.mapEngine && this.mapEngine._map) {
+        this.mapEngine._map.zoomIn();
+      }
+    });
+
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+      if (this.mapEngine && this.mapEngine._map) {
+        this.mapEngine._map.zoomOut();
+      }
+    });
+
+    document.getElementById('btn-close-sheet').addEventListener('click', () => this.closeConsumerSheet());
+    document.getElementById('btn-close-cluster-sheet').addEventListener('click', () => this.closeClusterSheet());
+
+    const btnSheetEdit = document.getElementById('sheet-btn-edit-consumer');
+    if (btnSheetEdit) {
+      btnSheetEdit.addEventListener('click', () => this.openEditConsumerModal());
+    }
+
+    const btnSheetCutoff = document.getElementById('sheet-btn-toggle-cutoff');
+    if (btnSheetCutoff) {
+      btnSheetCutoff.addEventListener('click', () => this.toggleConsumerCutoffStatus());
+    }
+
+    const btnSaveEditConsumer = document.getElementById('btn-save-edit-consumer');
+    if (btnSaveEditConsumer) {
+      btnSaveEditConsumer.addEventListener('click', () => this.saveConsumerEdits());
+    }
+
+    const btnSheetUnpin = document.getElementById('sheet-btn-unpin');
+    if (btnSheetUnpin) {
+      btnSheetUnpin.addEventListener('click', () => this.unpinActiveConsumerOrMeter());
+    }
+
+    const btnClusterUnpin = document.getElementById('btn-unpin-cluster');
+    if (btnClusterUnpin) {
+      btnClusterUnpin.addEventListener('click', () => this.unpinActiveCluster());
+    }
+
+    // Toggle All Pins visibility (Header button & Floating FAB button)
+    const btnTogglePins = document.getElementById('btn-toggle-all-pins');
+    if (btnTogglePins) {
+      btnTogglePins.addEventListener('click', () => this.toggleAllPinsVisibility());
+    }
+    const fabTogglePins = document.getElementById('fab-toggle-pins');
+    if (fabTogglePins) {
+      fabTogglePins.addEventListener('click', () => this.toggleAllPinsVisibility());
+    }
+
+    // Offline Diclum Tile Downloader triggers
+    const btnDlOffline = document.getElementById('btn-download-offline-diclum');
+    if (btnDlOffline) {
+      btnDlOffline.addEventListener('click', () => this.startOfflineDiclumDownload());
+    }
+    const btnCancelOffline = document.getElementById('btn-cancel-offline-diclum');
+    if (btnCancelOffline) {
+      btnCancelOffline.addEventListener('click', () => this.cancelOfflineDiclumDownload());
+    }
+
+    document.getElementById('sheet-btn-read').addEventListener('click', (e) => {
+      if (this.activeConsumer) {
+        this.startReadingForConsumer(this.activeConsumer.id, e.currentTarget.closest('.bottom-sheet') || e.currentTarget);
+      }
+    });
+
+    const btnSheetHist = document.getElementById('sheet-btn-history');
+    if (btnSheetHist) {
+      btnSheetHist.addEventListener('click', (e) => {
+        if (this.activeConsumer) {
+          this.openConsumerHistoryModal(this.activeConsumer.id, e.currentTarget.closest('.bottom-sheet') || e.currentTarget);
+        }
+      });
+    }
+
+    const fabPin = document.getElementById('fab-add-pin');
+    if (fabPin) {
+      fabPin.addEventListener('click', () => {
+        const centerLat = (this.mapEngine && this.mapEngine.currentLat) ? this.mapEngine.currentLat : 8.3688;
+        const centerLng = (this.mapEngine && this.mapEngine.currentLng) ? this.mapEngine.currentLng : 124.8630;
+        this.openDropPinModal(centerLat, centerLng);
+      });
+    }
+  }
+
+  bindRouteRecordingEvents() {
+    const btnStart = document.getElementById('btn-start-record-route');
+    if (btnStart) {
+      btnStart.addEventListener('click', () => this.startRouteRecording());
+    }
+
+    const btnStop = document.getElementById('btn-stop-record-route');
+    if (btnStop) {
+      btnStop.addEventListener('click', () => this.stopAndSaveRoute());
+    }
+
+    const btnCancel = document.getElementById('btn-cancel-record-route');
+    if (btnCancel) {
+      btnCancel.addEventListener('click', () => this.cancelRouteRecording());
+    }
+  }
+
+  bindConsumerEvents() {
+    const searchInput = document.getElementById('consumer-search-input');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        this.renderConsumerList(e.target.value);
+      });
+    }
+
+    const btnAddConsumer = document.getElementById('btn-add-consumer-modal');
+    if (btnAddConsumer) {
+      btnAddConsumer.addEventListener('click', () => {
+        this.openDropPinModal(8.3688, 124.8630);
+      });
+    }
+  }
+
+  bindReadingEvents() {
+    const prevInput = document.getElementById('rdg-previous-input');
+    const currInput = document.getElementById('rdg-current-input');
+
+    if (prevInput) {
+      prevInput.addEventListener('input', () => this.updateLiveConsumption());
+      prevInput.addEventListener('change', () => this.updateLiveConsumption());
+    }
+
+    if (currInput) {
+      currInput.addEventListener('input', () => this.updateLiveConsumption());
+      currInput.addEventListener('change', () => this.updateLiveConsumption());
+    }
+
+    const btnPrevMinus = document.getElementById('rdg-btn-prev-minus');
+    if (btnPrevMinus && prevInput) {
+      btnPrevMinus.addEventListener('click', () => {
+        const val = Number(prevInput.value) || 0;
+        prevInput.value = Math.max(0, val - 1);
+        this.updateLiveConsumption();
+      });
+    }
+
+    const btnPrevPlus = document.getElementById('rdg-btn-prev-plus');
+    if (btnPrevPlus && prevInput) {
+      btnPrevPlus.addEventListener('click', () => {
+        const val = Number(prevInput.value) || 0;
+        prevInput.value = val + 1;
+        this.updateLiveConsumption();
+      });
+    }
+
+    const btnStepMinus = document.getElementById('rdg-btn-step-minus');
+    if (btnStepMinus && currInput) {
+      btnStepMinus.addEventListener('click', () => {
+        const val = Number(currInput.value) || 0;
+        currInput.value = Math.max(0, val - 1);
+        this.updateLiveConsumption();
+      });
+    }
+
+    const btnStepPlus = document.getElementById('rdg-btn-step-plus');
+    if (btnStepPlus && currInput) {
+      btnStepPlus.addEventListener('click', () => {
+        const val = Number(currInput.value) || 0;
+        currInput.value = val + 1;
+        this.updateLiveConsumption();
+      });
+    }
+
+    const rdgSearchInput = document.getElementById('rdg-quick-consumer-search');
+    const btnClearRdgSearch = document.getElementById('btn-clear-rdg-search');
+    if (rdgSearchInput) {
+      rdgSearchInput.addEventListener('input', (e) => {
+        const val = e.target.value || '';
+        if (btnClearRdgSearch) {
+          btnClearRdgSearch.style.display = val.trim() ? 'inline-flex' : 'none';
+        }
+        this.populateQuickConsumerSelect(val);
+      });
+      rdgSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const quickSelect = document.getElementById('rdg-quick-consumer-select');
+          if (quickSelect && quickSelect.value) {
+            this.startReadingForConsumer(quickSelect.value);
+          }
+        }
+      });
+    }
+    if (btnClearRdgSearch && rdgSearchInput) {
+      btnClearRdgSearch.addEventListener('click', () => {
+        rdgSearchInput.value = '';
+        btnClearRdgSearch.style.display = 'none';
+        this.populateQuickConsumerSelect('');
+        rdgSearchInput.focus();
+      });
+    }
+
+    const quickConsumerSelect = document.getElementById('rdg-quick-consumer-select');
+    if (quickConsumerSelect) {
+      quickConsumerSelect.addEventListener('change', (e) => {
+        const cId = e.target.value;
+        if (cId) {
+          this.startReadingForConsumer(cId);
+        } else {
+          this.resetReadingViewToEmpty();
+        }
+      });
+    }
+
+    const rdgDeleteConsumerBtn = document.getElementById('rdg-btn-delete-consumer');
+    if (rdgDeleteConsumerBtn) {
+      rdgDeleteConsumerBtn.addEventListener('click', () => {
+        if (this.activeConsumer) {
+          this.deleteConsumerRecord(this.activeConsumer.id);
+        }
+      });
+    }
+
+    document.getElementById('rdg-override-checkbox').addEventListener('change', () => {
+      this.updateLiveConsumption();
+    });
+
+    const photoInput = document.getElementById('rdg-photo-input');
+    if (photoInput) {
+      photoInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const watermarked = await window.readingModule.watermarkPhoto(event.target.result, {
+              meterNo: this.activeMeter ? this.activeMeter.meterNo : 'MTR',
+              reading: currInput ? currInput.value : '0',
+              consumerName: this.activeConsumer ? this.activeConsumer.name : '',
+              timestamp: new Date().toLocaleString(),
+              gps: this.activeMeter ? `${this.activeMeter.meterLat}, ${this.activeMeter.meterLng}` : 'Dicklum'
+            });
+
+            const imgPreview = document.getElementById('rdg-photo-preview');
+            const previewWrap = document.getElementById('rdg-photo-preview-wrap');
+            const promptBox = document.getElementById('rdg-photo-prompt');
+
+            imgPreview.src = watermarked;
+            imgPreview.dataset.src = watermarked;
+            if (previewWrap) previewWrap.classList.remove('hidden');
+            if (promptBox) promptBox.style.display = 'none';
+            this.showToast('Meter photo watermarked and attached.', 2000);
+          } catch (err) {
+            console.warn('Watermark error:', err);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    const btnRetakePhoto = document.getElementById('btn-retake-photo');
+    if (btnRetakePhoto) {
+      btnRetakePhoto.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pInput = document.getElementById('rdg-photo-input');
+        if (pInput) pInput.click();
+      });
+    }
+
+    const btnDeletePhoto = document.getElementById('btn-delete-photo');
+    if (btnDeletePhoto) {
+      btnDeletePhoto.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.clearPhotoPreview();
+        this.showToast('Captured photo removed.', 1800);
+      });
+    }
+
+    document.getElementById('btn-save-reading').addEventListener('click', () => {
+      this.submitReading(false);
+    });
+
+    document.getElementById('btn-save-print-reading').addEventListener('click', () => {
+      this.submitReading(true);
+    });
+  }
+
+  bindBillingEvents() {
+    // Consumer Folders vs All Thermal Bills Mode Toggle
+    const modeToggle = document.getElementById('billing-view-mode-toggle');
+    if (modeToggle) {
+      modeToggle.addEventListener('click', (e) => {
+        const btn = e.target.closest('.billing-mode-btn');
+        if (!btn) return;
+        const mode = btn.dataset.mode || 'folders';
+        this.billingViewMode = mode;
+        modeToggle.querySelectorAll('.billing-mode-btn').forEach(b => {
+          const isAct = b.dataset.mode === mode;
+          b.classList.toggle('active', isAct);
+          b.style.background = isAct ? 'var(--primary)' : 'transparent';
+          b.style.color = isAct ? '#FFF' : 'var(--text-secondary)';
+        });
+        this.renderBillingList();
+      });
+    }
+
+    // Consumer Folder Search Bar ("search: pedro")
+    const folderSearchInput = document.getElementById('billing-folder-search-input');
+    const btnClearSearch = document.getElementById('btn-clear-billing-search');
+    if (folderSearchInput) {
+      folderSearchInput.addEventListener('input', (e) => {
+        const val = e.target.value || '';
+        if (btnClearSearch) {
+          btnClearSearch.style.display = val.trim() ? 'inline-flex' : 'none';
+        }
+        this.renderBillingList(undefined, val);
+      });
+      folderSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const q = (folderSearchInput.value || '').toLowerCase().trim();
+          if (!q) return;
+          const match = this.cachedConsumers.find(c =>
+            (c.name || '').toLowerCase().includes(q) ||
+            (c.accountNo || '').toLowerCase().includes(q)
+          );
+          if (match) {
+            this.openConsumerHistoryModal(match.id);
+          }
+        }
+      });
+    }
+    if (btnClearSearch && folderSearchInput) {
+      btnClearSearch.addEventListener('click', () => {
+        folderSearchInput.value = '';
+        btnClearSearch.style.display = 'none';
+        this.renderBillingList(undefined, '');
+        folderSearchInput.focus();
+      });
+    }
+
+    document.querySelectorAll('.billing-filter-chip').forEach(chip => {
+      chip.addEventListener('click', (e) => {
+        document.querySelectorAll('.billing-filter-chip').forEach(c => c.classList.remove('active'));
+        e.target.classList.add('active');
+        this.renderBillingList(e.target.dataset.status);
+      });
+    });
+
+    document.getElementById('btn-execute-thermal-print').addEventListener('click', () => {
+      this.executeThermalPrint();
+    });
+
+    document.getElementById('btn-browser-thermal-print').addEventListener('click', () => {
+      this.executeBrowserThermalPrint();
+    });
+
+    const btnModalFeed = document.getElementById('btn-modal-feed-paper');
+    if (btnModalFeed) {
+      btnModalFeed.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.feedPaper(3);
+        if (!res.success && res.error) {
+          this.showToast(res.error, 2600);
+        }
+      });
+    }
+
+    const btnDownloadA4 = document.getElementById('btn-download-a4-pdf');
+    if (btnDownloadA4) {
+      btnDownloadA4.addEventListener('click', async () => {
+        const el = document.getElementById('a4-statement-content');
+        if (!el) return;
+        const filename = this.activeBill ? `Dicklum_SOA_${this.activeBill.id}.pdf` : 'Dicklum_Statement_of_Account.pdf';
+        await this.downloadElementAsPdf(el, filename);
+      });
+    }
+
+    const btnPrintA4 = document.getElementById('btn-execute-a4-print');
+    if (btnPrintA4) {
+      btnPrintA4.addEventListener('click', () => {
+        document.body.classList.add('printing-a4');
+        document.body.classList.remove('printing-thermal');
+        window.print();
+        setTimeout(() => {
+          document.body.classList.remove('printing-a4');
+        }, 1000);
+      });
+    }
+
+    document.getElementById('btn-confirm-payment').addEventListener('click', () => {
+      this.submitPayment();
+    });
+  }
+
+  bindSettingsAndReportEvents() {
+    // Burger Menu Slide-Over Drawer in Records & Reports (Protected by Admin PIN)
+    const btnOpenSettingsBurger = document.getElementById('btn-open-settings-burger');
+    if (btnOpenSettingsBurger) {
+      btnOpenSettingsBurger.addEventListener('click', async () => {
+        if (!this.isAdminUnlocked()) {
+          this.openPinGateModal('admin-verify', async () => {
+            const drawerModal = document.getElementById('modal-settings-burger');
+            if (drawerModal) {
+              drawerModal.classList.add('active');
+              try {
+                await this.renderSettingsZonesAndClusters();
+              } catch (_) {}
+              this.updatePinDeleteButtonsState();
+            }
+          });
+          return;
+        }
+
+        const drawerModal = document.getElementById('modal-settings-burger');
+        if (drawerModal) {
+          drawerModal.classList.add('active');
+          try {
+            await this.renderSettingsZonesAndClusters();
+          } catch (_) {}
+          this.updatePinDeleteButtonsState();
+        }
+      });
+    }
+
+    // Lock Admin session buttons (in Records header and Settings Drawer header)
+    const btnLockRecords = document.getElementById('btn-lock-admin-records');
+    if (btnLockRecords) {
+      btnLockRecords.addEventListener('click', () => this.lockAdminSession());
+    }
+    const btnLockDrawer = document.getElementById('btn-lock-admin-drawer');
+    if (btnLockDrawer) {
+      btnLockDrawer.addEventListener('click', () => this.lockAdminSession());
+    }
+
+    // Map Pin Deletion Switch Guard (Settings Drawer)
+    const togglePinDelete = document.getElementById('toggle-pin-delete-allow');
+    if (togglePinDelete) {
+      togglePinDelete.checked = this.pinDeleteEnabled;
+      togglePinDelete.addEventListener('change', () => {
+        this.pinDeleteEnabled = togglePinDelete.checked;
+        localStorage.setItem('dicklum_pin_delete_enabled', String(this.pinDeleteEnabled));
+        this.updatePinDeleteButtonsState();
+        const msg = this.pinDeleteEnabled
+          ? 'Map Pin Deletion is now ENABLED. You can delete pins on the map.'
+          : 'Map Pin Deletion is LOCKED (SAFE). Delete buttons are greyed out.';
+        this.showToast(msg, 3000);
+      });
+    }
+
+    // Tariff Configuration Save (Phase 5, Section 13)
+    document.getElementById('btn-save-tariff').addEventListener('click', async () => {
+      const minCharge = Number(document.getElementById('tariff-min-charge').value) || 100.00;
+      const minAllowance = Number(document.getElementById('tariff-min-allowance').value) || 10;
+      const rawExcessRate = document.getElementById('tariff-excess-rate').value.trim();
+      const excessRate = rawExcessRate === '' ? null : Number(rawExcessRate);
+      const period = document.getElementById('tariff-period-name').value.trim() || 'October 2026';
+
+      const updated = {
+        minimumCharge: minCharge,
+        minimumAllowance: minAllowance,
+        excessRate: excessRate,
+        activeBillingPeriod: period,
+        activeBillingCode: '2026-10',
+        dueDays: 15
+      };
+
+      await window.db.setSetting('tariff', updated);
+      await this.refreshDataCache();
+      alert('Dicklum Water Association Tariff settings saved successfully.');
+    });
+
+    // Report Generation Triggers (Phase 7, Section 18)
+    document.getElementById('btn-report-billing-summary').addEventListener('click', () => {
+      this.openBillingSummaryReport();
+    });
+
+    document.getElementById('btn-report-consumer-directory').addEventListener('click', () => {
+      this.openConsumerDirectoryReport();
+    });
+
+    const btnDownloadReport = document.getElementById('btn-download-report-pdf');
+    if (btnDownloadReport) {
+      btnDownloadReport.addEventListener('click', async () => {
+        const el = document.getElementById('report-content-container');
+        if (!el) return;
+        const rawTitle = document.getElementById('report-modal-title')?.textContent || 'Dicklum_Report';
+        const filename = rawTitle.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
+        await this.downloadElementAsPdf(el, filename);
+      });
+    }
+
+    const btnPrintReport = document.getElementById('btn-print-report-modal');
+    if (btnPrintReport) {
+      btnPrintReport.addEventListener('click', () => {
+        document.body.classList.add('printing-a4');
+        document.body.classList.remove('printing-thermal');
+        window.print();
+        setTimeout(() => {
+          document.body.classList.remove('printing-a4');
+        }, 1000);
+      });
+    }
+
+    // Xprinter XP-P300 Bluetooth & USB Printer Controls + Configurable Paper Width & Formatting
+    const tp = window.thermalPrinter;
+    const selWidth = document.getElementById('select-paper-width');
+    const inpPrintableMm = document.getElementById('input-printable-width-mm');
+    const inpHeader = document.getElementById('input-printer-custom-header');
+    const inpFooter = document.getElementById('input-printer-custom-footer');
+    const chkQr = document.getElementById('chk-printer-qr');
+    const chkBarcode = document.getElementById('chk-printer-barcode');
+    const chkLogo = document.getElementById('chk-printer-logo');
+    const chkCutter = document.getElementById('chk-printer-cutter');
+
+    if (tp) {
+      if (selWidth) selWidth.value = tp.paperWidth || '58mm';
+      if (inpPrintableMm) inpPrintableMm.value = tp.printableWidthMm || 48;
+      if (inpHeader) inpHeader.value = tp.customHeader || 'OFFICIAL WATER BILL NOTICE';
+      if (inpFooter) inpFooter.value = tp.customFooter || 'Conserve water for the community.';
+      if (chkQr) chkQr.checked = Boolean(tp.printQrCode);
+      if (chkBarcode) chkBarcode.checked = Boolean(tp.printBarcode);
+      if (chkLogo) chkLogo.checked = Boolean(tp.printLogo);
+      if (chkCutter) chkCutter.checked = Boolean(tp.hasAutoCutter);
+    }
+
+    const syncPrinterSettingsFromUI = () => {
+      if (!tp) return;
+      tp.saveConfig({
+        paperWidth: selWidth ? selWidth.value : '58mm',
+        printableWidthMm: inpPrintableMm ? Number(inpPrintableMm.value) : 48,
+        customHeader: inpHeader ? inpHeader.value : 'OFFICIAL WATER BILL NOTICE',
+        customFooter: inpFooter ? inpFooter.value : 'Conserve water for the community.',
+        printQrCode: chkQr ? chkQr.checked : true,
+        printBarcode: chkBarcode ? chkBarcode.checked : true,
+        printLogo: chkLogo ? chkLogo.checked : false,
+        hasAutoCutter: chkCutter ? chkCutter.checked : false
+      });
+    };
+
+    if (selWidth) {
+      selWidth.addEventListener('change', (e) => {
+        const mode = e.target.value;
+        if (mode === '80mm') {
+          if (inpPrintableMm) inpPrintableMm.value = 72;
+          this.showToast('80mm selected (72mm printable). Verify physical XP-P300 roll width with Test Print first.', 3200);
+        } else if (mode === '58mm') {
+          if (inpPrintableMm) inpPrintableMm.value = 48;
+        }
+        syncPrinterSettingsFromUI();
+      });
+    }
+
+    [inpPrintableMm, inpHeader, inpFooter, chkQr, chkBarcode, chkLogo, chkCutter].forEach(el => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        if (el === inpPrintableMm && selWidth) {
+          const mm = Number(inpPrintableMm.value);
+          if (mm !== 48 && mm !== 72) selWidth.value = 'custom';
+        }
+        syncPrinterSettingsFromUI();
+      });
+    });
+
+    const btnConnectBt = document.getElementById('btn-connect-bluetooth');
+    if (btnConnectBt) {
+      btnConnectBt.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.connectBluetooth();
+        if (!res.success && res.error) {
+          alert(res.error);
+        } else if (res.success) {
+          this.showToast(`Connected to ${res.deviceName} via Bluetooth`, 2500);
+        }
+      });
+    }
+
+    const btnConnectUsb = document.getElementById('btn-connect-usb');
+    if (btnConnectUsb) {
+      btnConnectUsb.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.connectUsb();
+        if (!res.success && res.error) {
+          alert(res.error);
+        } else if (res.success) {
+          this.showToast(`Connected to ${res.deviceName} via USB`, 2500);
+        }
+      });
+    }
+
+    const btnReconnectPrinter = document.getElementById('btn-reconnect-printer');
+    if (btnReconnectPrinter) {
+      btnReconnectPrinter.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.reconnect();
+        if (!res.success && res.error) {
+          alert(res.error);
+        } else if (res.success) {
+          this.showToast(`Reconnected to ${res.deviceName}`, 2400);
+        }
+      });
+    }
+
+    const btnFeedPaper = document.getElementById('btn-feed-paper');
+    if (btnFeedPaper) {
+      btnFeedPaper.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.feedPaper(3);
+        if (!res.success && res.error) {
+          alert(res.error);
+        }
+      });
+    }
+
+    const btnTestTicket = document.getElementById('btn-test-ticket');
+    if (btnTestTicket) {
+      btnTestTicket.addEventListener('click', async () => {
+        const res = await window.thermalPrinter.printTestTicket();
+        if (!res.success && res.error) {
+          alert(res.error);
+        }
+      });
+    }
+
+    // Backup Export & Restore (Phase 8, Section 21)
+    document.getElementById('btn-export-backup').addEventListener('click', async () => {
+      try {
+        const res = await window.backupEngine.exportBackup();
+        alert(`Backup file exported successfully: ${res.filename}`);
+      } catch (err) {
+        alert(`Backup export failed: ${err.message}`);
+      }
+    });
+
+    const fileInput = document.getElementById('input-restore-backup');
+    if (fileInput) {
+      fileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Preview before restore (Phase 8, Section 21)
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+          try {
+            const parsed = JSON.parse(evt.target.result);
+            const innerData = parsed.data || ((Array.isArray(parsed.consumers) || Array.isArray(parsed.meters)) ? parsed : null);
+            if (!innerData) {
+              alert('Invalid backup file. Missing Dicklum Water Association data signature.');
+              return;
+            }
+
+            const cCount = (innerData.consumers || []).length;
+            const mCount = (innerData.meters || []).length;
+            const rCount = (innerData.readings || []).length;
+            const bCount = (innerData.bills || []).length;
+            const rtCount = (innerData.routes || []).length;
+
+            const confirmMsg = `Backup verification successful.\n\nFile contains:\n• ${cCount} Consumers (Folders & House Pins)\n• ${mCount} Water Meters\n• ${rCount} Meter Readings\n• ${bCount} Water Bills\n• ${rtCount} Walking Routes\n\nClick OK to restore all pinned locations and consumer folders.`;
+            
+            if (!confirm(confirmMsg)) return;
+
+            await window.backupEngine.restoreBackup(file);
+            await this.refreshDataCache();
+            await this.populateZoneDropdowns();
+            this.syncPinsToMap();
+            this.syncRoutesToMap();
+            this.renderConsumerList();
+            this.renderBillingList();
+            this.populateQuickConsumerSelect();
+            this.renderStats();
+            try { await this.renderZoneExportCenter(); } catch (_) {}
+            this.autoSyncToOfficePcSilent();
+            fileInput.value = '';
+            alert(`Database restored 100% intact (${cCount} Consumers, ${mCount} Water Meters, ${bCount} Bills). All pinned locations and consumer folders are ready!`);
+          } catch (err) {
+            alert(`Restore validation failed: ${err.message}`);
+          }
+        };
+        reader.readAsText(file);
+      });
+    }
+
+    const btnClearPins = document.getElementById('btn-clear-all-pins');
+    if (btnClearPins) {
+      btnClearPins.addEventListener('click', async () => {
+        if (confirm('Clear all saved pinned GPS locations for households, meters, and clusters? This lets you start fresh and re-pin locations in the field.')) {
+          await window.db.clearAllPins();
+          await this.refreshDataCache();
+          this.syncPinsToMap();
+          this.syncRoutesToMap();
+          this.renderConsumerList();
+          this.renderStats();
+          alert('All pinned locations have been cleared. The map is now fresh and ready for pinning in the field.');
+        }
+      });
+    }
+
+    const btnClearBills = document.getElementById('btn-clear-all-bills');
+    if (btnClearBills) {
+      btnClearBills.addEventListener('click', async () => {
+        if (confirm('Clear all recorded bills and meter reading history? This resets monthly reports while keeping consumer profiles, water meters, and GPS pins.')) {
+          if (confirm('Confirm reset: all billing statements for all consumers will be removed. Proceed?')) {
+            await window.db.clearAllBills();
+            await this.refreshDataCache();
+            this.renderBillingList();
+            this.renderStats();
+            this.syncPinsToMap();
+            alert('All billing and reading records have been cleared. Ready for fresh meter reading cycles.');
+          }
+        }
+      });
+    }
+
+    const btnWipe = document.getElementById('btn-wipe-clean-slate');
+    if (btnWipe) {
+      btnWipe.addEventListener('click', async () => {
+        if (confirm('WARNING: Wipe all consumers, meters, clusters, readings, and bills to start a 100% empty utility?')) {
+          if (confirm('Are you absolutely sure? All mock records will be deleted so you can register real consumers from scratch.')) {
+            await window.db.wipeCleanSlate();
+            await this.refreshDataCache();
+            this.syncPinsToMap();
+            this.syncRoutesToMap();
+            this.renderConsumerList();
+            this.renderBillingList();
+            this.renderStats();
+            alert('Database wiped completely. You are now starting fresh with 0 consumers and 0 pins.');
+          }
+        }
+      });
+    }
+
+    document.getElementById('btn-reset-seed-data').addEventListener('click', async () => {
+      if (confirm('Reset database to default Dicklum Water Association sample records?')) {
+        await window.backupEngine.resetToSeedData();
+        await this.refreshDataCache();
+        this.syncPinsToMap();
+        this.syncRoutesToMap();
+        this.renderConsumerList();
+        this.renderBillingList();
+        await this.populateZoneDropdowns();
+        alert('Database reset complete.');
+      }
+    });
+
+    // Purok & Zone Management in Settings
+    const btnSettingsAddZone = document.getElementById('btn-settings-add-zone');
+    if (btnSettingsAddZone) {
+      btnSettingsAddZone.addEventListener('click', async () => {
+        const input = document.getElementById('settings-new-zone-input');
+        const name = input ? input.value.trim() : '';
+        if (!name) {
+          alert('Please enter a zone name.');
+          return;
+        }
+        await window.db.addZone(name);
+        if (input) input.value = '';
+        await this.populateZoneDropdowns(name);
+        await this.renderSettingsZonesAndClusters();
+        alert(`District "${name}" added successfully.`);
+      });
+    }
+
+    const zonesList = document.getElementById('settings-zones-list');
+    if (zonesList) {
+      zonesList.addEventListener('click', async (e) => {
+        const delBtn = e.target.closest('.btn-delete-zone');
+        if (!delBtn) return;
+        const zone = delBtn.dataset.zone;
+        if (!zone) return;
+        if (confirm(`Remove zone "${zone}" from association zones?`)) {
+          await window.db.deleteZone(zone);
+          await this.renderSettingsZonesAndClusters();
+          await this.populateZoneDropdowns();
+        }
+      });
+    }
+
+    const btnNewClusterPrompt = document.getElementById('btn-settings-new-cluster-prompt');
+    if (btnNewClusterPrompt) {
+      btnNewClusterPrompt.addEventListener('click', async () => {
+        const clusterName = prompt('Enter a name for the new meter cluster:');
+        if (!clusterName || !clusterName.trim()) return;
+        const zones = await window.db.getZones();
+        const zoneChoice = prompt(`Enter Zone / Purok for this cluster manifold:\nAvailable: ${zones.join(', ')}`, zones[0] || 'Zone 1 - Dicklum Central');
+        if (!zoneChoice) return;
+        await window.db.saveCluster({
+          name: clusterName.trim(),
+          zone: zoneChoice.trim(),
+          lat: null,
+          lng: null,
+          createdAt: new Date().toISOString()
+        });
+        this.cachedClusters = await window.db.getAll('clusters');
+        await this.renderSettingsZonesAndClusters();
+        await this.populateZoneDropdowns();
+        alert(`Cluster manifold "${clusterName}" registered for ${zoneChoice}.`);
+      });
+    }
+
+    const clustersList = document.getElementById('settings-clusters-list');
+    if (clustersList) {
+      clustersList.addEventListener('click', async (e) => {
+        const delBtn = e.target.closest('.btn-delete-cluster');
+        if (!delBtn) return;
+        const clusterId = delBtn.dataset.clusterId;
+        if (!clusterId) return;
+        if (confirm('Delete this cluster manifold? Linked meters will become standalone.')) {
+          await window.db.delete('clusters', clusterId);
+          this.cachedClusters = await window.db.getAll('clusters');
+          await this.renderSettingsZonesAndClusters();
+          await this.populateZoneDropdowns();
+          this.syncPinsToMap();
+        }
+      });
+    }
+
+    // Office PC Sync Buttons (Upload Field Readings to PC & Pull Readings from PC)
+    const btnUploadToPc = document.getElementById('btn-upload-readings-to-pc');
+    if (btnUploadToPc) {
+      btnUploadToPc.addEventListener('click', () => this.uploadReadingsToOfficePc());
+    }
+
+    const btnPullFromPc = document.getElementById('btn-pull-readings-from-pc');
+    if (btnPullFromPc) {
+      btnPullFromPc.addEventListener('click', () => this.pullReadingsFromOfficePc());
+    }
+
+    // Records Time Filter Toggle ("Records I Made Today" | "Records of This Month" | "All Records")
+    const periodToggle = document.getElementById('records-period-toggle');
+    if (periodToggle) {
+      periodToggle.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.records-period-btn');
+        if (!btn) return;
+        const period = btn.dataset.period || 'today';
+        this.recordsPeriodMode = period;
+        periodToggle.querySelectorAll('.records-period-btn').forEach(b => {
+          const isAct = b.dataset.period === period;
+          b.classList.toggle('active', isAct);
+          b.style.background = isAct ? 'var(--primary)' : 'transparent';
+          b.style.color = isAct ? '#FFF' : 'var(--text-secondary)';
+        });
+        await this.renderZoneExportCenter();
+      });
+    }
+
+    // Zone 1, Zone 2, Zone 3, Zone 4, and All Zones PDF / Excel Export Buttons
+    const zoneCardsContainer = document.getElementById('zone-export-cards-container');
+    if (zoneCardsContainer) {
+      zoneCardsContainer.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-zone-export');
+        if (!btn) return;
+        const zone = btn.dataset.zone || 'ALL';
+        const format = btn.dataset.format || 'pdf';
+        this.exportZoneOrConsumerReport({ zone, consumerId: null, format });
+      });
+    }
+
+    // Individual Consumer / Water Meter Owner (e.g., mario) PDF & Excel Export Buttons
+    const btnConsumerPdf = document.getElementById('btn-export-consumer-pdf');
+    if (btnConsumerPdf) {
+      btnConsumerPdf.addEventListener('click', () => {
+        const sel = document.getElementById('export-consumer-select');
+        const cId = sel ? sel.value : '';
+        if (!cId) {
+          alert('Please select a consumer first.');
+          return;
+        }
+        this.exportZoneOrConsumerReport({ zone: 'ALL', consumerId: cId, format: 'pdf' });
+      });
+    }
+
+    const btnConsumerExcel = document.getElementById('btn-export-consumer-excel');
+    if (btnConsumerExcel) {
+      btnConsumerExcel.addEventListener('click', () => {
+        const sel = document.getElementById('export-consumer-select');
+        const cId = sel ? sel.value : '';
+        if (!cId) {
+          alert('Please select a consumer first.');
+          return;
+        }
+        this.exportZoneOrConsumerReport({ zone: 'ALL', consumerId: cId, format: 'excel' });
+      });
+    }
+
+    // Server-Enforced Security Gate & Secret PIN Setup Buttons
+    const btnOpenPinSetup = document.getElementById('btn-open-pin-setup');
+    if (btnOpenPinSetup) {
+      btnOpenPinSetup.addEventListener('click', () => this.openPinGateModal('auto'));
+    }
+
+    // One-Time Device Install (PWA Standalone Install + Office LAN IP Detection)
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      this._deferredInstallPrompt = e;
+      const badge = document.getElementById('pwa-install-status-badge');
+      if (badge) badge.textContent = 'READY TO INSTALL';
+    });
+
+    const btnInstallPwa = document.getElementById('btn-install-pwa-device');
+    if (btnInstallPwa) {
+      btnInstallPwa.addEventListener('click', async () => {
+        if (this._deferredInstallPrompt) {
+          this._deferredInstallPrompt.prompt();
+          const choice = await this._deferredInstallPrompt.userChoice;
+          if (choice && choice.outcome === 'accepted') {
+            this._deferredInstallPrompt = null;
+            this.showToast('App installed on device! Ready for 100% offline use.', 3500);
+          }
+          return;
+        }
+        alert(
+          `One-Time Offline Device Install Instructions:\n\n` +
+          `1. On Android Chrome (Office Reader Phone):\n` +
+          `   • Tap the 3-dots menu (⋮) at the top-right of Chrome\n` +
+          `   • Tap "Add to Home screen" or "Install app"\n\n` +
+          `2. On Office PC (Chrome / Edge):\n` +
+          `   • Click the Install icon in the right side of the address bar.\n\n` +
+          `Once added to the Home Screen, the app and Barangay Dicklum map are saved permanently on the device for 100% offline field operation!`
+        );
+      });
+    }
+
+    const pcUrlInput = document.getElementById('office-pc-target-url-input');
+    const btnSavePcUrl = document.getElementById('btn-save-office-pc-url');
+    const lanIpDisplay = document.getElementById('office-lan-ip-display');
+
+    const savedPcUrl = localStorage.getItem('dicklum_office_pc_url') || '';
+    if (pcUrlInput && savedPcUrl) {
+      pcUrlInput.value = savedPcUrl;
+    }
+
+    if (btnSavePcUrl && pcUrlInput) {
+      btnSavePcUrl.addEventListener('click', () => {
+        const val = pcUrlInput.value.trim().replace(/\/+$/, '');
+        localStorage.setItem('dicklum_office_pc_url', val);
+        this.showToast(val ? `Saved Office PC URL: ${val}` : 'Cleared custom Office PC URL', 2500);
+      });
+    }
+
+    if (this._isLocalOfficeServer()) {
+      fetch('/api/device-install-info')
+        .then(r => r.ok ? r.json() : null)
+        .then(info => {
+          if (!info) return;
+          if (lanIpDisplay) {
+            const ips = (info.lanIps || []).map(i => i.url).join('  |  ');
+            lanIpDisplay.textContent = ips || info.localhostUrl || 'http://localhost:3000';
+          }
+          if (pcUrlInput && !pcUrlInput.value && info.primaryLanUrl) {
+            pcUrlInput.value = info.primaryLanUrl;
+          }
+        })
+        .catch(() => {});
+    } else if (lanIpDisplay) {
+      lanIpDisplay.textContent = savedPcUrl || 'Offline Field Mode (Enter Office PC Wi-Fi IP below to sync over Wi-Fi)';
+    }
+
+    const btnLockAppNow = document.getElementById('btn-lock-app-now');
+    if (btnLockAppNow) {
+      btnLockAppNow.addEventListener('click', () => this.lockAppNow());
+    }
+
+    const btnSubmitPinGate = document.getElementById('btn-submit-pin-gate');
+    if (btnSubmitPinGate) {
+      btnSubmitPinGate.addEventListener('click', () => this.submitPinGate());
+    }
+
+    const btnClosePinGate = document.getElementById('btn-close-pin-gate');
+    if (btnClosePinGate) {
+      btnClosePinGate.addEventListener('click', () => {
+        if (this.pinGateMode !== 'unlock') {
+          document.getElementById('modal-security-pin-gate')?.classList.remove('active');
+        }
+      });
+    }
+
+    const btnCancelPinGate = document.getElementById('btn-cancel-pin-gate');
+    if (btnCancelPinGate) {
+      btnCancelPinGate.addEventListener('click', () => {
+        if (this.pinGateMode !== 'unlock') {
+          document.getElementById('modal-security-pin-gate')?.classList.remove('active');
+        }
+      });
+    }
+
+    ['pin-gate-current-input', 'pin-gate-main-input', 'pin-gate-confirm-input', 'pin-gate-hint-input'].forEach(id => {
+      const inp = document.getElementById(id);
+      if (inp) {
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            this.submitPinGate();
+          }
+        });
+      }
+    });
+  }
+
+  bindModalEvents() {
+    document.querySelectorAll('.modal-close, .modal-backdrop').forEach(el => {
+      el.addEventListener('click', (e) => {
+        const modal = e.target.closest('.app-modal');
+        if (!modal) return;
+        // Never allow clicking backdrop to bypass the locked Security PIN Gate
+        if (modal.id === 'modal-security-pin-gate' && this.pinGateMode === 'unlock') {
+          return;
+        }
+        modal.classList.remove('active');
+      });
+    });
+
+    document.querySelectorAll('input[name="pin-type"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const isHouse = e.target.value === 'household';
+        const formHouse = document.getElementById('form-pin-household');
+        const formMeter = document.getElementById('form-pin-meter');
+        if (formHouse) formHouse.style.display = isHouse ? 'block' : 'none';
+        if (formMeter) formMeter.style.display = isHouse ? 'none' : 'block';
+        const zoneSelect = document.getElementById('pin-zone-select');
+        this.updatePinContextBar(isHouse ? 'household' : 'meter', zoneSelect ? zoneSelect.value : '');
+      });
+    });
+
+    // Add-Pin Wizard: Step 1 (Household vs Water Meter)
+    document.querySelectorAll('.wizard-type-card').forEach(card => {
+      card.addEventListener('click', () => {
+        this._wizardPinType = card.dataset.type || 'household';
+        document.querySelectorAll('.wizard-type-card').forEach(c => {
+          c.classList.toggle('active', c.dataset.type === this._wizardPinType);
+        });
+      });
+    });
+
+    // Add-Pin Wizard: "Use my current GPS (where I am standing)" inside popup
+    const btnWizardGps = document.getElementById('btn-wizard-use-gps');
+    if (btnWizardGps) {
+      btnWizardGps.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+          alert('Geolocation is not supported by your browser.');
+          return;
+        }
+        const gpsLabel = document.getElementById('wizard-gps-label');
+        const locText = document.getElementById('wizard-location-text');
+
+        const applyWizardGps = (lat, lng, acc) => {
+          this._wizardLat = Number(lat);
+          this._wizardLng = Number(lng);
+          this._wizardFromGps = true;
+          btnWizardGps.classList.remove('locking');
+          btnWizardGps.classList.add('locked');
+          if (gpsLabel) {
+            gpsLabel.textContent = `GPS Locked (±${Math.round(acc || 10)}m) — Tap a Zone below`;
+          }
+          if (locText) {
+            locText.textContent = `Standing GPS · ${this._wizardLat.toFixed(5)}, ${this._wizardLng.toFixed(5)}`;
+          }
+          if (this.mapEngine) {
+            this.mapEngine.setUserGps(this._wizardLat, this._wizardLng, acc || 10);
+            this.mapEngine.panTo(this._wizardLat, this._wizardLng, 19);
+          }
+        };
+
+        if (this.mapEngine && this.mapEngine.userGps && this.mapEngine.userGps.accuracy <= 25) {
+          const { lat, lng, accuracy } = this.mapEngine.userGps;
+          applyWizardGps(lat, lng, accuracy);
+          return;
+        }
+
+        btnWizardGps.classList.add('locking');
+        if (gpsLabel) gpsLabel.textContent = 'Locking onto GPS satellites...';
+
+        let bestAcc = Infinity;
+        const watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            const { latitude, longitude, accuracy } = pos.coords;
+            if (accuracy < bestAcc) {
+              bestAcc = accuracy;
+              applyWizardGps(latitude, longitude, accuracy);
+              if (accuracy <= 15) {
+                navigator.geolocation.clearWatch(watchId);
+              }
+            }
+          },
+          (err) => {
+            navigator.geolocation.clearWatch(watchId);
+            btnWizardGps.classList.remove('locking');
+            if (gpsLabel) gpsLabel.textContent = 'Use my current GPS (where I am standing)';
+            alert(`GPS Signal Error: ${err.message}`);
+          },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+        setTimeout(() => navigator.geolocation.clearWatch(watchId), 8000);
+      });
+    }
+
+    // Add-Pin Wizard: Step 2 (Tap a Zone Card -> open form for that Type + Zone)
+    const wizardZoneGrid = document.getElementById('wizard-zone-grid');
+    if (wizardZoneGrid) {
+      wizardZoneGrid.addEventListener('click', async (e) => {
+        const card = e.target.closest('.wizard-zone-card');
+        if (!card) return;
+
+        if (card.dataset.action === 'new-zone') {
+          const newZoneName = prompt('Enter new zone or purok name:');
+          if (!newZoneName || !newZoneName.trim()) return;
+          await window.db.addZone(newZoneName.trim());
+          this._lastSelectedZone = newZoneName.trim();
+          await this.populateZoneDropdowns(newZoneName.trim());
+          await this.renderWizardZoneCards();
+          return;
+        }
+
+        const chosenZone = card.dataset.zone;
+        if (!chosenZone) return;
+
+        const wizModal = document.getElementById('modal-add-pin-wizard');
+        if (wizModal) wizModal.classList.remove('active');
+
+        const preserve = Boolean(this._wizardPreserveInputs);
+        this._wizardPreserveInputs = false;
+
+        await this.openDropPinModal(this._wizardLat, this._wizardLng, {
+          pinType: this._wizardPinType || 'household',
+          zone: chosenZone,
+          skipWizard: true,
+          preserveInputs: preserve
+        });
+      });
+    }
+
+    // "Change" button on the Pin Context Bar inside Drop Pin Modal
+    const btnChangeContext = document.getElementById('btn-pin-change-context');
+    if (btnChangeContext) {
+      btnChangeContext.addEventListener('click', () => {
+        const lat = Number(document.getElementById('pin-lat-input')?.value) || this._wizardLat || 8.3688;
+        const lng = Number(document.getElementById('pin-lng-input')?.value) || this._wizardLng || 124.8630;
+        const checkedRadio = document.querySelector('input[name="pin-type"]:checked');
+        const currentType = checkedRadio ? checkedRadio.value : 'household';
+        this._wizardPreserveInputs = true;
+        this.openAddPinWizard(lat, lng, { pinType: currentType });
+      });
+    }
+
+    // Dynamic Purok & Zone Add in Drop Pin Modal
+    const btnToggleAddZone = document.getElementById('btn-pin-toggle-add-zone');
+    const addZoneBox = document.getElementById('pin-add-zone-box');
+    const inputNewZone = document.getElementById('input-new-zone-name');
+    if (btnToggleAddZone && addZoneBox) {
+      btnToggleAddZone.addEventListener('click', () => {
+        const isShown = addZoneBox.style.display === 'block';
+        addZoneBox.style.display = isShown ? 'none' : 'block';
+        if (!isShown && inputNewZone) inputNewZone.focus();
+      });
+    }
+
+    const btnSaveNewZone = document.getElementById('btn-save-new-zone');
+    if (btnSaveNewZone) {
+      btnSaveNewZone.addEventListener('click', async () => {
+        const newZoneName = inputNewZone ? inputNewZone.value.trim() : '';
+        if (!newZoneName) {
+          alert('Please enter a zone or purok name.');
+          return;
+        }
+        await window.db.addZone(newZoneName);
+        if (inputNewZone) inputNewZone.value = '';
+        if (addZoneBox) addZoneBox.style.display = 'none';
+        await this.populateZoneDropdowns(newZoneName);
+        alert(`Purok/Zone "${newZoneName}" added and selected.`);
+      });
+    }
+
+    const btnCancelNewZone = document.getElementById('btn-cancel-new-zone');
+    if (btnCancelNewZone && addZoneBox) {
+      btnCancelNewZone.addEventListener('click', () => {
+        addZoneBox.style.display = 'none';
+        if (inputNewZone) inputNewZone.value = '';
+      });
+    }
+
+    // When Zone changes, filter clusters specifically for this Zone
+    const pinZoneSelect = document.getElementById('pin-zone-select');
+    if (pinZoneSelect) {
+      pinZoneSelect.addEventListener('change', async (e) => {
+        await this.updateClusterDropdownForZone(e.target.value);
+      });
+    }
+
+    // Dynamic Cluster Manifold Add in Drop Pin Modal
+    const btnToggleAddCluster = document.getElementById('btn-pin-toggle-add-cluster');
+    const addClusterBox = document.getElementById('pin-add-cluster-box');
+    const inputNewCluster = document.getElementById('input-new-cluster-name');
+    if (btnToggleAddCluster && addClusterBox) {
+      btnToggleAddCluster.addEventListener('click', () => {
+        const isShown = addClusterBox.style.display === 'block';
+        addClusterBox.style.display = isShown ? 'none' : 'block';
+        if (!isShown && inputNewCluster) inputNewCluster.focus();
+      });
+    }
+
+    const btnSaveNewCluster = document.getElementById('btn-save-new-cluster');
+    if (btnSaveNewCluster) {
+      btnSaveNewCluster.addEventListener('click', async () => {
+        const clusterName = inputNewCluster ? inputNewCluster.value.trim() : '';
+        if (!clusterName) {
+          alert('Please enter a cluster name.');
+          return;
+        }
+        const activeZone = (pinZoneSelect && pinZoneSelect.value) ? pinZoneSelect.value : 'Zone 1 - Dicklum Central';
+        const lat = Number(document.getElementById('pin-lat-input').value) || 8.3688;
+        const lng = Number(document.getElementById('pin-lng-input').value) || 124.8630;
+
+        const newCl = await window.db.saveCluster({
+          name: clusterName,
+          zone: activeZone,
+          lat: lat,
+          lng: lng,
+          createdAt: new Date().toISOString()
+        });
+
+        if (inputNewCluster) inputNewCluster.value = '';
+        if (addClusterBox) addClusterBox.style.display = 'none';
+        this.cachedClusters = await window.db.getAll('clusters');
+        await this.updateClusterDropdownForZone(activeZone, newCl.id);
+        this.syncPinsToMap();
+        alert(`Cluster manifold "${clusterName}" saved in ${activeZone} and selected.`);
+      });
+    }
+
+    const btnCancelNewCluster = document.getElementById('btn-cancel-new-cluster');
+    if (btnCancelNewCluster && addClusterBox) {
+      btnCancelNewCluster.addEventListener('click', () => {
+        addClusterBox.style.display = 'none';
+        if (inputNewCluster) inputNewCluster.value = '';
+      });
+    }
+
+    const btnPinUseGps = document.getElementById('btn-pin-use-gps');
+    if (btnPinUseGps) {
+      btnPinUseGps.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+          alert('Geolocation is not supported by your browser.');
+          return;
+        }
+
+        const checkedRadio = document.querySelector('input[name="pin-type"]:checked');
+        const currentPinType = checkedRadio ? checkedRadio.value : (this._wizardPinType || 'household');
+
+        const promptZoneAfterGps = (lat, lng, accuracy) => {
+          const latInput = document.getElementById('pin-lat-input');
+          const lngInput = document.getElementById('pin-lng-input');
+          if (latInput) latInput.value = lat.toFixed(6);
+          if (lngInput) lngInput.value = lng.toFixed(6);
+          btnPinUseGps.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
+            </svg>
+            GPS Locked (±${Math.round(accuracy)}m): ${lat.toFixed(5)}, ${lng.toFixed(5)}
+          `;
+          if (this.mapEngine) {
+            this.mapEngine.setUserGps(lat, lng, accuracy);
+            this.mapEngine.panTo(lat, lng, 19);
+          }
+          // Open the Zone Picker popup so the user confirms which Zone this standing GPS pin belongs to
+          this._wizardPreserveInputs = true;
+          this.openAddPinWizard(lat, lng, { pinType: currentPinType, fromGpsButton: true });
+        };
+
+        // If real-time GPS is already active with high precision, use it immediately
+        if (this.mapEngine && this.mapEngine.userGps && this.mapEngine.userGps.accuracy <= 25) {
+          const { lat, lng, accuracy } = this.mapEngine.userGps;
+          promptZoneAfterGps(lat, lng, accuracy);
+          return;
+        }
+
+        btnPinUseGps.innerHTML = `${window.AppIcons.crosshair()} Locking onto GPS satellites...`;
+
+        // Progressive high-accuracy GPS refinement
+        let bestAccuracy = Infinity;
+        let promptedZone = false;
+        const watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            const { latitude, longitude, accuracy } = pos.coords;
+            if (accuracy < bestAccuracy) {
+              bestAccuracy = accuracy;
+              if (!promptedZone) {
+                promptedZone = true;
+                promptZoneAfterGps(latitude, longitude, accuracy);
+              } else {
+                this._wizardLat = latitude;
+                this._wizardLng = longitude;
+                const latInput = document.getElementById('pin-lat-input');
+                const lngInput = document.getElementById('pin-lng-input');
+                if (latInput) latInput.value = latitude.toFixed(6);
+                if (lngInput) lngInput.value = longitude.toFixed(6);
+                if (this.mapEngine) {
+                  this.mapEngine.setUserGps(latitude, longitude, accuracy);
+                }
+              }
+
+              // Once satellite accuracy drops to 15 meters or better, stop watching
+              if (accuracy <= 15) {
+                navigator.geolocation.clearWatch(watchId);
+              }
+            }
+          },
+          (err) => {
+            navigator.geolocation.clearWatch(watchId);
+            alert(`GPS Signal Error: ${err.message}. Make sure device Location and "Precise Location" are turned ON.`);
+            btnPinUseGps.innerHTML = `
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/><line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/>
+              </svg>
+              Use My Current GPS (Where I Am Standing)
+            `;
+          },
+          { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+        );
+
+        // Stop watching after 8 seconds
+        setTimeout(() => {
+          navigator.geolocation.clearWatch(watchId);
+        }, 8000);
+      });
+    }
+
+    const houseLinkMeter = document.getElementById('pin-house-link-meter');
+    if (houseLinkMeter) {
+      houseLinkMeter.addEventListener('change', (e) => {
+        const fields = document.getElementById('pin-house-meter-fields');
+        if (fields) fields.style.display = e.target.checked ? 'block' : 'none';
+      });
+    }
+
+    // Clustered / Multi-Circle Water Meter Builder Events (Frames 2, 3, 4, 5)
+    const btnCountMinus = document.getElementById('btn-meter-count-minus');
+    const btnCountPlus = document.getElementById('btn-meter-count-plus');
+    if (btnCountMinus) {
+      btnCountMinus.addEventListener('click', () => {
+        const curr = (this._meterSlots && this._meterSlots.length) || 1;
+        if (curr > 1) this.setPinMeterCount(curr - 1);
+      });
+    }
+    if (btnCountPlus) {
+      btnCountPlus.addEventListener('click', () => {
+        const curr = (this._meterSlots && this._meterSlots.length) || 1;
+        this.setPinMeterCount(curr + 1);
+      });
+    }
+
+    const circlesStage = document.getElementById('pin-meter-circles-stage');
+    if (circlesStage) {
+      circlesStage.addEventListener('click', (e) => {
+        const item = e.target.closest('.mgb-circle-item');
+        if (!item) return;
+        const idx = Number(item.dataset.slotIdx);
+        if (!isNaN(idx)) {
+          this.selectPinMeterSlot(idx);
+        }
+      });
+    }
+
+    const btnPrevSlot = document.getElementById('btn-mse-prev-slot');
+    const btnNextSlot = document.getElementById('btn-mse-save-next-slot');
+    if (btnPrevSlot) {
+      btnPrevSlot.addEventListener('click', () => {
+        const idx = this._activeMeterSlotIdx || 0;
+        if (idx > 0) this.selectPinMeterSlot(idx - 1);
+      });
+    }
+    if (btnNextSlot) {
+      btnNextSlot.addEventListener('click', () => {
+        this.saveCurrentMeterSlotAndAdvance();
+      });
+    }
+
+    // Live-sync typing in Frame 4 directly into the active circle water meter slot & update Frame 5 label
+    ['pin-meter-owner-name', 'pin-meter-no', 'pin-meter-initial-reading', 'pin-meter-address', 'pin-meter-notes'].forEach(inputId => {
+      const el = document.getElementById(inputId);
+      if (el) {
+        el.addEventListener('input', () => {
+          this.syncCurrentFormToActiveMeterSlot();
+          this.renderPinMeterCirclesStage();
+          const idx = this._activeMeterSlotIdx || 0;
+          const slot = this._meterSlots && this._meterSlots[idx];
+          const total = (this._meterSlots && this._meterSlots.length) || 1;
+          const hasOwner = Boolean(slot && ((slot.ownerName || '').trim() || slot.existingConsumerId));
+          const slotTitle = document.getElementById('active-meter-slot-title');
+          const slotStatus = document.getElementById('active-meter-slot-status');
+          if (slotTitle && slot) {
+            slotTitle.textContent = total > 1
+              ? `Water Meter #${idx + 1} of ${total}${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`
+              : `Water Meter #1${hasOwner ? ` — ${slot.ownerName.trim()}` : ''}`;
+          }
+          if (slotStatus) {
+            slotStatus.textContent = hasOwner ? `Ready (#${idx + 1})` : `Editing #${idx + 1}`;
+            slotStatus.className = `badge ${hasOwner ? 'badge-success' : 'badge-warning'}`;
+          }
+        });
+      }
+    });
+
+    const selectExistingConsumer = document.getElementById('pin-meter-consumer-select');
+    if (selectExistingConsumer) {
+      selectExistingConsumer.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (val) {
+          const c = this.cachedConsumers.find(con => con.id === val);
+          const ownerInput = document.getElementById('pin-meter-owner-name');
+          if (c && ownerInput) {
+            ownerInput.value = c.name;
+          }
+        }
+        this.syncCurrentFormToActiveMeterSlot();
+        this.renderPinMeterCirclesStage();
+      });
+    }
+
+    const linkHouseholdCheck = document.getElementById('pin-meter-link-household');
+    if (linkHouseholdCheck) {
+      linkHouseholdCheck.addEventListener('change', () => {
+        this.syncCurrentFormToActiveMeterSlot();
+      });
+    }
+
+    // "+ Add Meter" button inside the Clustered Water Meters Map Sheet Dashboard
+    const btnClusterAddMeter = document.getElementById('btn-cluster-add-meter');
+    if (btnClusterAddMeter) {
+      btnClusterAddMeter.addEventListener('click', () => {
+        if (!this.activeCluster) return;
+        const cl = this.activeCluster;
+        this.closeClusterSheet();
+        this.openDropPinModal(cl.lat || 8.3688, cl.lng || 124.8630, {
+          pinType: 'meter',
+          zone: cl.zone || 'Zone 1',
+          skipWizard: true,
+          targetClusterId: cl.id
+        });
+      });
+    }
+
+    document.getElementById('btn-save-drop-pin').addEventListener('click', () => {
+      this.saveDroppedPin();
+    });
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  window.app = new WaterBillingApp();
+  window.app.init();
+});

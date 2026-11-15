@@ -1784,39 +1784,44 @@
     </div>
 
     <div class="modal-body" style="padding: 12px 14px; max-height: 80vh; overflow-y: auto;">
-      <!-- Live Camera + Simulated Meter Viewfinder -->
+      <!-- Live Camera + Full-Frame AI Auto-Detection Viewfinder -->
       <div class="ai-viewfinder-wrap">
         <video id="ai-scanner-video" autoplay playsinline muted></video>
         <canvas id="ai-scanner-sim-canvas" style="display: none;"></canvas>
+        <canvas id="ai-detection-overlay-canvas" class="ai-detection-overlay-canvas"></canvas>
 
         <div class="ai-hud-overlay">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span id="ai-scanner-prev-badge" style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(148, 163, 184, 0.35); color: #E2E8F0; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-family: var(--font-mono);">Prev: 00000 m³</span>
-            <span id="ai-confidence-badge" class="badge badge-success">READY TO SCAN</span>
+            <span id="ai-confidence-badge" class="badge badge-success">AUTO-DETECT READY</span>
           </div>
 
-          <!-- 5-Digit Black Cubic Meter Alignment Window -->
-          <div class="ai-target-roi-box">
-            <div class="ai-target-label-top">Align 5 Black m³ Digits Inside Box</div>
-            <span></span><span></span><span></span><span></span><span></span>
-            <div class="ai-target-label-bottom">Ignore Red Liters</div>
+          <!-- Full Water Meter Circular Frame Guide (No need to align 5 tiny boxes!) -->
+          <div class="ai-full-meter-frame-guide" id="ai-full-meter-frame-guide">
+            <div class="ai-corner-bracket tl"></div>
+            <div class="ai-corner-bracket tr"></div>
+            <div class="ai-corner-bracket bl"></div>
+            <div class="ai-corner-bracket br"></div>
+            <div class="ai-full-meter-guide-caption" id="ai-full-meter-guide-caption">
+              Point at Water Meter • AI Auto-Locates m³ Numbers
+            </div>
           </div>
 
           <div style="text-align: center; font-size: 10px; color: #CBD5E1; text-shadow: 0 1px 2px #000;">
-            Wipe outer dirt/moss before scanning • On-Device Vision Model (Zero Internet)
+            Full-Frame Register Auto-Detector • Ignores Red Liters &amp; Serial Numbers
           </div>
         </div>
       </div>
 
       <!-- Real-Time Optical Glass & Moss/Algae ("Lumot") Diagnostic Banner -->
       <div id="ai-glass-diagnostic-banner" style="font-size: 11px; font-weight: 600; padding: 7px 10px; border-radius: var(--radius-xs); border: 1px solid rgba(52, 211, 153, 0.45); background: rgba(16, 185, 129, 0.18); color: #6EE7B7; margin-bottom: 8px; text-align: center;">
-        ✓ Glass Clear • Offline Edge AI Locked on 5-Digit m³ Window
+        🔍 Point camera at water meter or upload photo — AI auto-detects register
       </div>
 
       <!-- Camera Controls: Capture Scan, Flashlight, Upload Photo, Vision Filter -->
       <div style="display: grid; grid-template-columns: 1.4fr 0.9fr 0.9fr; gap: 6px; margin-bottom: 8px;">
         <button type="button" id="btn-ai-capture-scan" class="btn btn-sm btn-primary" style="font-weight: 700;">
-          Scan Digits Now
+          Scan Water Meter
         </button>
         <button type="button" id="btn-ai-toggle-torch" class="btn btn-sm btn-outline">
           ⚡ Flash: OFF
@@ -1827,10 +1832,10 @@
         </label>
       </div>
 
-      <!-- AI Computer Vision Pre-Processed Strip + Filter Selector -->
+      <!-- AI Computer Vision Auto-Cropped Register Strip + Filter Selector -->
       <div style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 7px 9px; margin-bottom: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-          <span style="font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">AI Vision Pre-Processed Strip (Anti-Glare)</span>
+          <span style="font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Auto-Detected m³ Register Strip</span>
           <div style="display: flex; gap: 4px;">
             <button type="button" class="btn btn-xs btn-outline ai-filter-btn active" data-filter="clahe" style="padding: 1px 6px; font-size: 9.5px;">CLAHE</button>
             <button type="button" class="btn btn-xs btn-outline ai-filter-btn" data-filter="binary" style="padding: 1px 6px; font-size: 9.5px;">B&amp;W Binary</button>
@@ -1840,15 +1845,16 @@
         <canvas id="ai-preprocessed-strip-canvas" width="260" height="64" style="width: 100%; height: 44px; background: #05080E; border-radius: 4px; border: 1px solid var(--border); display: block;"></canvas>
       </div>
 
-      <!-- Client Demo Field Simulator (Test Clean, Scratched Glass, or Moss/Algae "Lumot" Anywhere!) -->
+      <!-- Client Demo Field Simulator (Includes Real Itron 01386 Photo + Field Conditions) -->
       <div style="background: rgba(14, 165, 233, 0.08); border: 1px dashed rgba(56, 189, 248, 0.35); border-radius: var(--radius-xs); padding: 7px 9px; margin-bottom: 10px;">
         <div style="font-size: 10px; font-weight: 700; color: #38BDF8; margin-bottom: 5px; text-transform: uppercase;">
-          Client Demo Simulator (Test Field Conditions Without Physical Meter):
+          Test Real Meter Photo &amp; Field Conditions:
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px;">
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="clean" style="font-size: 10px;">1. Clean Meter</button>
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="scratched" style="font-size: 10px;">2. Cloudy Glass</button>
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="moss" style="font-size: 10px; color: #FCA5A5; border-color: rgba(248,113,113,0.4);">3. Moss / "Lumot"</button>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="itron" style="font-size: 10px; color: #34D399; border-color: rgba(52, 211, 153, 0.45); font-weight: 700;">1. Real Itron (01386 m³)</button>
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="clean" style="font-size: 10px;">2. Clean Meter</button>
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="scratched" style="font-size: 10px;">3. Cloudy Glass</button>
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="moss" style="font-size: 10px; color: #FCA5A5; border-color: rgba(248,113,113,0.4);">4. Moss / "Lumot"</button>
         </div>
       </div>
 
@@ -1883,21 +1889,21 @@
 </div>
 
 <!-- Scripts -->
-<script src="js/icons.js?v=26"></script>
-<script src="js/db.js?v=26"></script>
-<script src="js/sampleData.js?v=26"></script>
-<script src="js/billing.js?v=26"></script>
-<script src="js/reading.js?v=26"></script>
-<script src="js/thermalPrinter.js?v=26"></script>
-<script src="js/a4Statement.js?v=26"></script>
-<script src="js/reports.js?v=26"></script>
-<script src="js/backup.js?v=26"></script>
-<script src="js/offlineTileEngine.js?v=26"></script>
-<script src="js/mapEngine.js?v=26"></script>
-<script src="js/maplibreEngine.js?v=26"></script>
-<script src="js/aiMeterScanner.js?v=26"></script>
-<script src="js/otaUpdater.js?v=26"></script>
-<script src="js/app.js?v=26"></script>
+<script src="js/icons.js?v=27"></script>
+<script src="js/db.js?v=27"></script>
+<script src="js/sampleData.js?v=27"></script>
+<script src="js/billing.js?v=27"></script>
+<script src="js/reading.js?v=27"></script>
+<script src="js/thermalPrinter.js?v=27"></script>
+<script src="js/a4Statement.js?v=27"></script>
+<script src="js/reports.js?v=27"></script>
+<script src="js/backup.js?v=27"></script>
+<script src="js/offlineTileEngine.js?v=27"></script>
+<script src="js/mapEngine.js?v=27"></script>
+<script src="js/maplibreEngine.js?v=27"></script>
+<script src="js/aiMeterScanner.js?v=27"></script>
+<script src="js/otaUpdater.js?v=27"></script>
+<script src="js/app.js?v=27"></script>
 
 </body>
 </html>

@@ -3309,6 +3309,20 @@ button[disabled].btn-disabled-safety {
   letter-spacing: 0.02em;
 }
 
+.ai-live-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34D399;
+  box-shadow: 0 0 8px #34D399;
+  animation: aiPulseGlow 1.1s infinite ease-in-out;
+}
+
+@keyframes aiPulseGlow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.55; }
+}
+
 .ai-roller-drums-row {
   display: flex;
   align-items: center;

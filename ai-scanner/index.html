@@ -1783,8 +1783,8 @@
       </button>
     </div>
 
-    <div class="modal-body" style="padding: 12px 14px; max-height: 80vh; overflow-y: auto;">
-      <!-- Live Camera + Full-Frame AI Auto-Detection Viewfinder -->
+    <div class="modal-body" style="padding: 12px 14px; max-height: 84vh; overflow-y: auto;">
+      <!-- Large, Unobstructed Full-Circle Water Meter Camera Viewfinder (No alignment boxes!) -->
       <div class="ai-viewfinder-wrap">
         <video id="ai-scanner-video" autoplay playsinline muted></video>
         <canvas id="ai-scanner-sim-canvas" style="display: none;"></canvas>
@@ -1792,34 +1792,23 @@
 
         <div class="ai-hud-overlay">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span id="ai-scanner-prev-badge" style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(148, 163, 184, 0.35); color: #E2E8F0; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; font-family: var(--font-mono);">Prev: 00000 m³</span>
-            <span id="ai-confidence-badge" class="badge badge-success">AUTO-DETECT READY</span>
+            <span id="ai-scanner-prev-badge" style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(148, 163, 184, 0.35); color: #E2E8F0; font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; font-family: var(--font-mono);">Prev: 00000 m³</span>
+            <span id="ai-confidence-badge" class="badge badge-success">AI AUTO-SCANNING</span>
           </div>
 
-          <!-- Full Water Meter Circular Frame Guide (No need to align 5 tiny boxes!) -->
-          <div class="ai-full-meter-frame-guide" id="ai-full-meter-frame-guide">
-            <div class="ai-corner-bracket tl"></div>
-            <div class="ai-corner-bracket tr"></div>
-            <div class="ai-corner-bracket bl"></div>
-            <div class="ai-corner-bracket br"></div>
-            <div class="ai-full-meter-guide-caption" id="ai-full-meter-guide-caption">
-              Point at Water Meter • AI Auto-Locates m³ Numbers
-            </div>
-          </div>
-
-          <div style="text-align: center; font-size: 10px; color: #CBD5E1; text-shadow: 0 1px 2px #000;">
-            Full-Frame Register Auto-Detector • Ignores Red Liters &amp; Serial Numbers
+          <div style="text-align: center; font-size: 10.5px; font-weight: 600; color: #E2E8F0; background: rgba(15, 23, 42, 0.72); padding: 4px 10px; border-radius: 999px; align-self: center; border: 1px solid rgba(56, 189, 248, 0.3);">
+            Point camera at whole water meter • AI auto-reads numbers &amp; calculates bill
           </div>
         </div>
       </div>
 
-      <!-- Real-Time Optical Glass & Moss/Algae ("Lumot") Diagnostic Banner -->
-      <div id="ai-glass-diagnostic-banner" style="font-size: 11px; font-weight: 600; padding: 7px 10px; border-radius: var(--radius-xs); border: 1px solid rgba(52, 211, 153, 0.45); background: rgba(16, 185, 129, 0.18); color: #6EE7B7; margin-bottom: 8px; text-align: center;">
-        🔍 Point camera at water meter or upload photo — AI auto-detects register
+      <!-- Real-Time AI Status Banner -->
+      <div id="ai-glass-diagnostic-banner" style="font-size: 11.5px; font-weight: 700; padding: 7px 10px; border-radius: var(--radius-xs); border: 1px solid rgba(52, 211, 153, 0.45); background: rgba(16, 185, 129, 0.18); color: #6EE7B7; margin-bottom: 8px; text-align: center;">
+        🔍 Point camera at water meter — AI auto-detects &amp; calculates bill
       </div>
 
-      <!-- Hands-Free AI Auto-Hover Status Bar (Replaced manual "Scan Digits Now" button) -->
-      <div style="display: grid; grid-template-columns: 1.6fr 0.85fr 0.85fr; gap: 6px; margin-bottom: 8px; align-items: stretch;">
+      <!-- Hands-Free AI Status Bar + Flash & Photo Upload -->
+      <div style="display: grid; grid-template-columns: 1.5fr 0.85fr 0.85fr; gap: 6px; margin-bottom: 10px; align-items: stretch;">
         <div id="ai-auto-hover-status-pill" style="display: flex; align-items: center; justify-content: center; gap: 6px; background: rgba(16, 185, 129, 0.14); border: 1px solid rgba(52, 211, 153, 0.45); color: #6EE7B7; border-radius: var(--radius-xs); padding: 6px 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em;">
           <span class="ai-live-pulse-dot"></span>
           <span id="ai-auto-hover-status-text">AI AUTO-SCANNING LIVE</span>
@@ -1833,46 +1822,34 @@
         </label>
       </div>
 
-      <!-- AI Computer Vision Auto-Cropped Register Strip + Filter Selector -->
-      <div style="background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 7px 9px; margin-bottom: 8px;">
+      <!-- 100% Automatic Rolling 5-Drum Display & Instant Bill Computation -->
+      <div style="margin-bottom: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-          <span style="font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Auto-Detected m³ Register Strip</span>
-          <div style="display: flex; gap: 4px;">
-            <button type="button" class="btn btn-xs btn-outline ai-filter-btn active" data-filter="clahe" style="padding: 1px 6px; font-size: 9.5px;">CLAHE</button>
-            <button type="button" class="btn btn-xs btn-outline ai-filter-btn" data-filter="binary" style="padding: 1px 6px; font-size: 9.5px;">B&amp;W Binary</button>
-            <button type="button" class="btn btn-xs btn-outline ai-filter-btn" data-filter="natural" style="padding: 1px 6px; font-size: 9.5px;">Raw</button>
-          </div>
-        </div>
-        <canvas id="ai-preprocessed-strip-canvas" width="260" height="64" style="width: 100%; height: 44px; background: #05080E; border-radius: 4px; border: 1px solid var(--border); display: block;"></canvas>
-      </div>
-
-      <!-- Client Demo Field Simulator (Includes Real Itron 01386 Photo + Field Conditions) -->
-      <div style="background: rgba(14, 165, 233, 0.08); border: 1px dashed rgba(56, 189, 248, 0.35); border-radius: var(--radius-xs); padding: 7px 9px; margin-bottom: 10px;">
-        <div style="font-size: 10px; font-weight: 700; color: #38BDF8; margin-bottom: 5px; text-transform: uppercase;">
-          Test Real Meter Photo &amp; Field Conditions:
-        </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="itron" style="font-size: 10px; color: #34D399; border-color: rgba(52, 211, 153, 0.45); font-weight: 700;">1. Real Itron (01386 m³)</button>
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="clean" style="font-size: 10px;">2. Clean Meter</button>
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="scratched" style="font-size: 10px;">3. Cloudy Glass</button>
-          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="moss" style="font-size: 10px; color: #FCA5A5; border-color: rgba(248,113,113,0.4);">4. Moss / "Lumot"</button>
-        </div>
-      </div>
-
-      <!-- 100% Automatic AI Reading & Live Previous-to-Current Bill Computation (Zero Manual Typing/Adjustments) -->
-      <div style="margin-bottom: 4px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-          <span style="font-size: 10px; font-weight: 800; color: #38BDF8; text-transform: uppercase; letter-spacing: 0.03em;">
-            AI AUTO-DETECTED READING &amp; INSTANT COMPUTATION (NO MANUAL TYPING):
+          <span style="font-size: 10.5px; font-weight: 800; color: #38BDF8; text-transform: uppercase; letter-spacing: 0.03em;">
+            AI AUTO-DETECTED READING &amp; BILL COMPUTATION:
           </span>
         </div>
         <div id="ai-roller-drums-container" class="ai-roller-drums-row">
-          <!-- Populated dynamically: 5 read-only AI digital drums -->
+          <!-- Populated dynamically: 5 animated rolling digital drums -->
         </div>
         <div id="ai-live-usage-preview" style="margin-top: 7px;">
-          <!-- Populated dynamically with Current, Previous, Usage (Current - Previous), and Total Bill -->
+          <!-- Populated dynamically with Previous, AI Current, Usage (Current - Previous), and Total Bill -->
         </div>
       </div>
+
+      <!-- Hidden canvas for internal strip processing + collapsible demo drawer -->
+      <canvas id="ai-preprocessed-strip-canvas" width="260" height="64" style="display: none;"></canvas>
+      <details style="margin-top: 6px; background: rgba(15, 23, 42, 0.55); border: 1px dashed rgba(56, 189, 248, 0.28); border-radius: var(--radius-xs); padding: 5px 8px;">
+        <summary style="font-size: 10px; font-weight: 700; color: #94A3B8; cursor: pointer; user-select: none;">
+           Demo Simulator (Test Without Physical Water Meter)
+        </summary>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 6px;">
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="linflow" style="font-size: 10px; color: #38BDF8; border-color: rgba(56, 189, 248, 0.45); font-weight: 700;">1. Linflow (02549 m³)</button>
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="itron" style="font-size: 10px; color: #34D399; border-color: rgba(52, 211, 153, 0.45); font-weight: 700;">2. Itron (01386 m³)</button>
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="scratched" style="font-size: 10px;">3. Cloudy Glass</button>
+          <button type="button" class="btn btn-xs btn-outline ai-sim-btn" data-sim="moss" style="font-size: 10px; color: #FCA5A5; border-color: rgba(248,113,113,0.4);">4. Moss / "Lumot"</button>
+        </div>
+      </details>
     </div>
 
     <div class="modal-footer" style="flex-direction: column; gap: 6px; padding: 10px 14px;">
@@ -1892,21 +1869,21 @@
 </div>
 
 <!-- Scripts -->
-<script src="js/icons.js?v=28"></script>
-<script src="js/db.js?v=28"></script>
-<script src="js/sampleData.js?v=28"></script>
-<script src="js/billing.js?v=28"></script>
-<script src="js/reading.js?v=28"></script>
-<script src="js/thermalPrinter.js?v=28"></script>
-<script src="js/a4Statement.js?v=28"></script>
-<script src="js/reports.js?v=28"></script>
-<script src="js/backup.js?v=28"></script>
-<script src="js/offlineTileEngine.js?v=28"></script>
-<script src="js/mapEngine.js?v=28"></script>
-<script src="js/maplibreEngine.js?v=28"></script>
-<script src="js/aiMeterScanner.js?v=28"></script>
-<script src="js/otaUpdater.js?v=28"></script>
-<script src="js/app.js?v=28"></script>
+<script src="js/icons.js?v=29"></script>
+<script src="js/db.js?v=29"></script>
+<script src="js/sampleData.js?v=29"></script>
+<script src="js/billing.js?v=29"></script>
+<script src="js/reading.js?v=29"></script>
+<script src="js/thermalPrinter.js?v=29"></script>
+<script src="js/a4Statement.js?v=29"></script>
+<script src="js/reports.js?v=29"></script>
+<script src="js/backup.js?v=29"></script>
+<script src="js/offlineTileEngine.js?v=29"></script>
+<script src="js/mapEngine.js?v=29"></script>
+<script src="js/maplibreEngine.js?v=29"></script>
+<script src="js/aiMeterScanner.js?v=29"></script>
+<script src="js/otaUpdater.js?v=29"></script>
+<script src="js/app.js?v=29"></script>
 
 </body>
 </html>

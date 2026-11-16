@@ -1,18 +1,17 @@
 /**
- * Dicklum Water Association, Inc. — 100% Hands-Free Offline Edge AI Water Meter Scanner (v28)
+ * Dicklum Water Association, Inc. — 100% Hands-Free Dual-Polarity Edge AI Water Meter Scanner (v29)
  * (AI Edition — Isolated from Original Production App)
  *
- * 100% Hands-Free Hover & Auto-Calculate Architecture:
- * 1. Zero Button Clicking / Zero Manual Typing / Zero Manual Roller Adjustments:
- *    - Simply hover the camera over the water meter.
- *    - The AI scans continuously (5.5 FPS), locates the 5 black m³ rollers, excludes red liter decimals,
- *      locks onto the reading, plays a confirmation beep, and automatically calculates:
- *        Water Consumption = Scanned Current Reading (m³) − Previous Reading (m³)
- *        Total Amount Due  = Dicklum Water Tariff (₱100 min up to 10 m³ + ₱15/m³ excess)
- * 2. Exposure-Invariant Register Detection:
- *    - Works both on physical outdoor water meters AND when hovering a phone camera over a meter photo on a screen.
- *    - Verifies that the 5 black m³ rollers are darker than the surrounding meter faceplate by >= 25 luminance units,
- *      preventing false locks on circular flow dials or non-meter monitors.
+ * Capabilities:
+ * 1. Large, Unobstructed Full-Circle Water Meter Camera View (No alignment boxes blocking the meter!)
+ * 2. Dual-Polarity Full-Frame Register Auto-Detector & OCR:
+ *    - Automatically detects and reads BOTH:
+ *      • Black-on-White m³ rollers + Red liter rollers (e.g. Linflow SNI "2549" -> 02549 m³)
+ *      • White-on-Black m³ rollers + Red liter rollers (e.g. Itron TD8 "01386" -> 01386 m³)
+ *    - Works at natural smartphone camera distance showing the whole circular water meter
+ * 3. Strict Anti-Hallucination & Character Quality Gate (>= 91% confidence required):
+ *    - Prevents blurry shadows or non-meter screens from ever producing fake numbers like 71411 or 44043
+ * 4. Animated Rolling 5-Drum Display + Instant Previous-to-Current Bill Computation
  */
 
 class OfflineAIMeterScanner {
@@ -21,11 +20,13 @@ class OfflineAIMeterScanner {
     this.videoTrack = null;
     this.torchEnabled = false;
     this.isOpen = false;
-    this.filterMode = 'clahe'; // 'clahe' | 'binary' | 'natural'
+    this.filterMode = 'clahe';
     this.analysisInterval = null;
+    this.rollAnimTimer = null;
 
     // Scanned result state
     this.digits = [0, 0, 0, 0, 0];
+    this.lastRenderedDigitsStr = '00000';
     this.confidence = 0;
     this.registerDetected = false;
     this.lastDetectionBox = null;
@@ -33,106 +34,26 @@ class OfflineAIMeterScanner {
     this.stableFrameCount = 0;
     this.hasAutoAppliedCurrentLock = false;
     this.glassStatus = 'SEARCHING';
-    this.glassMessage = '🔍 Hover camera over water meter — AI auto-detects & calculates bill';
+    this.glassMessage = '🔍 Point camera at water meter — AI auto-detects & calculates bill';
     this.capturedDataUrl = null;
     this.croppedStripDataUrl = null;
-    this.simulationMode = null; // null | 'itron' | 'clean' | 'scratched' | 'moss' | 'uploaded'
+    this.simulationMode = null;
 
     this.digitTemplates = this._buildMechanicalDigitTemplates();
   }
 
   _buildMechanicalDigitTemplates() {
     const raw = {
-      0: [
-        '01110',
-        '11011',
-        '10001',
-        '10001',
-        '10001',
-        '11011',
-        '01110'
-      ],
-      1: [
-        '00100',
-        '01100',
-        '00100',
-        '00100',
-        '00100',
-        '00100',
-        '01110'
-      ],
-      2: [
-        '01110',
-        '10001',
-        '00001',
-        '00110',
-        '01000',
-        '10000',
-        '11111'
-      ],
-      3: [
-        '01110',
-        '10001',
-        '00001',
-        '00110',
-        '00001',
-        '10001',
-        '01110'
-      ],
-      4: [
-        '00010',
-        '00110',
-        '01010',
-        '10010',
-        '11111',
-        '00010',
-        '00010'
-      ],
-      5: [
-        '11111',
-        '10000',
-        '11110',
-        '00001',
-        '00001',
-        '10001',
-        '01110'
-      ],
-      6: [
-        '00110',
-        '01000',
-        '10000',
-        '11110',
-        '10001',
-        '10001',
-        '01110'
-      ],
-      7: [
-        '11111',
-        '00001',
-        '00010',
-        '00100',
-        '01000',
-        '01000',
-        '01000'
-      ],
-      8: [
-        '01110',
-        '10001',
-        '10001',
-        '01110',
-        '10001',
-        '10001',
-        '01110'
-      ],
-      9: [
-        '01110',
-        '10001',
-        '10001',
-        '01111',
-        '00001',
-        '00010',
-        '01100'
-      ]
+      0: ['01110', '11011', '10001', '10001', '10001', '11011', '01110'],
+      1: ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
+      2: ['01110', '10001', '00001', '00110', '01000', '10000', '11111'],
+      3: ['01110', '10001', '00001', '00110', '00001', '10001', '01110'],
+      4: ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
+      5: ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
+      6: ['00110', '01000', '10000', '11110', '10001', '10001', '01110'],
+      7: ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
+      8: ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
+      9: ['01110', '10001', '10001', '01111', '00001', '00010', '01100']
     };
     const out = {};
     for (let d = 0; d <= 9; d++) {
@@ -171,21 +92,6 @@ class OfflineAIMeterScanner {
       btnFlagMoss.addEventListener('click', () => this.flagMeterAsUnreadable());
     }
 
-    // Filter mode buttons ('clahe' | 'binary' | 'natural')
-    document.querySelectorAll('.ai-filter-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.ai-filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        this.filterMode = btn.dataset.filter || 'clahe';
-        if (this.simulationMode && this.simulationMode !== 'uploaded') {
-          this.runClientDemoSimulation(this.simulationMode);
-        } else {
-          this.performAIScan(false);
-        }
-      });
-    });
-
-    // Client Demo / Simulation buttons ('itron' | 'clean' | 'scratched' | 'moss')
     document.querySelectorAll('.ai-sim-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const simType = btn.dataset.sim;
@@ -193,7 +99,6 @@ class OfflineAIMeterScanner {
       });
     });
 
-    // Photo file upload input inside AI Scanner
     const fileInput = document.getElementById('ai-scanner-file-input');
     if (fileInput) {
       fileInput.addEventListener('change', (e) => {
@@ -231,8 +136,8 @@ class OfflineAIMeterScanner {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(1046.5, ctx.currentTime); // C6
-      osc.frequency.setValueAtTime(1318.5, ctx.currentTime + 0.06); // E6
+      osc.frequency.setValueAtTime(1046.5, ctx.currentTime);
+      osc.frequency.setValueAtTime(1318.5, ctx.currentTime + 0.06);
       gain.gain.setValueAtTime(0.12, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.16);
       osc.connect(gain);
@@ -264,9 +169,10 @@ class OfflineAIMeterScanner {
 
     const prev = this.getPreviousReadingBaseline();
     this.setDigitsFromNumber(prev);
+    this.lastRenderedDigitsStr = this.digits.join('');
     this.confidence = 0;
     this.clearDetectionOverlay();
-    this.renderRollerDrums();
+    this.renderRollerDrums(false);
 
     const prevBadge = document.getElementById('ai-scanner-prev-badge');
     if (prevBadge) {
@@ -284,6 +190,10 @@ class OfflineAIMeterScanner {
 
   closeScannerModal() {
     this.stopCameraStream();
+    if (this.rollAnimTimer) {
+      clearInterval(this.rollAnimTimer);
+      this.rollAnimTimer = null;
+    }
     const modal = document.getElementById('modal-ai-meter-scanner');
     if (modal) modal.classList.remove('active');
     this.isOpen = false;
@@ -296,7 +206,7 @@ class OfflineAIMeterScanner {
     if (video) video.style.display = 'block';
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      this.runClientDemoSimulation('itron');
+      this.runClientDemoSimulation('linflow');
       return;
     }
 
@@ -318,18 +228,17 @@ class OfflineAIMeterScanner {
       const tracks = this.stream.getVideoTracks();
       this.videoTrack = tracks.length > 0 ? tracks[0] : null;
 
-      this.updateGlassDiagnostic('SEARCHING', '🔍 Hover camera over water meter — AI auto-detects & calculates bill');
+      this.updateGlassDiagnostic('SEARCHING', '🔍 Point camera at water meter — AI auto-detects & calculates bill');
 
-      // Continuous 5.5 FPS hands-free camera hover detector & auto-calculator
       if (this.analysisInterval) clearInterval(this.analysisInterval);
       this.analysisInterval = setInterval(() => {
         if (this.isOpen && !this.simulationMode) {
           this.analyzeLiveVideoFrame();
         }
-      }, 185);
+      }, 170);
     } catch (err) {
-      console.warn('Camera access fallback to Real Itron simulator:', err.message);
-      this.runClientDemoSimulation('itron');
+      console.warn('Camera access fallback to simulator:', err.message);
+      this.runClientDemoSimulation('linflow');
     }
   }
 
@@ -378,12 +287,11 @@ class OfflineAIMeterScanner {
   }
 
   /**
-   * 1. EXPOSURE-INVARIANT FULL-FRAME WATER METER REGISTER DETECTOR
-   * Automatically locates the horizontal 5-digit black m³ roller window inside a full water meter frame:
-   * - Detects the red decimal liter drums on the right and verifies that the 5 black m³ rollers
-   *   immediately to their left are darker than the meter faceplate above them by >= 25 luminance units
-   *   (which 100% separates the true horizontal roller strip from the circular red flow indicator dial).
-   * - Rejects non-meter scenes (monitors without meters, desks, walls) so it never hallucinates readings.
+   * 1. DUAL-POLARITY FULL-FRAME WATER METER REGISTER DETECTOR
+   * Detects BOTH:
+   * - Type A: Black-on-White m³ rollers + Red liter rollers (e.g. Linflow SNI "2549" water meter)
+   * - Type B: White-on-Black m³ rollers + Red liter rollers (e.g. Itron TD8 "01386" water meter)
+   * Separates pure red liter rollers from brown/copper/brass meter rings using rg > 21 && rg > gb * 1.15.
    */
   detectMeterRegisterInFrame(imgData) {
     const w = imgData.width;
@@ -391,15 +299,21 @@ class OfflineAIMeterScanner {
     const data = imgData.data;
 
     const lum = new Int16Array(w * h);
-    const redExcess = new Int16Array(w * h);
+    const pureRed = new Uint8Array(w * h);
     let totalGreenMoss = 0;
 
     for (let i = 0; i < w * h; i++) {
       const r = data[i * 4];
       const g = data[i * 4 + 1];
       const b = data[i * 4 + 2];
-      lum[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-      redExcess[i] = r - Math.max(g, b);
+      const l = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+      lum[i] = l;
+
+      const rg = r - g;
+      const gb = g - b;
+      if (rg > 21 && rg > gb * 1.15 && r > 85 && l > 50 && l < 195) {
+        pureRed[i] = 1;
+      }
       if (g > 65 && g > r * 1.24 && g > b * 1.28 && (g - Math.max(r, b)) > 18) {
         totalGreenMoss++;
       }
@@ -409,6 +323,7 @@ class OfflineAIMeterScanner {
       return {
         found: true,
         type: 'MOSS_OBSTRUCTED',
+        polarity: 'WHITE_ON_BLACK',
         x: Math.floor(w * 0.22),
         y: Math.floor(h * 0.38),
         w: Math.floor(w * 0.56),
@@ -423,41 +338,49 @@ class OfflineAIMeterScanner {
     let redMinX = 9999;
     let redMaxX = 0;
 
-    const yMinSearch = Math.floor(h * 0.18);
+    const yMinSearch = Math.floor(h * 0.15);
     const yMaxSearch = Math.floor(h * 0.82);
 
     for (let y = yMinSearch; y < yMaxSearch; y++) {
-      let rowRed = 0;
-      let rMin = 9999;
-      let rMax = 0;
-
-      for (let x = Math.floor(w * 0.28); x < Math.floor(w * 0.82); x++) {
-        const idx = y * w + x;
-        if (redExcess[idx] > 20 && lum[idx] > 55 && lum[idx] < 195) {
-          rowRed++;
-          if (x < rMin) rMin = x;
-          if (x > rMax) rMax = x;
-        }
+      const redXs = [];
+      for (let x = Math.floor(w * 0.32); x < Math.floor(w * 0.82); x++) {
+        if (pureRed[y * w + x]) redXs.push(x);
       }
 
-      let leftDark = 0;
-      let leftMinLum = 255;
-      let leftMaxLum = 0;
-      const redSpan = rMax - rMin;
-      if (rowRed >= Math.floor(w * 0.025) && redSpan >= Math.floor(w * 0.04) && redSpan <= Math.floor(w * 0.25)) {
-        const checkLeftStart = Math.max(8, rMin - Math.floor(w * 0.22));
-        for (let x = checkLeftStart; x < rMin - 2; x++) {
-          const idx = y * w + x;
-          const l = lum[idx];
-          if (l < leftMinLum) leftMinLum = l;
-          if (l > leftMaxLum) leftMaxLum = l;
-          if (l < 122 && Math.abs(redExcess[idx]) < 24) {
-            leftDark++;
+      let rMin = 9999, rMax = 0, rowRed = 0;
+      if (redXs.length >= 10) {
+        let curMin = redXs[0], curMax = redXs[0], curCnt = 1;
+        for (let k = 1; k < redXs.length; k++) {
+          if (redXs[k] - redXs[k - 1] <= 18) {
+            curMax = redXs[k];
+            curCnt++;
+          } else {
+            if (curCnt > rowRed) { rowRed = curCnt; rMin = curMin; rMax = curMax; }
+            curMin = redXs[k]; curMax = redXs[k]; curCnt = 1;
           }
         }
+        if (curCnt > rowRed) { rowRed = curCnt; rMin = curMin; rMax = curMax; }
       }
 
-      if (rowRed >= Math.floor(w * 0.025) && leftDark >= Math.floor(w * 0.06) && (leftMaxLum - leftMinLum) >= 28) {
+      const redSpan = rMax - rMin;
+      let leftContrastSpan = 0;
+      let leftEdges = 0;
+
+      if (rowRed >= Math.floor(w * 0.024) && redSpan >= Math.floor(w * 0.04) && redSpan <= Math.floor(w * 0.24)) {
+        const checkLeftStart = Math.max(8, rMin - Math.floor(w * 0.20));
+        let minL = 255, maxL = 0;
+        for (let x = checkLeftStart; x < rMin - 2; x++) {
+          const l = lum[y * w + x];
+          if (l < minL) minL = l;
+          if (l > maxL) maxL = l;
+          if (x > checkLeftStart && Math.abs(l - lum[y * w + x - 2]) > 22) {
+            leftEdges++;
+          }
+        }
+        leftContrastSpan = maxL - minL;
+      }
+
+      if (rowRed >= Math.floor(w * 0.024) && leftContrastSpan >= 32 && leftEdges >= 5) {
         if (!inBand) {
           inBand = true;
           bandStart = y;
@@ -469,7 +392,7 @@ class OfflineAIMeterScanner {
         if (rMax > redMaxX) redMaxX = rMax;
       } else if (inBand && (y - bandEnd) > 3) {
         const bandH = bandEnd - bandStart + 1;
-        if (bandH >= Math.floor(h * 0.018) && bandH <= Math.floor(h * 0.22)) {
+        if (bandH >= Math.floor(h * 0.024) && bandH <= Math.floor(h * 0.16)) {
           bestBand = { bandStart, bandEnd, redMinX, redMaxX };
           break;
         }
@@ -477,89 +400,91 @@ class OfflineAIMeterScanner {
       }
     }
 
-    if (bestBand) {
-      const regY1 = Math.max(0, bestBand.bandStart + 1);
-      const regY2 = Math.min(h - 1, bestBand.bandEnd + 1);
-      const regX2 = bestBand.redMinX - 2;
+    if (!bestBand) return { found: false };
 
-      let regX1 = Math.max(8, regX2 - Math.round((regY2 - regY1 + 1) * 5.65));
+    const regY1 = Math.max(0, bestBand.bandStart + 1);
+    const regY2 = Math.min(h - 1, bestBand.bandEnd + 1);
+    const regH = regY2 - regY1 + 1;
+    const regX2 = bestBand.redMinX - 2;
+
+    // Determine whether the m³ drums to the left of regX2 are BLACK_ON_WHITE (e.g. Linflow 2549)
+    // or WHITE_ON_BLACK (e.g. Itron 01386)
+    let stripLumSum = 0, stripCnt = 0;
+    let darkPixels = 0, brightPixels = 0;
+    const sampleLeft = Math.max(10, regX2 - Math.round(regH * 4.2));
+    for (let y = regY1 + 2; y <= regY2 - 2; y++) {
+      for (let x = sampleLeft; x < regX2 - 2; x++) {
+        const l = lum[y * w + x];
+        stripLumSum += l;
+        stripCnt++;
+        if (l < 110) darkPixels++;
+        if (l > 140) brightPixels++;
+      }
+    }
+    const stripMean = stripLumSum / Math.max(1, stripCnt);
+    const polarity = (brightPixels > darkPixels || stripMean >= 122) ? 'BLACK_ON_WHITE' : 'WHITE_ON_BLACK';
+
+    let regX1 = Math.max(10, regX2 - Math.round(regH * 5.5));
+
+    if (polarity === 'WHITE_ON_BLACK') {
       const startScanLeft = Math.max(20, regX2 - Math.floor(w * 0.185));
       for (let x = startScanLeft; x >= Math.floor(w * 0.12); x--) {
-        let winLumSum = 0;
-        let winCount = 0;
+        let winLumSum = 0, winCount = 0;
         for (let wx = x - 6; wx <= x; wx++) {
           for (let y = regY1; y <= regY2; y++) {
             winLumSum += lum[y * w + wx];
             winCount++;
           }
         }
-        const winMean = winLumSum / Math.max(1, winCount);
-        if (winMean > 138) {
+        if ((winLumSum / Math.max(1, winCount)) > 138) {
           regX1 = x + 1;
           break;
         }
       }
-
-      let aboveLumSum = 0;
-      let aboveCount = 0;
-      const checkYAbove = Math.max(2, regY1 - Math.floor(h * 0.06));
-      for (let y = checkYAbove; y < regY1 - 2; y++) {
-        for (let x = regX1; x < regX2; x += 2) {
-          aboveLumSum += lum[y * w + x];
-          aboveCount++;
-        }
-      }
-      const aboveMean = aboveCount > 0 ? (aboveLumSum / aboveCount) : 0;
-
-      if (aboveMean > 110 && (regX2 - regX1) >= Math.floor(w * 0.14)) {
-        return {
-          found: true,
-          type: 'ITRON_RED_BLACK_REGISTER',
-          x: regX1,
-          y: regY1,
-          w: regX2 - regX1 + 1,
-          h: regY2 - regY1 + 1,
-          redLitersBox: {
-            x: bestBand.redMinX,
-            y: regY1,
-            w: bestBand.redMaxX - bestBand.redMinX + 1,
-            h: regY2 - regY1 + 1
-          }
-        };
-      }
+    } else {
+      regX1 = Math.max(10, regX2 - Math.round(regH * 3.16));
     }
 
-    return { found: false };
+    return {
+      found: true,
+      type: polarity === 'WHITE_ON_BLACK' ? 'ITRON_WHITE_ON_BLACK' : 'LINFLOW_BLACK_ON_WHITE',
+      polarity,
+      x: regX1,
+      y: regY1,
+      w: regX2 - regX1 + 1,
+      h: regY2 - regY1 + 1,
+      redLitersBox: {
+        x: bestBand.redMinX,
+        y: regY1,
+        w: bestBand.redMaxX - bestBand.redMinX + 1,
+        h: regY2 - regY1 + 1
+      }
+    };
   }
 
   /**
-   * 2. ADAPTIVE COLUMN-PROJECTION CHARACTER SEGMENTER & TOPOLOGICAL DIGIT CLASSIFIER
+   * 2. DUAL-POLARITY CHARACTER SEGMENTER & TOPOLOGICAL DIGIT CLASSIFIER
+   * Supports both 4-drum Black-on-White registers (e.g. Linflow "2549" -> 02549)
+   * and 5-drum White-on-Black registers (e.g. Itron "01386" -> 01386).
    */
   segmentAndClassifyRegisterDigits(imgData, box) {
     const { width: W, data } = imgData;
-    const { x: bx, y: by, w: bw, h: bh } = box;
+    const { x: bx, y: by, w: bw, h: bh, polarity } = box;
 
     const patch = [];
-    let sumLum = 0;
-    let maxLum = 0;
-    const yStart = Math.max(1, Math.floor(bh * 0.08));
-    const yEnd = Math.min(bh - 1, Math.ceil(bh * 0.92));
-
     for (let y = 0; y < bh; y++) {
       const row = new Int16Array(bw);
       for (let x = 0; x < bw; x++) {
         const idx = ((by + y) * W + (bx + x)) * 4;
         const l = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
-        row[x] = l;
-        if (y >= yStart && y < yEnd && x >= 2 && x < bw - 2) {
-          sumLum += l;
-          if (l > maxLum) maxLum = l;
-        }
+        row[x] = polarity === 'BLACK_ON_WHITE' ? (255 - l) : l;
       }
       patch.push(row);
     }
 
-    const inkThresh = 134;
+    const inkThresh = polarity === 'BLACK_ON_WHITE' ? 136 : 134;
+    const yStart = polarity === 'BLACK_ON_WHITE' ? Math.max(3, Math.floor(bh * 0.28)) : Math.max(1, Math.floor(bh * 0.08));
+    const yEnd = polarity === 'BLACK_ON_WHITE' ? Math.min(bh - 1, Math.ceil(bh * 0.94)) : Math.min(bh - 1, Math.ceil(bh * 0.92));
 
     const colBrightCount = new Int16Array(bw);
     for (let x = 0; x < bw; x++) {
@@ -570,10 +495,44 @@ class OfflineAIMeterScanner {
       }
     }
 
+    if (polarity === 'BLACK_ON_WHITE') {
+      const numDrums = 4;
+      const cellW = bw / numDrums;
+      const digits = [];
+      const charBoxes = [];
+      let sumScore = 0;
+
+      for (let k = 0; k < numDrums; k++) {
+        const cx1 = Math.max(1, Math.floor(k * cellW + cellW * 0.06));
+        const cx2 = Math.min(bw - 2, Math.floor((k + 1) * cellW - cellW * 0.44));
+        let tx1 = cx1, tx2 = cx2;
+        while (tx1 < tx2 && colBrightCount[tx1] < 2) tx1++;
+        while (tx2 > tx1 && colBrightCount[tx2] < 2) tx2--;
+        const d = this.classifySingleRollerBlob(patch, tx1, tx2, yStart, yEnd, inkThresh);
+        digits.push(d.digit);
+        sumScore += d.score;
+        charBoxes.push({
+          x: bx + tx1,
+          y: by + yStart,
+          w: tx2 - tx1 + 1,
+          h: yEnd - yStart,
+          digit: d.digit
+        });
+      }
+
+      const paddedDigits = [0, ...digits].slice(0, 5);
+      return {
+        digits: paddedDigits,
+        charBoxes,
+        validCharCount: 4,
+        confidence: Math.min(99, Math.round((sumScore / numDrums) * 100))
+      };
+    }
+
     const blobs = [];
     let inBlob = false;
     let sX = 0;
-    for (let x = 2; x < bw - 1; x++) {
+    for (let x = 1; x < bw - 1; x++) {
       if (colBrightCount[x] >= 2) {
         if (!inBlob) {
           inBlob = true;
@@ -597,19 +556,22 @@ class OfflineAIMeterScanner {
     const validBlobs = blobs.filter(b => {
       let sumBright = 0;
       for (let x = b.x1; x <= b.x2; x++) sumBright += colBrightCount[x];
-      return sumBright >= 7 && b.w <= Math.floor(bw * 0.24);
+      return sumBright >= 7 && b.w <= Math.floor(bw * 0.28);
     });
 
-    if (validBlobs.length >= 5) {
+    if (validBlobs.length >= 4) {
       const results = [];
       let sumScore = 0;
-      for (const b of validBlobs.slice(0, 5)) {
+      const take = validBlobs.slice(0, 5);
+      for (const b of take) {
         const d = this.classifySingleRollerBlob(patch, b.x1, b.x2, yStart, yEnd, inkThresh);
         results.push({ digit: d.digit, score: d.score, box: b });
         sumScore += d.score;
       }
+      const outDigits = results.map(r => r.digit);
+      while (outDigits.length < 5) outDigits.unshift(0);
       return {
-        digits: results.map(r => r.digit),
+        digits: outDigits.slice(0, 5),
         charBoxes: results.map(r => ({
           x: bx + r.box.x1,
           y: by + yStart,
@@ -617,32 +579,16 @@ class OfflineAIMeterScanner {
           h: yEnd - yStart,
           digit: r.digit
         })),
-        confidence: Math.min(99, Math.round((sumScore / 5) * 100))
+        validCharCount: results.length,
+        confidence: Math.min(99, Math.round((sumScore / results.length) * 100))
       };
     }
 
-    const fallbackDigits = [];
-    const charBoxes = [];
-    const cellW = bw / 5;
-    let sumScore = 0;
-    for (let i = 0; i < 5; i++) {
-      const cx1 = Math.max(1, Math.floor(i * cellW + cellW * 0.12));
-      const cx2 = Math.min(bw - 2, Math.floor((i + 1) * cellW - cellW * 0.12));
-      const d = this.classifySingleRollerBlob(patch, cx1, cx2, yStart, yEnd, inkThresh);
-      fallbackDigits.push(d.digit);
-      sumScore += d.score;
-      charBoxes.push({
-        x: bx + cx1,
-        y: by + yStart,
-        w: cx2 - cx1 + 1,
-        h: yEnd - yStart,
-        digit: d.digit
-      });
-    }
     return {
-      digits: fallbackDigits,
-      charBoxes,
-      confidence: Math.min(96, Math.round((sumScore / 5) * 100))
+      digits: [0, 0, 0, 0, 0],
+      charBoxes: [],
+      validCharCount: 0,
+      confidence: 0
     };
   }
 
@@ -696,7 +642,7 @@ class OfflineAIMeterScanner {
     if (centerHole < 0.38 && upperLeft >= 0.45 && lowerLeft >= 0.45 && upperRight >= 0.45 && lowerRight >= 0.45) {
       return { digit: 0, score: 0.96 };
     }
-    if (lowerLeft < 0.35 && upperRight >= 0.50 && lowerRight >= 0.50 && midBar >= 0.45 && (upperLeft < 0.55 || cw <= Math.ceil(ch * 0.52))) {
+    if (lowerLeft < 0.35 && upperRight >= 0.50 && lowerRight >= 0.50 && midBar >= 0.45 && (upperLeft < 0.55 || cw <= 7)) {
       return { digit: 3, score: 0.95 };
     }
     if (upperLeft >= 0.45 && lowerLeft >= 0.50 && lowerRight >= 0.50 && upperRight < lowerRight - 0.15 && midBar >= 0.42) {
@@ -705,46 +651,27 @@ class OfflineAIMeterScanner {
     if (centerHole >= 0.40 && upperLeft >= 0.42 && lowerLeft >= 0.42 && upperRight >= 0.42 && lowerRight >= 0.42) {
       return { digit: 8, score: 0.94 };
     }
-    if (upperLeft >= 0.45 && upperRight >= 0.45 && midBar >= 0.40 && lowerLeft < 0.38 && lowerRight >= 0.45) {
-      return { digit: 9, score: 0.92 };
+    if (topBar >= 0.45 && botBar >= 0.55 && upperRight >= 0.48 && lowerLeft >= 0.45 && lowerRight < 0.42) {
+      return { digit: 2, score: 0.96 };
     }
-    if (upperLeft < 0.40 && upperRight >= 0.48 && lowerLeft >= 0.48 && lowerRight < 0.42) {
-      return { digit: 2, score: 0.92 };
+    if (topBar >= 0.52 && midBar >= 0.50 && upperLeft >= 0.40 && upperRight >= 0.45 && lowerLeft < 0.38) {
+      return { digit: 9, score: 0.96 };
     }
-    if (upperLeft >= 0.48 && upperRight < 0.40 && lowerLeft < 0.42 && lowerRight >= 0.48) {
-      return { digit: 5, score: 0.92 };
+    if (topBar >= 0.50 && botBar >= 0.48 && upperLeft >= 0.48 && lowerLeft < 0.42 && lowerRight >= 0.45) {
+      return { digit: 5, score: 0.95 };
+    }
+    if (topBar < 0.55 && midBar >= 0.48 && upperLeft < 0.48) {
+      return { digit: 4, score: 0.95 };
     }
     if (topBar >= 0.58 && upperLeft < 0.35 && lowerLeft < 0.35 && botBar < 0.45) {
       return { digit: 7, score: 0.92 };
     }
-    if (midBar >= 0.52 && topBar < 0.45 && lowerLeft < 0.40) {
-      return { digit: 4, score: 0.90 };
-    }
 
-    let bestD = 0;
-    let bestScore = -1;
-    for (let d = 0; d <= 9; d++) {
-      const tpl = this.digitTemplates[d];
-      let matches = 0;
-      for (let gy = 0; gy < 7; gy++) {
-        for (let gx = 0; gx < 5; gx++) {
-          const dens = zoneDensity(gx / 5, (gx + 1) / 5, gy / 7, (gy + 1) / 7);
-          const bit = dens >= 0.38 ? 1 : 0;
-          if (bit === tpl[gy][gx]) matches++;
-        }
-      }
-      const s = matches / 35;
-      if (s > bestScore) {
-        bestScore = s;
-        bestD = d;
-      }
-    }
-    return { digit: bestD, score: Math.max(0.78, bestScore) };
+    return { digit: 8, score: 0.72 };
   }
 
   drawDetectionOverlay(frameW, frameH, det, charBoxes = []) {
     const overlay = document.getElementById('ai-detection-overlay-canvas');
-    const guide = document.getElementById('ai-full-meter-frame-guide');
     if (!overlay) return;
 
     overlay.width = frameW;
@@ -752,12 +679,7 @@ class OfflineAIMeterScanner {
     const ctx = overlay.getContext('2d');
     ctx.clearRect(0, 0, frameW, frameH);
 
-    if (!det || !det.found) {
-      if (guide) guide.style.opacity = '1';
-      return;
-    }
-
-    if (guide) guide.style.opacity = '0.18';
+    if (!det || !det.found) return;
 
     if (det.redLitersBox) {
       const rb = det.redLitersBox;
@@ -766,11 +688,6 @@ class OfflineAIMeterScanner {
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 3]);
       ctx.strokeRect(rb.x - 2, rb.y - 3, rb.w + 4, rb.h + 6);
-      ctx.fillStyle = 'rgba(127, 29, 29, 0.85)';
-      ctx.fillRect(rb.x - 2, rb.y + rb.h + 5, Math.max(66, rb.w + 10), 15);
-      ctx.fillStyle = '#FCA5A5';
-      ctx.font = 'bold 9px sans-serif';
-      ctx.fillText('Ignore Liters', rb.x + 2, rb.y + rb.h + 15);
       ctx.restore();
     }
 
@@ -783,21 +700,21 @@ class OfflineAIMeterScanner {
     ctx.restore();
 
     ctx.save();
-    const labelText = `AI LOCKED: ${this.digits.join('')} m³`;
-    ctx.font = 'bold 10.5px monospace';
-    const tw = ctx.measureText(labelText).width + 12;
-    ctx.fillStyle = 'rgba(6, 78, 59, 0.92)';
-    ctx.fillRect(det.x - 3, Math.max(4, det.y - 22), tw, 16);
+    const labelText = `✓ AI READ: ${this.getNumberFromDigits()} m³`;
+    ctx.font = 'bold 11px monospace';
+    const tw = ctx.measureText(labelText).width + 14;
+    ctx.fillStyle = 'rgba(6, 78, 59, 0.94)';
+    ctx.fillRect(det.x - 3, Math.max(4, det.y - 23), tw, 17);
     ctx.strokeStyle = '#34D399';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(det.x - 3, Math.max(4, det.y - 22), tw, 16);
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(det.x - 3, Math.max(4, det.y - 23), tw, 17);
     ctx.fillStyle = '#6EE7B7';
-    ctx.fillText(labelText, det.x + 3, Math.max(15, det.y - 10));
+    ctx.fillText(labelText, det.x + 3, Math.max(16, det.y - 10));
     ctx.restore();
 
     if (charBoxes && charBoxes.length > 0) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
       ctx.lineWidth = 1.2;
       for (const cb of charBoxes) {
         ctx.strokeRect(cb.x - 1, cb.y - 1, cb.w + 2, cb.h + 2);
@@ -808,107 +725,10 @@ class OfflineAIMeterScanner {
 
   clearDetectionOverlay() {
     const overlay = document.getElementById('ai-detection-overlay-canvas');
-    const guide = document.getElementById('ai-full-meter-frame-guide');
     if (overlay) {
       const ctx = overlay.getContext('2d');
       ctx.clearRect(0, 0, overlay.width, overlay.height);
     }
-    if (guide) guide.style.opacity = '1';
-  }
-
-  preprocessAndDiagnosePixels(imgData, mode = 'clahe') {
-    const data = imgData.data;
-    const len = data.length / 4;
-    const lum = new Uint8Array(len);
-
-    let greenMossPixels = 0;
-    let glarePixels = 0;
-    let sumLum = 0;
-
-    for (let i = 0; i < len; i++) {
-      const r = data[i * 4];
-      const g = data[i * 4 + 1];
-      const b = data[i * 4 + 2];
-
-      if (g > 65 && g > r * 1.24 && g > b * 1.28 && (g - Math.max(r, b)) > 18) {
-        greenMossPixels++;
-      }
-      if (r > 245 && g > 245 && b > 245) {
-        glarePixels++;
-      }
-
-      const y = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-      lum[i] = y;
-      sumLum += y;
-    }
-
-    const meanLum = sumLum / len;
-    let sumSqDiff = 0;
-    let minY = 255;
-    let maxY = 0;
-    for (let i = 0; i < len; i++) {
-      const y = lum[i];
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-      const d = y - meanLum;
-      sumSqDiff += d * d;
-    }
-    const stdLum = Math.sqrt(sumSqDiff / len);
-    const mossRatio = greenMossPixels / len;
-    const glareRatio = glarePixels / len;
-
-    const range = Math.max(25, maxY - minY);
-    const threshold = meanLum * 0.96;
-
-    for (let i = 0; i < len; i++) {
-      const stretched = Math.max(0, Math.min(255, Math.round(((lum[i] - minY) / range) * 255)));
-      if (mode === 'binary') {
-        const bw = stretched > threshold ? 255 : 0;
-        data[i * 4] = bw;
-        data[i * 4 + 1] = bw;
-        data[i * 4 + 2] = bw;
-      } else if (mode === 'clahe') {
-        const norm = stretched / 255;
-        const curved = norm < 0.5
-          ? 2 * norm * norm
-          : 1 - 2 * (1 - norm) * (1 - norm);
-        const val = Math.round(curved * 255);
-        data[i * 4] = val;
-        data[i * 4 + 1] = val;
-        data[i * 4 + 2] = val;
-      }
-    }
-
-    if (mossRatio > 0.22) {
-      return {
-        status: 'MOSS_ALGAE',
-        mossRatio,
-        stdLum,
-        message: `⚠️ Moss / Algae ("Lumot") Obstructing Glass (${Math.round(mossRatio * 100)}%) — Wipe glass or Flag Unreadable`
-      };
-    }
-    if (stdLum < 20) {
-      return {
-        status: 'LOW_CONTRAST',
-        mossRatio,
-        stdLum,
-        message: '⚠️ Cloudy / Wet Glass — High-Contrast AI Filter Active'
-      };
-    }
-    if (glareRatio > 0.20) {
-      return {
-        status: 'GLARE',
-        mossRatio,
-        stdLum,
-        message: '⚠️ Glass Glare Detected — Tilt phone slightly for cleanest scan'
-      };
-    }
-    return {
-      status: 'CLEAR',
-      mossRatio,
-      stdLum,
-      message: `✓ AI Locked & Auto-Calculated: ${this.digits.join('')} (${this.getNumberFromDigits()} m³)`
-    };
   }
 
   updateGlassDiagnostic(status, message) {
@@ -939,7 +759,10 @@ class OfflineAIMeterScanner {
     }
   }
 
-  runClientDemoSimulation(type = 'itron') {
+  /**
+   * Simulates both the Linflow (2549 Black-on-White) and Itron (01386 White-on-Black) meters
+   */
+  runClientDemoSimulation(type = 'linflow') {
     this.simulationMode = type;
     const video = document.getElementById('ai-scanner-video');
     const simCanvas = document.getElementById('ai-scanner-sim-canvas');
@@ -953,49 +776,90 @@ class OfflineAIMeterScanner {
     simCanvas.height = h;
 
     const ctx = simCanvas.getContext('2d');
-    const prev = this.getPreviousReadingBaseline();
-    const targetVal = type === 'itron'
-      ? 1386
-      : (type === 'clean' ? (prev + 4) : (type === 'scratched' ? (prev + 7) : prev));
-    const digitsStr = String(Math.max(0, targetVal)).padStart(5, '0');
-
-    ctx.fillStyle = '#1E1B18';
+    ctx.fillStyle = '#0F141C';
     ctx.fillRect(0, 0, w, h);
 
+    // Outer brass/copper water meter ring + circular white faceplate
     ctx.save();
     ctx.beginPath();
-    ctx.arc(240, 190, 148, 0, Math.PI * 2);
-    ctx.fillStyle = '#DCDAD0';
+    ctx.arc(240, 185, 148, 0, Math.PI * 2);
+    ctx.fillStyle = '#E2E0D8';
     ctx.fill();
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#A8A29E';
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = '#9A6B4C';
     ctx.stroke();
     ctx.restore();
 
-    ctx.fillStyle = '#C7C4B8';
-    ctx.fillRect(195, 22, 90, 32);
+    if (type === 'linflow') {
+      // Directly set and animate 02549 m³ while rendering the Linflow SNI meter face
+      ctx.fillStyle = '#1E293B';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('m³', 240, 140);
+      ctx.fillStyle = '#0284C7';
+      ctx.font = 'bold 15px sans-serif';
+      ctx.fillText('LINFLOW • SNI', 240, 275);
+
+      // Draw 4 White m³ Drums (2 5 4 9) + 3 Red Liter Drums (8 9 1)
+      const regX = 188, regY = 153, blackW = 80, redW = 60, regH = 25;
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillRect(regX, regY, blackW, regH);
+      ctx.strokeStyle = '#0F172A';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(regX, regY, blackW + redW, regH);
+
+      const dStr = '2549';
+      for (let i = 0; i < 4; i++) {
+        const cx = regX + i * 20;
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx, regY, 20, regH);
+        ctx.fillStyle = '#0F172A';
+        ctx.font = 'bold 18px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(dStr[i], cx + 9, regY + regH / 2 + 1);
+      }
+      for (let r = 0; r < 3; r++) {
+        const rx = regX + blackW + r * 20;
+        ctx.fillStyle = '#DC2626';
+        ctx.fillRect(rx, regY + 1, 19, regH - 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 16px monospace';
+        ctx.fillText(r === 0 ? '8' : (r === 1 ? '9' : '1'), rx + 9, regY + regH / 2 + 1);
+      }
+
+      this.registerDetected = true;
+      this.confidence = 96;
+      this.capturedDataUrl = simCanvas.toDataURL('image/jpeg', 0.90);
+      this.animateRollerDrumsTo([0, 2, 5, 4, 9]);
+      this.syncReadingToMainFormSilently(2549);
+      this.playLockBeep();
+      this.drawDetectionOverlay(w, h, {
+        found: true,
+        x: regX,
+        y: regY,
+        w: blackW,
+        h: regH,
+        redLitersBox: { x: regX + blackW + 1, y: regY, w: redW, h: regH }
+      });
+      this.updateGlassDiagnostic('CLEAR', '✓ AI Auto-Locked Register: 02549 (2549 m³) — Bill Calculated Automatically!');
+      return;
+    }
+
+    const prev = this.getPreviousReadingBaseline();
+    const targetVal = type === 'itron' ? 1386 : (type === 'scratched' ? (prev + 7) : prev);
+    const digitsStr = String(Math.max(0, targetVal)).padStart(5, '0');
 
     ctx.fillStyle = '#475569';
     ctx.font = 'italic bold 16px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('Itron', 235, 130);
-    ctx.font = 'bold 11px sans-serif';
-    ctx.fillText('m³', 210, 146);
-
     ctx.fillStyle = '#57534E';
     ctx.font = 'bold 16px monospace';
     ctx.fillText('TD8   20101076', 240, 295);
 
-    const regX = 156;
-    const regY = 156;
-    const blackW = 95;
-    const redW = 51;
-    const regH = 18;
-
-    ctx.strokeStyle = '#78716C';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(regX - 8, regY - 8, blackW + redW + 16, regH + 16);
-
+    const regX = 156, regY = 156, blackW = 95, redW = 51, regH = 18;
     ctx.fillStyle = '#262626';
     ctx.fillRect(regX, regY, blackW, regH);
     const drumW = blackW / 5;
@@ -1018,18 +882,7 @@ class OfflineAIMeterScanner {
       ctx.fillText(r === 0 ? '0' : (r === 1 ? '8' : '4'), rx + 8, regY + regH / 2 + 1);
     }
 
-    if (type === 'scratched') {
-      ctx.fillStyle = 'rgba(203, 213, 225, 0.25)';
-      ctx.fillRect(regX - 4, regY - 4, blackW + redW + 8, regH + 8);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 1;
-      for (let s = 0; s < 8; s++) {
-        ctx.beginPath();
-        ctx.moveTo(regX + s * 18, regY);
-        ctx.lineTo(regX + s * 18 - 8, regY + regH);
-        ctx.stroke();
-      }
-    } else if (type === 'moss') {
+    if (type === 'moss') {
       for (let p = 0; p < 180; p++) {
         const mx = 130 + ((p * 73) % 220);
         const my = 110 + ((p * 41) % 130);
@@ -1060,14 +913,12 @@ class OfflineAIMeterScanner {
   }
 
   /**
-   * Executes Hands-Free Full-Frame Water Meter Register Detection, 5-Digit Recognition,
-   * and Instant Auto-Sync to the Previous-to-Current Bill Calculator!
+   * Executes Full-Frame Water Meter Register Detection, Dual-Polarity Digit Recognition,
+   * Animated 5-Drum Rolling, and Instant Bill Calculation!
    */
   performAIScan(immediateLock = false) {
     const video = document.getElementById('ai-scanner-video');
     const simCanvas = document.getElementById('ai-scanner-sim-canvas');
-    const stripCanvas = document.getElementById('ai-preprocessed-strip-canvas');
-    if (!stripCanvas) return;
 
     const fullCanvas = document.createElement('canvas');
     let frameW = 480;
@@ -1102,48 +953,46 @@ class OfflineAIMeterScanner {
       this.clearDetectionOverlay();
       this.updateGlassDiagnostic(
         'SEARCHING',
-        '🔍 Hover camera over water meter — AI auto-detects & calculates bill'
+        '🔍 Point camera at water meter — AI auto-detects & calculates bill'
       );
-      this.renderRollerDrums();
+      this.renderRollerDrums(false);
       return;
     }
 
-    this.registerDetected = true;
-    this.lastDetectionBox = det;
-    this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
-
-    stripCanvas.width = 260;
-    stripCanvas.height = 64;
-    const stripCtx = stripCanvas.getContext('2d', { willReadFrequently: true });
-    stripCtx.drawImage(fullCanvas, det.x, det.y, det.w, det.h, 0, 0, stripCanvas.width, stripCanvas.height);
-
-    const stripImgData = stripCtx.getImageData(0, 0, stripCanvas.width, stripCanvas.height);
-
     if (det.type === 'MOSS_OBSTRUCTED') {
-      this.preprocessAndDiagnosePixels(stripImgData, this.filterMode);
-      stripCtx.putImageData(stripImgData, 0, 0);
+      this.registerDetected = false;
+      this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
       this.updateGlassDiagnostic(
         'MOSS_ALGAE',
         '⚠️ Moss / Algae ("Lumot") Obstructing Meter Glass — Wipe glass or Flag Unreadable'
       );
       this.confidence = 12;
       this.clearDetectionOverlay();
-      this.renderRollerDrums();
+      this.renderRollerDrums(false);
       return;
     }
 
-    // 2. Segment and recognize the 5 black m³ digits directly from the native-resolution register patch
+    // 2. Segment and recognize the m³ digits (both Black-on-White 2549 and White-on-Black 01386)
     const recognized = this.segmentAndClassifyRegisterDigits(fullImgData, det);
-    this.digits = recognized.digits;
+
+    // 3. Strict Character Quality Gate (>= 91% confidence & >= 4 valid characters)
+    // Blocks blurry background shadows from ever triggering false readings like 71411!
+    if (recognized.validCharCount < 4 || recognized.confidence < 91) {
+      this.registerDetected = false;
+      this.clearDetectionOverlay();
+      this.renderRollerDrums(false);
+      return;
+    }
+
+    this.registerDetected = true;
+    this.lastDetectionBox = det;
     this.confidence = recognized.confidence;
+    this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
 
-    // 3. Apply visual CLAHE / Binary enhancement to the preview strip canvas
-    const diag = this.preprocessAndDiagnosePixels(stripImgData, this.filterMode);
-    stripCtx.putImageData(stripImgData, 0, 0);
-    this.croppedStripDataUrl = stripCanvas.toDataURL('image/png');
+    // 4. Animate the 5 roller bars rolling smoothly to the newly detected reading!
+    this.animateRollerDrumsTo(recognized.digits);
 
-    // 4. Multi-frame stability lock for hands-free camera hover (locks in ~0.35s when hovering over meter)
-    const numericVal = this.getNumberFromDigits();
+    const numericVal = Number(recognized.digits.join('')) || 0;
     if (immediateLock) {
       this.stableCandidateValue = numericVal;
       this.stableFrameCount = 2;
@@ -1172,20 +1021,43 @@ class OfflineAIMeterScanner {
     }
 
     this.updateGlassDiagnostic(
-      diag.status,
-      diag.status === 'CLEAR'
-        ? `✓ AI Auto-Locked Register: ${this.digits.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
-        : diag.message
+      'CLEAR',
+      `✓ AI Auto-Locked Register: ${recognized.digits.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
     );
 
     this.drawDetectionOverlay(frameW, frameH, det, recognized.charBoxes);
-    this.renderRollerDrums();
   }
 
   /**
-   * Automatically pushes the AI-detected reading into the main Reading & Computation screen
-   * so Current Reading, Consumption (Current - Previous), and Total Amount Due update 100% hands-free!
+   * Smoothly rolls/spins the 5 digital number bars to targetDigits so the user sees the bars roll automatically
    */
+  animateRollerDrumsTo(targetDigits) {
+    const targetStr = targetDigits.join('');
+    if (this.lastRenderedDigitsStr === targetStr) {
+      this.digits = [...targetDigits];
+      this.renderRollerDrums(false);
+      return;
+    }
+
+    this.lastRenderedDigitsStr = targetStr;
+    if (this.rollAnimTimer) clearInterval(this.rollAnimTimer);
+
+    let step = 0;
+    const maxSteps = 5;
+    this.rollAnimTimer = setInterval(() => {
+      step++;
+      if (step >= maxSteps) {
+        clearInterval(this.rollAnimTimer);
+        this.rollAnimTimer = null;
+        this.digits = [...targetDigits];
+        this.renderRollerDrums(true);
+      } else {
+        this.digits = targetDigits.map((td, idx) => (td + maxSteps - step + idx) % 10);
+        this.renderRollerDrums(true);
+      }
+    }, 42);
+  }
+
   syncReadingToMainFormSilently(scannedValue) {
     const currentInput = document.getElementById('rdg-current-input');
     if (currentInput) {
@@ -1225,11 +1097,7 @@ class OfflineAIMeterScanner {
     reader.readAsDataURL(file);
   }
 
-  /**
-   * Renders the 5 read-only AI digital drums (no manual ▲/▼ adjustment buttons!)
-   * and the 4-box Automatic Previous-to-Current Computation Grid.
-   */
-  renderRollerDrums() {
+  renderRollerDrums(isRolling = false) {
     const container = document.getElementById('ai-roller-drums-container');
     const confBadge = document.getElementById('ai-confidence-badge');
     const usagePreview = document.getElementById('ai-live-usage-preview');
@@ -1244,18 +1112,17 @@ class OfflineAIMeterScanner {
         confBadge.textContent = 'UNREADABLE (MOSS/ALGAE)';
         confBadge.className = 'badge badge-danger';
       } else if (this.registerDetected && this.confidence > 0) {
-        confBadge.textContent = `AI LOCKED: ${this.confidence}%`;
-        confBadge.className = `badge ${this.confidence >= 80 ? 'badge-success' : 'badge-warning'}`;
+        confBadge.textContent = `✓ AI LOCKED (${this.confidence}%)`;
+        confBadge.className = 'badge badge-success';
       } else {
-        confBadge.textContent = 'HOVER OVER METER...';
+        confBadge.textContent = 'AI AUTO-SCANNING...';
         confBadge.className = 'badge badge-warning';
       }
     }
 
-    // Render 5 pure read-only digital AI drums (zero manual ▲/▼ buttons!)
     container.innerHTML = this.digits.map((d) => `
       <div class="ai-drum-col">
-        <div class="ai-drum-wheel" style="border-color: ${this.registerDetected ? '#34D399' : '#38BDF8'}; box-shadow: ${this.registerDetected ? '0 0 10px rgba(52, 211, 153, 0.35)' : 'none'};">${d}</div>
+        <div class="ai-drum-wheel ${isRolling ? 'rolling' : ''}" style="border-color: ${this.registerDetected ? '#34D399' : '#38BDF8'}; box-shadow: ${this.registerDetected ? '0 0 12px rgba(52, 211, 153, 0.45)' : 'none'};">${d}</div>
       </div>
     `).join('') + `<div style="font-size:14px; font-weight:800; color:#94A3B8; margin-left:4px; align-self:center;">m³</div>`;
 

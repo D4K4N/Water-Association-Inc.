@@ -3232,9 +3232,9 @@ button[disabled].btn-disabled-safety {
 .ai-viewfinder-wrap {
   position: relative;
   width: 100%;
-  height: 230px;
+  height: 285px;
   background: #06090F;
-  border: 1px solid rgba(56, 189, 248, 0.35);
+  border: 1.5px solid rgba(56, 189, 248, 0.45);
   border-radius: var(--radius-sm);
   overflow: hidden;
   margin-bottom: 8px;
@@ -3244,7 +3244,7 @@ button[disabled].btn-disabled-safety {
 #ai-scanner-sim-canvas {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   background: #06090F;
   display: block;
 }
@@ -3254,7 +3254,7 @@ button[disabled].btn-disabled-safety {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   pointer-events: none;
   z-index: 2;
 }
@@ -3267,8 +3267,17 @@ button[disabled].btn-disabled-safety {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 8px;
-  background: radial-gradient(circle at center, transparent 58%, rgba(5, 8, 15, 0.52) 100%);
+  padding: 10px;
+}
+
+@keyframes aiDrumRollIn {
+  0% { transform: translateY(-16px) scale(0.92); opacity: 0.3; }
+  60% { transform: translateY(3px) scale(1.04); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.ai-drum-wheel.rolling {
+  animation: aiDrumRollIn 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ai-full-meter-frame-guide {

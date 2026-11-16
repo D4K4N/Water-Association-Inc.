@@ -11,9 +11,9 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '2.6.0-AI';
-    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 26;
-    this.cacheName = 'dicklum-water-ai-v26';
+    this.localVersion = '3.0.0-AI';
+    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 30;
+    this.cacheName = 'dicklum-water-ai-v30';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'main';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}/ai-scanner`;
@@ -100,6 +100,14 @@ class DicklumOtaUpdater {
         if (e.data && e.data.type === 'CACHE_UPDATED') {
           this.updateStatusBadge('OFFLINE READY', 'badge-success');
         }
+      });
+
+      // Automatically reload once when a newer Service Worker takes control
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
       });
 
       this.updateStatusBadge('100% OFFLINE READY', 'badge-success');

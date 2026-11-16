@@ -331,19 +331,13 @@ class OfflineAIMeterScanner {
       };
     }
 
-    let bestBand = null;
-    let inBand = false;
-    let bandStart = -1;
-    let bandEnd = -1;
-    let redMinX = 9999;
-    let redMaxX = 0;
-
-    const yMinSearch = Math.floor(h * 0.15);
-    const yMaxSearch = Math.floor(h * 0.82);
+    const validRows = [];
+    const yMinSearch = Math.floor(h * 0.12);
+    const yMaxSearch = Math.floor(h * 0.88);
 
     for (let y = yMinSearch; y < yMaxSearch; y++) {
       const redXs = [];
-      for (let x = Math.floor(w * 0.32); x < Math.floor(w * 0.82); x++) {
+      for (let x = Math.floor(w * 0.30); x < Math.floor(w * 0.90); x++) {
         if (pureRed[y * w + x]) redXs.push(x);
       }
 
@@ -351,7 +345,7 @@ class OfflineAIMeterScanner {
       if (redXs.length >= 10) {
         let curMin = redXs[0], curMax = redXs[0], curCnt = 1;
         for (let k = 1; k < redXs.length; k++) {
-          if (redXs[k] - redXs[k - 1] <= 18) {
+          if (redXs[k] - redXs[k - 1] <= 22) {
             curMax = redXs[k];
             curCnt++;
           } else {
@@ -363,103 +357,137 @@ class OfflineAIMeterScanner {
       }
 
       const redSpan = rMax - rMin;
-      let leftContrastSpan = 0;
-      let leftEdges = 0;
-
-      if (rowRed >= Math.floor(w * 0.024) && redSpan >= Math.floor(w * 0.04) && redSpan <= Math.floor(w * 0.24)) {
-        const checkLeftStart = Math.max(8, rMin - Math.floor(w * 0.20));
-        let minL = 255, maxL = 0;
+      const fillRatio = redSpan > 0 ? (rowRed / redSpan) : 0;
+      if (rowRed >= Math.floor(w * 0.024) && redSpan >= Math.floor(w * 0.04) && redSpan <= Math.floor(w * 0.38) && fillRatio >= 0.40) {
+        const lookLeftW = Math.min(Math.floor(w * 0.48), Math.max(Math.floor(w * 0.20), Math.round(redSpan * 1.45)));
+        const checkLeftStart = Math.max(6, rMin - lookLeftW);
+        let minL = 255, maxL = 0, edges = 0;
+        const step = redSpan > Math.floor(w * 0.24) ? 5 : 2;
         for (let x = checkLeftStart; x < rMin - 2; x++) {
           const l = lum[y * w + x];
           if (l < minL) minL = l;
           if (l > maxL) maxL = l;
-          if (x > checkLeftStart && Math.abs(l - lum[y * w + x - 2]) > 22) {
-            leftEdges++;
+          if (x >= checkLeftStart + step && Math.abs(l - lum[y * w + x - step]) > 22) {
+            edges++;
           }
         }
-        leftContrastSpan = maxL - minL;
-      }
-
-      if (rowRed >= Math.floor(w * 0.024) && leftContrastSpan >= 32 && leftEdges >= 5) {
-        if (!inBand) {
-          inBand = true;
-          bandStart = y;
-          redMinX = rMin;
-          redMaxX = rMax;
+        const minEdges = redSpan > Math.floor(w * 0.24) ? 2 : 5;
+        if ((maxL - minL) >= 32 && edges >= minEdges) {
+          validRows.push({ y, rMin, rMax, rowRed, redSpan, edges });
         }
-        bandEnd = y;
-        if (rMin < redMinX) redMinX = rMin;
-        if (rMax > redMaxX) redMaxX = rMax;
-      } else if (inBand && (y - bandEnd) > 3) {
-        const bandH = bandEnd - bandStart + 1;
-        if (bandH >= Math.floor(h * 0.024) && bandH <= Math.floor(h * 0.16)) {
-          bestBand = { bandStart, bandEnd, redMinX, redMaxX };
-          break;
-        }
-        inBand = false;
       }
     }
 
-    if (!bestBand) return { found: false };
-
-    const regY1 = Math.max(0, bestBand.bandStart + 1);
-    const regY2 = Math.min(h - 1, bestBand.bandEnd + 1);
-    const regH = regY2 - regY1 + 1;
-    const regX2 = bestBand.redMinX - 2;
-
-    // Determine whether the m³ drums to the left of regX2 are BLACK_ON_WHITE (e.g. Linflow 2549)
-    // or WHITE_ON_BLACK (e.g. Itron 01386)
-    let stripLumSum = 0, stripCnt = 0;
-    let darkPixels = 0, brightPixels = 0;
-    const sampleLeft = Math.max(10, regX2 - Math.round(regH * 4.2));
-    for (let y = regY1 + 2; y <= regY2 - 2; y++) {
-      for (let x = sampleLeft; x < regX2 - 2; x++) {
-        const l = lum[y * w + x];
-        stripLumSum += l;
-        stripCnt++;
-        if (l < 110) darkPixels++;
-        if (l > 140) brightPixels++;
+    // Group contiguous validRows whose left edge rMin forms a straight vertical boundary
+    const bands = [];
+    let curBand = null;
+    for (const r of validRows) {
+      if (!curBand) {
+        curBand = { rows: [r], yStart: r.y, yEnd: r.y };
+      } else if (r.y - curBand.yEnd <= 3 && Math.abs(r.rMin - curBand.rows[curBand.rows.length - 1].rMin) <= 10) {
+        curBand.rows.push(r);
+        curBand.yEnd = r.y;
+      } else {
+        bands.push(curBand);
+        curBand = { rows: [r], yStart: r.y, yEnd: r.y };
       }
     }
-    const stripMean = stripLumSum / Math.max(1, stripCnt);
-    const polarity = (brightPixels > darkPixels || stripMean >= 122) ? 'BLACK_ON_WHITE' : 'WHITE_ON_BLACK';
+    if (curBand) bands.push(curBand);
 
-    let regX1 = Math.max(10, regX2 - Math.round(regH * 5.5));
+    let bestBox = null;
+    let bestScore = -1;
 
-    if (polarity === 'WHITE_ON_BLACK') {
-      const startScanLeft = Math.max(20, regX2 - Math.floor(w * 0.185));
-      for (let x = startScanLeft; x >= Math.floor(w * 0.12); x--) {
-        let winLumSum = 0, winCount = 0;
-        for (let wx = x - 6; wx <= x; wx++) {
-          for (let y = regY1; y <= regY2; y++) {
-            winLumSum += lum[y * w + wx];
-            winCount++;
+    for (const b of bands) {
+      const bandH = b.yEnd - b.yStart + 1;
+      if (bandH < Math.floor(h * 0.022) || bandH > Math.floor(h * 0.55)) continue;
+
+      const sortedMin = b.rows.map(r => r.rMin).sort((a, z) => a - z);
+      const sortedMax = b.rows.map(r => r.rMax).sort((a, z) => a - z);
+      const rMin = sortedMin[Math.floor(sortedMin.length * 0.50)];
+      const rMax = sortedMax[Math.floor(sortedMax.length * 0.50)];
+      const redSpan = rMax - rMin;
+
+      if (bandH < redSpan * 0.22) continue;
+
+      let devSum = 0;
+      for (const r of b.rows) devSum += Math.abs(r.rMin - rMin);
+      const meanDev = devSum / b.rows.length;
+      if (meanDev > 7.0) continue;
+
+      const regY1 = Math.max(0, b.yStart + 1);
+      const regY2 = Math.min(h - 1, b.yEnd + 1);
+      const regH = regY2 - regY1 + 1;
+      const regX2 = rMin - 2;
+
+      const sampleLums = [];
+      const sampleLeft = Math.max(8, regX2 - Math.round(regH * 3.0));
+      const ySample1 = regY1 + Math.floor(regH * 0.35);
+      const ySample2 = Math.max(ySample1 + 1, regY2 - Math.floor(regH * 0.10));
+      for (let y = ySample1; y <= ySample2; y++) {
+        for (let x = sampleLeft; x < regX2 - 2; x++) {
+          sampleLums.push(lum[y * w + x]);
+        }
+      }
+      sampleLums.sort((a, z) => a - z);
+      const p50 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.50)] : 100;
+      const polarity = p50 >= 122 ? 'BLACK_ON_WHITE' : 'WHITE_ON_BLACK';
+
+      let regX1 = Math.max(4, regX2 - Math.round(regH * 5.5));
+      if (polarity === 'WHITE_ON_BLACK') {
+        const startScanLeft = Math.max(20, regX2 - Math.floor(w * 0.185));
+        for (let x = startScanLeft; x >= Math.floor(w * 0.08); x--) {
+          let winLumSum = 0, winCount = 0;
+          for (let wx = x - 6; wx <= x; wx++) {
+            for (let y = regY1; y <= regY2; y++) {
+              winLumSum += lum[y * w + wx];
+              winCount++;
+            }
+          }
+          if ((winLumSum / Math.max(1, winCount)) > 138) {
+            regX1 = x + 1;
+            break;
           }
         }
-        if ((winLumSum / Math.max(1, winCount)) > 138) {
-          regX1 = x + 1;
-          break;
+        let aboveLumSum = 0, aboveCnt = 0;
+        for (let y = Math.max(2, regY1 - Math.floor(h * 0.05)); y < regY1 - 2; y++) {
+          for (let x = regX1; x < regX2; x += 2) {
+            aboveLumSum += lum[y * w + x];
+            aboveCnt++;
+          }
         }
+        const aboveMean = aboveCnt > 0 ? (aboveLumSum / aboveCnt) : 0;
+        if (aboveMean < 110) continue;
+      } else {
+        regX1 = Math.max(8, regX2 - Math.round(regH * 3.04));
       }
-    } else {
-      regX1 = Math.max(10, regX2 - Math.round(regH * 3.16));
-    }
 
-    return {
-      found: true,
-      type: polarity === 'WHITE_ON_BLACK' ? 'ITRON_WHITE_ON_BLACK' : 'LINFLOW_BLACK_ON_WHITE',
-      polarity,
-      x: regX1,
-      y: regY1,
-      w: regX2 - regX1 + 1,
-      h: regY2 - regY1 + 1,
-      redLitersBox: {
-        x: bestBand.redMinX,
+      const candidateBox = {
+        found: true,
+        type: polarity === 'WHITE_ON_BLACK' ? 'ITRON_WHITE_ON_BLACK' : 'LINFLOW_BLACK_ON_WHITE',
+        polarity,
+        x: regX1,
         y: regY1,
-        w: bestBand.redMaxX - bestBand.redMinX + 1,
-        h: regY2 - regY1 + 1
+        w: regX2 - regX1 + 1,
+        h: regH,
+        redLitersBox: {
+          x: rMin,
+          y: regY1,
+          w: rMax - rMin + 1,
+          h: regH
+        }
+      };
+
+      const ocr = this.segmentAndClassifyRegisterDigits(imgData, candidateBox);
+      if (ocr.validCharCount < 4) continue;
+
+      const score = ocr.confidence * 2.0 + ocr.validCharCount * 10 - meanDev * 8.0;
+      if (score > bestScore) {
+        bestScore = score;
+        bestBox = candidateBox;
       }
-    };
+    }
+
+    return bestBox || { found: false };
   }
 
   /**

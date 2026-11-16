@@ -34,6 +34,10 @@ class OfflineAIMeterScanner {
     this.stableFrameCount = 0;
     this.recentReadings = [];
     this.hasAutoAppliedCurrentLock = false;
+    this.tesseractWorker = null;
+    this.tesseractReady = false;
+    this.tesseractBusy = false;
+    this.lastTesseractRunAt = 0;
     this.glassStatus = 'SEARCHING';
     this.glassMessage = '🔍 Point camera at water meter — AI auto-detects & calculates bill';
     this.capturedDataUrl = null;
@@ -65,6 +69,29 @@ class OfflineAIMeterScanner {
 
   init() {
     this.bindEvents();
+    // Pre-warm 100% offline Tesseract LSTM WASM OCR worker in the background
+    setTimeout(() => this.initTesseractWorker(), 800);
+  }
+
+  async initTesseractWorker() {
+    if (this.tesseractWorker || typeof window.Tesseract === 'undefined') return;
+    try {
+      const worker = await window.Tesseract.createWorker('eng', 1, {
+        workerPath: './vendor/tesseract/worker.min.js',
+        corePath: './vendor/tesseract/tesseract-core-lstm.wasm.js',
+        langPath: './vendor/tesseract',
+        workerBlobURL: false,
+        cacheMethod: 'none'
+      });
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789',
+        tessedit_pageseg_mode: '7'
+      });
+      this.tesseractWorker = worker;
+      this.tesseractReady = true;
+    } catch (err) {
+      console.warn('Tesseract offline worker fallback to fast vision:', err);
+    }
   }
 
   bindEvents() {
@@ -168,10 +195,12 @@ class OfflineAIMeterScanner {
     this.stableFrameCount = 0;
     this.recentReadings = [];
     this.hasAutoAppliedCurrentLock = false;
+    this.tesseractBusy = false;
+    this.lastTesseractRunAt = 0;
 
     const prev = this.getPreviousReadingBaseline();
-    this.setDigitsFromNumber(prev);
-    this.lastRenderedDigitsStr = this.digits.join('');
+    this.digits = [0, 0, 0, 0, 0];
+    this.lastRenderedDigitsStr = '00000';
     this.confidence = 0;
     this.clearDetectionOverlay();
     this.renderRollerDrums(false);
@@ -187,6 +216,7 @@ class OfflineAIMeterScanner {
       consumerBadge.textContent = `${window.app.activeConsumer.name} • ${meterNo}`;
     }
 
+    this.initTesseractWorker();
     await this.startCameraStream();
   }
 
@@ -333,9 +363,11 @@ class OfflineAIMeterScanner {
       };
     }
 
+    // Pass A: Red-Anchored Register Detector (Solid Red Drums OR Red-Ink-on-White Digits like 0315 | 797)
     const validRows = [];
     const yMinSearch = Math.floor(h * 0.12);
     const yMaxSearch = Math.floor(h * 0.88);
+    const minRedPerRow = Math.max(4, Math.floor(w * 0.008));
 
     for (let y = yMinSearch; y < yMaxSearch; y++) {
       const redXs = [];
@@ -344,10 +376,10 @@ class OfflineAIMeterScanner {
       }
 
       let rMin = 9999, rMax = 0, rowRed = 0;
-      if (redXs.length >= 10) {
+      if (redXs.length >= minRedPerRow) {
         let curMin = redXs[0], curMax = redXs[0], curCnt = 1;
         for (let k = 1; k < redXs.length; k++) {
-          if (redXs[k] - redXs[k - 1] <= 22) {
+          if (redXs[k] - redXs[k - 1] <= 26) {
             curMax = redXs[k];
             curCnt++;
           } else {
@@ -360,7 +392,7 @@ class OfflineAIMeterScanner {
 
       const redSpan = rMax - rMin;
       const fillRatio = redSpan > 0 ? (rowRed / redSpan) : 0;
-      if (rowRed >= Math.floor(w * 0.024) && redSpan >= Math.floor(w * 0.04) && redSpan <= Math.floor(w * 0.38) && fillRatio >= 0.40) {
+      if (rowRed >= minRedPerRow && redSpan >= Math.floor(w * 0.04) && redSpan <= Math.floor(w * 0.38) && fillRatio >= 0.12) {
         const lookLeftW = Math.min(Math.floor(w * 0.48), Math.max(Math.floor(w * 0.20), Math.round(redSpan * 1.45)));
         const checkLeftStart = Math.max(6, rMin - lookLeftW);
         let minL = 255, maxL = 0, edges = 0;
@@ -386,7 +418,7 @@ class OfflineAIMeterScanner {
     for (const r of validRows) {
       if (!curBand) {
         curBand = { rows: [r], yStart: r.y, yEnd: r.y };
-      } else if (r.y - curBand.yEnd <= 3 && Math.abs(r.rMin - curBand.rows[curBand.rows.length - 1].rMin) <= 10) {
+      } else if (r.y - curBand.yEnd <= 4 && Math.abs(r.rMin - curBand.rows[curBand.rows.length - 1].rMin) <= 12) {
         curBand.rows.push(r);
         curBand.yEnd = r.y;
       } else {
@@ -414,16 +446,16 @@ class OfflineAIMeterScanner {
       let devSum = 0;
       for (const r of b.rows) devSum += Math.abs(r.rMin - rMin);
       const meanDev = devSum / b.rows.length;
-      if (meanDev > 7.0) continue;
+      if (meanDev > 8.5) continue;
 
       const regY1 = Math.max(0, b.yStart + 1);
       const regY2 = Math.min(h - 1, b.yEnd + 1);
       const regH = regY2 - regY1 + 1;
       const regX2 = rMin - 2;
 
-      // True 3-drum red liter registers are wider than tall (redSpan >= 1.6 * regH);
+      // True 3-drum red liter registers are wider than tall (redSpan >= 1.45 * regH);
       // circular red flow pointer dials are ~1:1 square (reject them!).
-      if ((rMax - rMin + 1) < regH * 1.60) continue;
+      if ((rMax - rMin + 1) < regH * 1.45) continue;
 
       const sampleLums = [];
       const sampleLeft = Math.max(8, regX2 - Math.round(regH * 3.0));
@@ -505,7 +537,46 @@ class OfflineAIMeterScanner {
       }
     }
 
-    return bestBox || { found: false };
+    if (bestBox) return bestBox;
+
+    // Pass B: Polarity-Split Register Detector (e.g. 0053 | 59 with white m³ drums on left & black liter drums on right)
+    for (let yCenter = Math.floor(h * 0.24); yCenter < Math.floor(h * 0.68); yCenter += 4) {
+      const bandH = Math.max(18, Math.round(h * 0.075));
+      const y1 = Math.max(4, yCenter - Math.floor(bandH / 2));
+      const y2 = Math.min(h - 4, y1 + bandH);
+      for (let splitX = Math.floor(w * 0.48); splitX < Math.floor(w * 0.78); splitX += 6) {
+        let leftWhite = 0, leftCnt = 0, leftEdges = 0;
+        let rightDark = 0, rightCnt = 0;
+        const leftStart = Math.max(8, splitX - Math.round(bandH * 3.1));
+        const rightEnd = Math.min(w - 8, splitX + Math.round(bandH * 1.5));
+        for (let y = y1; y < y2; y += 2) {
+          for (let x = leftStart; x < splitX - 2; x += 2) {
+            if (lum[y * w + x] > 142) leftWhite++;
+            if (x > leftStart + 2 && Math.abs(lum[y * w + x] - lum[y * w + x - 2]) > 24) leftEdges++;
+            leftCnt++;
+          }
+          for (let x = splitX + 2; x < rightEnd; x += 2) {
+            if (lum[y * w + x] < 105) rightDark++;
+            rightCnt++;
+          }
+        }
+        if (leftCnt > 20 && rightCnt > 10 &&
+            (leftWhite / leftCnt) >= 0.45 && (rightDark / rightCnt) >= 0.55 && leftEdges >= 18) {
+          return {
+            found: true,
+            type: 'POLARITY_SPLIT_REGISTER',
+            polarity: 'BLACK_ON_WHITE',
+            x: leftStart,
+            y: y1,
+            w: splitX - leftStart,
+            h: bandH,
+            redLitersBox: { x: splitX, y: y1, w: rightEnd - splitX, h: bandH }
+          };
+        }
+      }
+    }
+
+    return { found: false };
   }
 
   /**
@@ -1031,15 +1102,23 @@ class OfflineAIMeterScanner {
       return;
     }
 
-    // 2. Segment and recognize the m³ digits (both Black-on-White 2549 and White-on-Black 01386)
+    // 2. Segment and recognize the m³ digits (both Black-on-White and White-on-Black)
     const recognized = this.segmentAndClassifyRegisterDigits(fullImgData, det);
+
+    // 2B. Run 100% Offline Neural LSTM OCR (Tesseract.js WASM) asynchronously on the upscaled crop
+    //     when ready, so any meter font (0315, 2549, 01386, 0053) is read with neural accuracy!
+    const now = Date.now();
+    if (this.tesseractReady && !this.tesseractBusy && (immediateLock || now - this.lastTesseractRunAt >= 320)) {
+      this.lastTesseractRunAt = now;
+      this.runTesseractOnRegisterCrop(fullCanvas, det, frameW, frameH, immediateLock);
+    }
 
     // 3. Strict Character Quality Gate (>= 91% confidence & >= 4 valid characters)
     // Blocks blurry background shadows from ever triggering false readings like 71411!
     if (recognized.validCharCount < 4 || recognized.confidence < 91) {
-      this.registerDetected = false;
-      this.clearDetectionOverlay();
-      this.renderRollerDrums(false);
+      this.registerDetected = true;
+      this.lastDetectionBox = det;
+      this.drawDetectionOverlay(frameW, frameH, det, []);
       return;
     }
 
@@ -1112,6 +1191,89 @@ class OfflineAIMeterScanner {
     );
 
     this.drawDetectionOverlay(frameW, frameH, det, recognized.charBoxes);
+  }
+
+  /**
+   * 100% Offline Neural LSTM OCR (Tesseract.js WASM) on the auto-cropped m³ register strip.
+   * Upscales 3x, adds a clean white border, and normalizes to crisp black-on-white digits.
+   */
+  async runTesseractOnRegisterCrop(fullCanvas, det, frameW, frameH, immediateLock = false) {
+    if (!this.tesseractWorker || this.tesseractBusy) return;
+    this.tesseractBusy = true;
+    try {
+      const scale = 3;
+      const pad = 18;
+      const cropW = Math.max(40, det.w * scale);
+      const cropH = Math.max(24, det.h * scale);
+      const prepCanvas = document.createElement('canvas');
+      prepCanvas.width = cropW + pad * 2;
+      prepCanvas.height = cropH + pad * 2;
+      const ctx = prepCanvas.getContext('2d');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, prepCanvas.width, prepCanvas.height);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(fullCanvas, det.x, det.y, det.w, det.h, pad, pad, cropW, cropH);
+
+      // Invert if WHITE_ON_BLACK (e.g. Itron 01386) and apply adaptive contrast stretch
+      const imgData = ctx.getImageData(0, 0, prepCanvas.width, prepCanvas.height);
+      const d = imgData.data;
+      let minL = 255, maxL = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const l = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+        if (l < minL) minL = l;
+        if (l > maxL) maxL = l;
+      }
+      const span = Math.max(24, maxL - minL);
+      for (let i = 0; i < d.length; i += 4) {
+        const rawL = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+        let norm = Math.max(0, Math.min(255, Math.round(((rawL - minL) / span) * 255)));
+        if (det.polarity === 'WHITE_ON_BLACK') norm = 255 - norm;
+        const val = norm > 138 ? 255 : (norm < 95 ? 0 : norm);
+        d[i] = val; d[i + 1] = val; d[i + 2] = val;
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      const { data: res } = await this.tesseractWorker.recognize(prepCanvas);
+      const digitsOnly = (res && res.text ? res.text : '').replace(/\D/g, '');
+      const conf = res && typeof res.confidence === 'number' ? Math.round(res.confidence) : 0;
+
+      if (digitsOnly.length >= 4 && digitsOnly.length <= 5 && conf >= 58 && this.isOpen) {
+        const padded = digitsOnly.padStart(5, '0').slice(-5).split('').map(Number);
+        this.confidence = Math.max(88, Math.min(99, conf));
+        this.registerDetected = true;
+        this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
+        this.recentReadings.push(padded);
+        if (this.recentReadings.length > 4) this.recentReadings.shift();
+
+        this.animateRollerDrumsTo(padded);
+        const numericVal = Number(padded.join('')) || 0;
+        this.syncReadingToMainFormSilently(numericVal);
+
+        if ((immediateLock || this.recentReadings.length >= 2) && !this.hasAutoAppliedCurrentLock) {
+          this.hasAutoAppliedCurrentLock = true;
+          this.playLockBeep();
+          if (window.app && typeof window.app.showToast === 'function') {
+            const prev = this.getPreviousReadingBaseline();
+            const usage = Math.max(0, numericVal - prev);
+            const estDue = usage === 0 ? 0 : (100 + Math.max(0, usage - 10) * 15);
+            window.app.showToast(
+              `✓ Neural AI Read: ${numericVal} m³ • Usage: ${usage} m³ • Bill: ₱${estDue.toFixed(2)}`,
+              2800
+            );
+          }
+        }
+
+        this.updateGlassDiagnostic(
+          'CLEAR',
+          `✓ Neural AI Locked: ${padded.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
+        );
+        this.drawDetectionOverlay(frameW, frameH, det, []);
+      }
+    } catch (err) {
+      // Silent fallback to fast topological OCR
+    } finally {
+      this.tesseractBusy = false;
+    }
   }
 
   /**

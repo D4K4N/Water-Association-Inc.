@@ -6,7 +6,7 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '31';
+const CACHE_VERSION = '32';
 const CACHE_NAME = `dicklum-water-ai-v${CACHE_VERSION}`;
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v2';
 
@@ -23,6 +23,10 @@ const ASSETS_TO_CACHE = [
   './vendor/maplibre/maplibre-gl.css',
   './vendor/maplibre/maplibre-gl.js',
   './vendor/html2pdf/html2pdf.bundle.min.js',
+  './vendor/tesseract/tesseract.min.js',
+  './vendor/tesseract/worker.min.js',
+  './vendor/tesseract/tesseract-core-lstm.wasm.js',
+  './vendor/tesseract/eng.traineddata.gz',
   './js/icons.js',
   './js/db.js',
   './js/sampleData.js',

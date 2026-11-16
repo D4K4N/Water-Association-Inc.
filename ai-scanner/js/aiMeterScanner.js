@@ -32,6 +32,7 @@ class OfflineAIMeterScanner {
     this.lastDetectionBox = null;
     this.stableCandidateValue = null;
     this.stableFrameCount = 0;
+    this.recentReadings = [];
     this.hasAutoAppliedCurrentLock = false;
     this.glassStatus = 'SEARCHING';
     this.glassMessage = '🔍 Point camera at water meter — AI auto-detects & calculates bill';
@@ -165,6 +166,7 @@ class OfflineAIMeterScanner {
     this.lastDetectionBox = null;
     this.stableCandidateValue = null;
     this.stableFrameCount = 0;
+    this.recentReadings = [];
     this.hasAutoAppliedCurrentLock = false;
 
     const prev = this.getPreviousReadingBaseline();
@@ -419,6 +421,10 @@ class OfflineAIMeterScanner {
       const regH = regY2 - regY1 + 1;
       const regX2 = rMin - 2;
 
+      // True 3-drum red liter registers are wider than tall (redSpan >= 1.6 * regH);
+      // circular red flow pointer dials are ~1:1 square (reject them!).
+      if ((rMax - rMin + 1) < regH * 1.60) continue;
+
       const sampleLums = [];
       const sampleLeft = Math.max(8, regX2 - Math.round(regH * 3.0));
       const ySample1 = regY1 + Math.floor(regH * 0.35);
@@ -429,11 +435,23 @@ class OfflineAIMeterScanner {
         }
       }
       sampleLums.sort((a, z) => a - z);
+      const p10 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.10)] : 0;
       const p50 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.50)] : 100;
-      const polarity = p50 >= 122 ? 'BLACK_ON_WHITE' : 'WHITE_ON_BLACK';
+      const p90 = sampleLums.length > 0 ? sampleLums[Math.floor(sampleLums.length * 0.90)] : 255;
+      const relP50 = (p50 - p10) / Math.max(20, p90 - p10);
+      const polarity = relP50 >= 0.50 ? 'BLACK_ON_WHITE' : 'WHITE_ON_BLACK';
 
       let regX1 = Math.max(4, regX2 - Math.round(regH * 5.5));
       if (polarity === 'WHITE_ON_BLACK') {
+        let rollerSum = 0, rollerCnt = 0;
+        for (let y = regY1; y <= regY2; y++) {
+          for (let x = Math.max(8, regX2 - Math.round(regH * 4.0)); x < regX2; x += 2) {
+            rollerSum += lum[y * w + x]; rollerCnt++;
+          }
+        }
+        const rollerMean = rollerCnt > 0 ? (rollerSum / rollerCnt) : 95;
+        const edgeThresh = Math.min(220, rollerMean + 34);
+
         const startScanLeft = Math.max(20, regX2 - Math.floor(w * 0.185));
         for (let x = startScanLeft; x >= Math.floor(w * 0.08); x--) {
           let winLumSum = 0, winCount = 0;
@@ -443,7 +461,7 @@ class OfflineAIMeterScanner {
               winCount++;
             }
           }
-          if ((winLumSum / Math.max(1, winCount)) > 138) {
+          if ((winLumSum / Math.max(1, winCount)) > edgeThresh) {
             regX1 = x + 1;
             break;
           }
@@ -456,7 +474,7 @@ class OfflineAIMeterScanner {
           }
         }
         const aboveMean = aboveCnt > 0 ? (aboveLumSum / aboveCnt) : 0;
-        if (aboveMean < 110) continue;
+        if (aboveMean < rollerMean + 12) continue;
       } else {
         regX1 = Math.max(8, regX2 - Math.round(regH * 3.04));
       }
@@ -499,12 +517,25 @@ class OfflineAIMeterScanner {
     const { width: W, data } = imgData;
     const { x: bx, y: by, w: bw, h: bh, polarity } = box;
 
+    // Mean-shift exposure normalization: cancels camera brightness/glare shifts
+    let lumSum = 0;
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        const idx = ((by + y) * W + (bx + x)) * 4;
+        lumSum += Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+      }
+    }
+    const patchMean = lumSum / Math.max(1, bw * bh);
+    const targetMean = polarity === 'BLACK_ON_WHITE' ? 121 : 119;
+    const lumShift = Math.abs(targetMean - patchMean) > 4 ? Math.round(targetMean - patchMean) : 0;
+
     const patch = [];
     for (let y = 0; y < bh; y++) {
       const row = new Int16Array(bw);
       for (let x = 0; x < bw; x++) {
         const idx = ((by + y) * W + (bx + x)) * 4;
-        const l = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+        const rawL = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+        const l = Math.max(0, Math.min(255, rawL + lumShift));
         row[x] = polarity === 'BLACK_ON_WHITE' ? (255 - l) : l;
       }
       patch.push(row);
@@ -1017,13 +1048,38 @@ class OfflineAIMeterScanner {
     this.confidence = recognized.confidence;
     this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
 
-    // 4. Animate the 5 roller bars rolling smoothly to the newly detected reading!
-    this.animateRollerDrumsTo(recognized.digits);
+    // 4. Temporal Multi-Frame Consensus Voting (prevents single-frame jitter like 48111 -> 01114 -> 24811)
+    let finalDigits = recognized.digits;
+    if (!immediateLock) {
+      this.recentReadings.push(recognized.digits);
+      if (this.recentReadings.length > 5) this.recentReadings.shift();
 
-    const numericVal = Number(recognized.digits.join('')) || 0;
+      if (this.recentReadings.length >= 2) {
+        finalDigits = [0, 1, 2, 3, 4].map((pos) => {
+          const counts = {};
+          let bestD = recognized.digits[pos];
+          let bestC = 0;
+          for (const r of this.recentReadings) {
+            const d = r[pos];
+            counts[d] = (counts[d] || 0) + 1;
+            if (counts[d] > bestC) {
+              bestC = counts[d];
+              bestD = d;
+            }
+          }
+          return bestD;
+        });
+      }
+    } else {
+      this.recentReadings = [recognized.digits];
+    }
+
+    this.animateRollerDrumsTo(finalDigits);
+
+    const numericVal = Number(finalDigits.join('')) || 0;
     if (immediateLock) {
       this.stableCandidateValue = numericVal;
-      this.stableFrameCount = 2;
+      this.stableFrameCount = 3;
     } else if (this.stableCandidateValue === numericVal) {
       this.stableFrameCount++;
     } else {
@@ -1031,8 +1087,10 @@ class OfflineAIMeterScanner {
       this.stableFrameCount = 1;
     }
 
-    // 5. Immediately sync the detected Current Reading into the underlying Reading Form & calculate bill!
-    this.syncReadingToMainFormSilently(numericVal);
+    // 5. Sync to main Reading Form only when stabilized (>= 2 matching frames)
+    if (this.stableFrameCount >= 2) {
+      this.syncReadingToMainFormSilently(numericVal);
+    }
 
     if (this.stableFrameCount >= 2 && !this.hasAutoAppliedCurrentLock) {
       this.hasAutoAppliedCurrentLock = true;
@@ -1050,7 +1108,7 @@ class OfflineAIMeterScanner {
 
     this.updateGlassDiagnostic(
       'CLEAR',
-      `✓ AI Auto-Locked Register: ${recognized.digits.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
+      `✓ AI Auto-Locked Register: ${finalDigits.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
     );
 
     this.drawDetectionOverlay(frameW, frameH, det, recognized.charBoxes);

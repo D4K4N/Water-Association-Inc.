@@ -30,9 +30,12 @@ class OfflineAIMeterScanner {
     this.confidence = 0;
     this.registerDetected = false;
     this.lastDetectionBox = null;
+    this.trackedBox = null;
+    this.missedTrackFrames = 0;
     this.stableCandidateValue = null;
     this.stableFrameCount = 0;
     this.recentReadings = [];
+    this.tesseractReadings = [];
     this.hasAutoAppliedCurrentLock = false;
     this.tesseractWorker = null;
     this.tesseractReady = false;
@@ -191,9 +194,12 @@ class OfflineAIMeterScanner {
     this.simulationMode = null;
     this.registerDetected = false;
     this.lastDetectionBox = null;
+    this.trackedBox = null;
+    this.missedTrackFrames = 0;
     this.stableCandidateValue = null;
     this.stableFrameCount = 0;
     this.recentReadings = [];
+    this.tesseractReadings = [];
     this.hasAutoAppliedCurrentLock = false;
     this.tesseractBusy = false;
     this.lastTesseractRunAt = 0;
@@ -508,10 +514,48 @@ class OfflineAIMeterScanner {
         const aboveMean = aboveCnt > 0 ? (aboveLumSum / aboveCnt) : 0;
         if (aboveMean < rollerMean + 12) continue;
       } else {
-        regX1 = Math.max(8, regX2 - Math.round(regH * 3.04));
+        // Dynamically detect 4-drum (e.g. 2549 | 891) vs 5-drum (e.g. 03157 | 977) black-on-white registers
+        const span4 = Math.max(Math.round(regH * 3.04), Math.round(redSpan * 1.35));
+        const span5 = Math.max(Math.round(regH * 3.85), Math.round(redSpan * 1.72));
+        const x4 = Math.max(6, regX2 - span4);
+        const x5 = Math.max(6, regX2 - span5);
+        let has5thDrum = false;
+        if (x4 - x5 >= 10) {
+          // If a vertical dark frame border exists near x4, the register has 4 m³ drums (don't cross the border!)
+          let hasDarkBorderAt4 = false;
+          for (let x = Math.max(0, x4 - 6); x <= Math.min(w - 1, x4 + 3); x++) {
+            let colSum = 0, colCnt = 0;
+            for (let y = ySample1; y <= ySample2; y++) {
+              colSum += lum[y * w + x];
+              colCnt++;
+            }
+            if (colCnt > 0 && (colSum / colCnt) < Math.max(115, p50 * 0.65)) {
+              hasDarkBorderAt4 = true;
+              break;
+            }
+          }
+          if (!hasDarkBorderAt4) {
+            let bright5 = 0, dark5 = 0, edges5 = 0, cnt5 = 0;
+            const mid5Start = x5 + Math.floor((x4 - x5) * 0.18);
+            const mid5End = x4 - Math.floor((x4 - x5) * 0.22);
+            for (let y = ySample1; y <= ySample2; y++) {
+              for (let x = mid5Start; x < mid5End; x++) {
+                const l = lum[y * w + x];
+                if (l > p50 * 0.85) bright5++;
+                if (l < 105) dark5++;
+                if (x > mid5Start + 1 && Math.abs(l - lum[y * w + x - 1]) > 28) edges5++;
+                cnt5++;
+              }
+            }
+            if (cnt5 > 0 && (bright5 / cnt5) >= 0.38 && (dark5 / cnt5) >= 0.08 && edges5 >= 10) {
+              has5thDrum = true;
+            }
+          }
+        }
+        regX1 = has5thDrum ? x5 : x4;
       }
 
-      const candidateBox = {
+      let candidateBox = {
         found: true,
         type: polarity === 'WHITE_ON_BLACK' ? 'ITRON_WHITE_ON_BLACK' : 'LINFLOW_BLACK_ON_WHITE',
         polarity,
@@ -527,7 +571,19 @@ class OfflineAIMeterScanner {
         }
       };
 
-      const ocr = this.segmentAndClassifyRegisterDigits(imgData, candidateBox);
+      let ocr = this.segmentAndClassifyRegisterDigits(imgData, candidateBox);
+      if (polarity === 'BLACK_ON_WHITE') {
+        const box4 = {
+          ...candidateBox,
+          x: Math.max(8, regX2 - Math.round(regH * 3.04)),
+          w: regX2 - Math.max(8, regX2 - Math.round(regH * 3.04)) + 1
+        };
+        const ocr4 = this.segmentAndClassifyRegisterDigits(imgData, box4);
+        if (ocr4.validCharCount >= 4 && (ocr.validCharCount < 4 || ocr4.confidence > ocr.confidence)) {
+          candidateBox = box4;
+          ocr = ocr4;
+        }
+      }
       if (ocr.validCharCount < 4) continue;
 
       const score = ocr.confidence * 2.0 + ocr.validCharCount * 10 - meanDev * 8.0;
@@ -540,41 +596,142 @@ class OfflineAIMeterScanner {
     if (bestBox) return bestBox;
 
     // Pass B: Polarity-Split Register Detector (e.g. 0053 | 59 with white m³ drums on left & black liter drums on right)
-    for (let yCenter = Math.floor(h * 0.24); yCenter < Math.floor(h * 0.68); yCenter += 4) {
-      const bandH = Math.max(18, Math.round(h * 0.075));
-      const y1 = Math.max(4, yCenter - Math.floor(bandH / 2));
-      const y2 = Math.min(h - 4, y1 + bandH);
-      for (let splitX = Math.floor(w * 0.48); splitX < Math.floor(w * 0.78); splitX += 6) {
-        let leftWhite = 0, leftCnt = 0, leftEdges = 0;
-        let rightDark = 0, rightCnt = 0;
-        const leftStart = Math.max(8, splitX - Math.round(bandH * 3.1));
-        const rightEnd = Math.min(w - 8, splitX + Math.round(bandH * 1.5));
-        for (let y = y1; y < y2; y += 2) {
-          for (let x = leftStart; x < splitX - 2; x += 2) {
-            if (lum[y * w + x] > 142) leftWhite++;
-            if (x > leftStart + 2 && Math.abs(lum[y * w + x] - lum[y * w + x - 2]) > 24) leftEdges++;
-            leftCnt++;
+    let bestSplitBox = null;
+    let bestSplitScore = -1;
+    const splitHeights = [
+      Math.max(16, Math.round(h * 0.065)),
+      Math.max(20, Math.round(h * 0.095)),
+      Math.max(24, Math.round(h * 0.13)),
+      Math.max(28, Math.round(h * 0.175))
+    ];
+    for (const bandH of splitHeights) {
+      for (let yCenter = Math.floor(h * 0.22); yCenter < Math.floor(h * 0.72); yCenter += 4) {
+        const y1 = Math.max(4, yCenter - Math.floor(bandH / 2));
+        const y2 = Math.min(h - 4, y1 + bandH);
+        for (let splitX = Math.floor(w * 0.44); splitX < Math.floor(w * 0.78); splitX += 6) {
+          let leftWhite = 0, leftCnt = 0, leftEdges = 0;
+          let rightDark = 0, rightCnt = 0;
+          const leftStart = Math.max(8, splitX - Math.round(bandH * 3.1));
+          const rightEnd = Math.min(w - 8, splitX + Math.round(bandH * 1.45));
+          for (let y = y1; y < y2; y += 2) {
+            for (let x = leftStart; x < splitX - 2; x += 2) {
+              if (lum[y * w + x] > 142) leftWhite++;
+              if (x > leftStart + 2 && Math.abs(lum[y * w + x] - lum[y * w + x - 2]) > 24) leftEdges++;
+              leftCnt++;
+            }
+            for (let x = splitX + 2; x < rightEnd; x += 2) {
+              if (lum[y * w + x] < 105) rightDark++;
+              rightCnt++;
+            }
           }
-          for (let x = splitX + 2; x < rightEnd; x += 2) {
-            if (lum[y * w + x] < 105) rightDark++;
-            rightCnt++;
+          const lwRatio = leftCnt > 0 ? leftWhite / leftCnt : 0;
+          const rdRatio = rightCnt > 0 ? rightDark / rightCnt : 0;
+          if (leftCnt > 20 && rightCnt > 10 && lwRatio >= 0.45 && rdRatio >= 0.52 && leftEdges >= 18) {
+            // Ensure top & bottom margins outside the slot aren't equally dark (rejects random dark blobs)
+            let borderEdges = 0;
+            for (let x = leftStart; x < splitX; x += 3) {
+              if (y1 >= 4 && Math.abs(lum[y1 * w + x] - lum[(y1 - 4) * w + x]) > 20) borderEdges++;
+              if (y2 + 4 < h && Math.abs(lum[y2 * w + x] - lum[(y2 + 4) * w + x]) > 20) borderEdges++;
+            }
+            const centerBonus = 1 - (Math.abs(yCenter - h * 0.48) / (h * 0.5));
+            const sizeBonus = Math.min(20, (bandH / Math.max(1, h * 0.14)) * 20);
+            const sScore = lwRatio * 40 + rdRatio * 45 + Math.min(35, (leftEdges / Math.max(1, bandH)) * 16) + borderEdges * 0.5 + centerBonus * 12 + sizeBonus;
+            if (sScore > bestSplitScore) {
+              bestSplitScore = sScore;
+              bestSplitBox = {
+                found: true,
+                type: 'POLARITY_SPLIT_REGISTER',
+                polarity: 'BLACK_ON_WHITE',
+                x: leftStart,
+                y: y1,
+                w: splitX - leftStart,
+                h: bandH,
+                redLitersBox: { x: splitX, y: y1, w: rightEnd - splitX, h: bandH }
+              };
+            }
           }
-        }
-        if (leftCnt > 20 && rightCnt > 10 &&
-            (leftWhite / leftCnt) >= 0.45 && (rightDark / rightCnt) >= 0.55 && leftEdges >= 18) {
-          return {
-            found: true,
-            type: 'POLARITY_SPLIT_REGISTER',
-            polarity: 'BLACK_ON_WHITE',
-            x: leftStart,
-            y: y1,
-            w: splitX - leftStart,
-            h: bandH,
-            redLitersBox: { x: splitX, y: y1, w: rightEnd - splitX, h: bandH }
-          };
         }
       }
     }
+    if (bestSplitBox) return bestSplitBox;
+
+    // Pass C: Universal Monochrome Odometer Slot Detector (e.g. 01073 m³ with NO red or black liter drums)
+    let bestMonoBox = null;
+    let bestMonoScore = -1;
+    const monoHeights = [
+      Math.max(18, Math.round(h * 0.07)),
+      Math.max(22, Math.round(h * 0.10)),
+      Math.max(26, Math.round(h * 0.135)),
+      Math.max(30, Math.round(h * 0.175))
+    ];
+    for (const bandH of monoHeights) {
+      const boxW = Math.round(bandH * 3.75);
+      if (boxW > Math.floor(w * 0.65)) continue;
+      for (let y1 = Math.floor(h * 0.22); y1 <= Math.floor(h * 0.66) - bandH; y1 += 6) {
+        const y2 = y1 + bandH;
+        for (let x1 = Math.floor(w * 0.14); x1 <= Math.floor(w * 0.86) - boxW; x1 += 10) {
+          // Sample luminance distribution inside candidate box
+          let minL = 255, maxL = 0, edgeCnt = 0;
+          const cellDark = [0, 0, 0, 0, 0];
+          const cellTotal = [0, 0, 0, 0, 0];
+          const cellW = boxW / 5;
+          for (let y = y1 + 2; y < y2 - 2; y += 2) {
+            for (let x = x1 + 2; x < x1 + boxW - 2; x += 2) {
+              const l = lum[y * w + x];
+              if (l < minL) minL = l;
+              if (l > maxL) maxL = l;
+              if (x > x1 + 4 && Math.abs(l - lum[y * w + x - 2]) > 26) edgeCnt++;
+              const ci = Math.min(4, Math.floor((x - x1) / cellW));
+              cellTotal[ci]++;
+              if (l < 115) cellDark[ci]++;
+            }
+          }
+          if ((maxL - minL) < 55 || maxL < 140 || edgeCnt < 22) continue;
+
+          // Require at least 4 of 5 drum cells to contain balanced digit ink (6%..55%)
+          let activeDrums = 0;
+          for (let c = 0; c < 5; c++) {
+            const ratio = cellTotal[c] > 0 ? cellDark[c] / cellTotal[c] : 0;
+            if (ratio >= 0.06 && ratio <= 0.55) activeDrums++;
+          }
+          if (activeDrums < 4) continue;
+
+          // Reject multi-line text screens (like monitor_screen.rgba) by requiring quieter horizontal bands above & below
+          let aboveEdges = 0, belowEdges = 0;
+          const yAbove = Math.max(2, y1 - Math.max(5, Math.floor(bandH * 0.28)));
+          const yBelow = Math.min(h - 3, y2 + Math.max(5, Math.floor(bandH * 0.28)));
+          for (let x = x1 + 4; x < x1 + boxW - 4; x += 3) {
+            if (Math.abs(lum[yAbove * w + x] - lum[yAbove * w + x - 3]) > 26) aboveEdges++;
+            if (Math.abs(lum[yBelow * w + x] - lum[yBelow * w + x - 3]) > 26) belowEdges++;
+          }
+          const marginQuiet = (aboveEdges + belowEdges) < edgeCnt * 0.65;
+          if (!marginQuiet) continue;
+
+          const candidate = {
+            found: true,
+            type: 'MONO_ODOMETER_REGISTER',
+            polarity: 'BLACK_ON_WHITE',
+            x: x1,
+            y: y1,
+            w: boxW,
+            h: bandH
+          };
+          const ocr = this.segmentAndClassifyRegisterDigits(imgData, candidate);
+          if (ocr.validCharCount < 4 || ocr.confidence < 82) continue;
+
+          const cx = x1 + boxW / 2;
+          const cy = y1 + bandH / 2;
+          const distCenter = Math.hypot(cx - w / 2, cy - h / 2) / Math.hypot(w / 2, h / 2);
+          const sizeBonus = Math.min(24, (bandH / Math.max(1, h * 0.14)) * 24);
+          const mScore = ocr.confidence * 1.5 + activeDrums * 8 + Math.min(30, (edgeCnt / Math.max(1, bandH)) * 12) + sizeBonus - distCenter * 20;
+          if (mScore > bestMonoScore) {
+            bestMonoScore = mScore;
+            bestMonoBox = candidate;
+          }
+        }
+      }
+    }
+    if (bestMonoBox) return bestMonoBox;
 
     return { found: false };
   }
@@ -1074,7 +1231,49 @@ class OfflineAIMeterScanner {
     const fullImgData = fullCtx.getImageData(0, 0, frameW, frameH);
 
     // 1. Automatically locate the water meter register inside the full frame
-    const det = this.detectMeterRegisterInFrame(fullImgData);
+    const rawDet = this.detectMeterRegisterInFrame(fullImgData);
+
+    // 1B. Spatial Box Stabilizer (prevents "dizzy" frame-to-frame jumping)
+    let det = rawDet;
+    if (rawDet.found && rawDet.type !== 'MOSS_OBSTRUCTED') {
+      if (this.trackedBox) {
+        const cx1 = this.trackedBox.x + this.trackedBox.w / 2;
+        const cy1 = this.trackedBox.y + this.trackedBox.h / 2;
+        const cx2 = rawDet.x + rawDet.w / 2;
+        const cy2 = rawDet.y + rawDet.h / 2;
+        const dist = Math.hypot(cx2 - cx1, cy2 - cy1);
+        const wRatio = rawDet.w / Math.max(1, this.trackedBox.w);
+        if (dist <= 48 && wRatio >= 0.65 && wRatio <= 1.55) {
+          this.trackedBox = {
+            ...rawDet,
+            x: Math.round(this.trackedBox.x * 0.6 + rawDet.x * 0.4),
+            y: Math.round(this.trackedBox.y * 0.6 + rawDet.y * 0.4),
+            w: Math.round(this.trackedBox.w * 0.6 + rawDet.w * 0.4),
+            h: Math.round(this.trackedBox.h * 0.6 + rawDet.h * 0.4)
+          };
+          this.missedTrackFrames = 0;
+          det = this.trackedBox;
+        } else if (!immediateLock && this.missedTrackFrames < 3) {
+          this.missedTrackFrames++;
+          det = this.trackedBox;
+        } else {
+          this.trackedBox = { ...rawDet };
+          this.missedTrackFrames = 0;
+          det = this.trackedBox;
+        }
+      } else {
+        this.trackedBox = { ...rawDet };
+        this.missedTrackFrames = 0;
+      }
+    } else if (!rawDet.found) {
+      if (this.trackedBox && !immediateLock && this.missedTrackFrames < 3) {
+        this.missedTrackFrames++;
+        det = this.trackedBox;
+      } else {
+        this.trackedBox = null;
+        this.missedTrackFrames = 0;
+      }
+    }
 
     if (!det.found) {
       this.registerDetected = false;
@@ -1102,19 +1301,31 @@ class OfflineAIMeterScanner {
       return;
     }
 
-    // 2. Segment and recognize the m³ digits (both Black-on-White and White-on-Black)
-    const recognized = this.segmentAndClassifyRegisterDigits(fullImgData, det);
-
-    // 2B. Run 100% Offline Neural LSTM OCR (Tesseract.js WASM) asynchronously on the upscaled crop
-    //     when ready, so any meter font (0315, 2549, 01386, 0053) is read with neural accuracy!
+    // 2. Run 100% Offline Neural LSTM OCR (Tesseract.js WASM) on the locked register crop
     const now = Date.now();
-    if (this.tesseractReady && !this.tesseractBusy && (immediateLock || now - this.lastTesseractRunAt >= 320)) {
+    if (this.tesseractReady && !this.tesseractBusy && (immediateLock || now - this.lastTesseractRunAt >= 260)) {
       this.lastTesseractRunAt = now;
       this.runTesseractOnRegisterCrop(fullCanvas, det, frameW, frameH, immediateLock);
     }
 
+    // When Neural LSTM OCR is active, DO NOT let heuristic template matching overwrite digits!
+    if (this.tesseractReady) {
+      this.registerDetected = true;
+      this.lastDetectionBox = det;
+      this.drawDetectionOverlay(frameW, frameH, det, []);
+      if (this.tesseractReadings.length === 0) {
+        this.updateGlassDiagnostic(
+          'CLEAR',
+          '🎯 Meter Window Locked — Neural AI reading digits...'
+        );
+      }
+      return;
+    }
+
+    // Fallback when Tesseract worker is still booting: strict heuristic OCR
+    const recognized = this.segmentAndClassifyRegisterDigits(fullImgData, det);
+
     // 3. Strict Character Quality Gate (>= 91% confidence & >= 4 valid characters)
-    // Blocks blurry background shadows from ever triggering false readings like 71411!
     if (recognized.validCharCount < 4 || recognized.confidence < 91) {
       this.registerDetected = true;
       this.lastDetectionBox = det;
@@ -1202,54 +1413,97 @@ class OfflineAIMeterScanner {
     this.tesseractBusy = true;
     try {
       const scale = 3;
-      const pad = 18;
-      const cropW = Math.max(40, det.w * scale);
-      const cropH = Math.max(24, det.h * scale);
+      const pad = 22;
+      const cropW = Math.max(48, Math.round(det.w * scale));
+      const cropH = Math.max(28, Math.round(det.h * scale));
+
+      // Step 1: Upscale ONLY the register crop first (no white padding yet!)
+      const rawCanvas = document.createElement('canvas');
+      rawCanvas.width = cropW;
+      rawCanvas.height = cropH;
+      const rawCtx = rawCanvas.getContext('2d');
+      rawCtx.imageSmoothingEnabled = true;
+      rawCtx.drawImage(fullCanvas, det.x, det.y, det.w, det.h, 0, 0, cropW, cropH);
+
+      // Step 2: Percentile contrast stretch (p5..p95) + polarity inversion on raw register pixels ONLY
+      const imgData = rawCtx.getImageData(0, 0, cropW, cropH);
+      const d = imgData.data;
+      const hist = new Int32Array(256);
+      const totalPx = cropW * cropH;
+      for (let i = 0; i < d.length; i += 4) {
+        const l = Math.max(0, Math.min(255, Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])));
+        hist[l]++;
+      }
+      let p5 = 0, p95 = 255, acc = 0;
+      for (let v = 0; v < 256; v++) {
+        acc += hist[v];
+        if (acc <= totalPx * 0.05) p5 = v;
+        if (acc <= totalPx * 0.95) p95 = v;
+      }
+      const span = Math.max(28, p95 - p5);
+      for (let i = 0; i < d.length; i += 4) {
+        const rawL = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+        let norm = Math.max(0, Math.min(255, Math.round(((rawL - p5) / span) * 255)));
+        if (det.polarity === 'WHITE_ON_BLACK') norm = 255 - norm;
+        const val = norm > 142 ? 255 : (norm < 92 ? 0 : norm);
+        d[i] = val; d[i + 1] = val; d[i + 2] = val;
+      }
+      rawCtx.putImageData(imgData, 0, 0);
+
+      // Step 3: Place normalized black-on-white crop inside a clean #FFFFFF quiet border for LSTM
       const prepCanvas = document.createElement('canvas');
       prepCanvas.width = cropW + pad * 2;
       prepCanvas.height = cropH + pad * 2;
       const ctx = prepCanvas.getContext('2d');
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, prepCanvas.width, prepCanvas.height);
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(fullCanvas, det.x, det.y, det.w, det.h, pad, pad, cropW, cropH);
+      ctx.drawImage(rawCanvas, pad, pad);
 
-      // Invert if WHITE_ON_BLACK (e.g. Itron 01386) and apply adaptive contrast stretch
-      const imgData = ctx.getImageData(0, 0, prepCanvas.width, prepCanvas.height);
-      const d = imgData.data;
-      let minL = 255, maxL = 0;
-      for (let i = 0; i < d.length; i += 4) {
-        const l = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-        if (l < minL) minL = l;
-        if (l > maxL) maxL = l;
+      // Show exact AI-normalized register crop in the preview strip
+      const previewEl = document.getElementById('ai-preprocessed-preview');
+      if (previewEl && previewEl.tagName === 'IMG') {
+        previewEl.src = rawCanvas.toDataURL('image/png');
       }
-      const span = Math.max(24, maxL - minL);
-      for (let i = 0; i < d.length; i += 4) {
-        const rawL = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-        let norm = Math.max(0, Math.min(255, Math.round(((rawL - minL) / span) * 255)));
-        if (det.polarity === 'WHITE_ON_BLACK') norm = 255 - norm;
-        const val = norm > 138 ? 255 : (norm < 95 ? 0 : norm);
-        d[i] = val; d[i + 1] = val; d[i + 2] = val;
-      }
-      ctx.putImageData(imgData, 0, 0);
 
       const { data: res } = await this.tesseractWorker.recognize(prepCanvas);
       const digitsOnly = (res && res.text ? res.text : '').replace(/\D/g, '');
       const conf = res && typeof res.confidence === 'number' ? Math.round(res.confidence) : 0;
 
-      if (digitsOnly.length >= 4 && digitsOnly.length <= 5 && conf >= 58 && this.isOpen) {
-        const padded = digitsOnly.padStart(5, '0').slice(-5).split('').map(Number);
+      if (digitsOnly.length >= 4 && digitsOnly.length <= 5 && conf >= 52 && this.isOpen) {
+        const parsed = digitsOnly.padStart(5, '0').slice(-5).split('').map(Number);
+        this.tesseractReadings.push(parsed);
+        if (this.tesseractReadings.length > 4) this.tesseractReadings.shift();
+
+        // 2-frame consensus voting across Neural AI reads
+        let finalDigits = parsed;
+        if (!immediateLock && this.tesseractReadings.length >= 2) {
+          finalDigits = [0, 1, 2, 3, 4].map((pos) => {
+            const counts = {};
+            let bestD = parsed[pos];
+            let bestC = 0;
+            for (const r of this.tesseractReadings) {
+              const dv = r[pos];
+              counts[dv] = (counts[dv] || 0) + 1;
+              if (counts[dv] > bestC) {
+                bestC = counts[dv];
+                bestD = dv;
+              }
+            }
+            return bestD;
+          });
+        }
+
         this.confidence = Math.max(88, Math.min(99, conf));
         this.registerDetected = true;
         this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
-        this.recentReadings.push(padded);
-        if (this.recentReadings.length > 4) this.recentReadings.shift();
 
-        this.animateRollerDrumsTo(padded);
-        const numericVal = Number(padded.join('')) || 0;
-        this.syncReadingToMainFormSilently(numericVal);
+        this.animateRollerDrumsTo(finalDigits);
+        const numericVal = Number(finalDigits.join('')) || 0;
+        if (immediateLock || this.tesseractReadings.length >= 2) {
+          this.syncReadingToMainFormSilently(numericVal);
+        }
 
-        if ((immediateLock || this.recentReadings.length >= 2) && !this.hasAutoAppliedCurrentLock) {
+        if ((immediateLock || this.tesseractReadings.length >= 2) && !this.hasAutoAppliedCurrentLock) {
           this.hasAutoAppliedCurrentLock = true;
           this.playLockBeep();
           if (window.app && typeof window.app.showToast === 'function') {
@@ -1265,7 +1519,7 @@ class OfflineAIMeterScanner {
 
         this.updateGlassDiagnostic(
           'CLEAR',
-          `✓ Neural AI Locked: ${padded.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
+          `✓ Neural AI Locked: ${finalDigits.join('')} (${numericVal} m³) — Bill Calculated Automatically!`
         );
         this.drawDetectionOverlay(frameW, frameH, det, []);
       }

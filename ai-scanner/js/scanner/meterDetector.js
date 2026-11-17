@@ -331,16 +331,18 @@
           const rollerMean = rollerCnt > 0 ? (rollerSum / rollerCnt) : 95;
           const edgeThresh = Math.min(220, rollerMean + 34);
 
-          const startScanLeft = Math.max(20, regX2 - Math.floor(w * 0.185));
-          for (let x = startScanLeft; x >= Math.floor(w * 0.08); x--) {
-            let winLumSum = 0, winCount = 0;
+          const startScanLeft = Math.max(20, regX2 - Math.max(Math.round(regH * 3.15), Math.floor(w * 0.185)));
+          const minScanLeft = Math.max(Math.floor(w * 0.06), regX2 - Math.round(regH * 6.5));
+          regX1 = Math.max(minScanLeft, regX2 - Math.round(regH * 4.2));
+          for (let x = startScanLeft; x >= minScanLeft; x--) {
+            let brightCnt = 0, winCount = 0;
             for (let wx = x - 6; wx <= x; wx++) {
               for (let y = regY1; y <= regY2; y++) {
-                winLumSum += lum[y * w + wx];
+                if (lum[y * w + wx] > edgeThresh) brightCnt++;
                 winCount++;
               }
             }
-            if ((winLumSum / Math.max(1, winCount)) > edgeThresh) {
+            if (winCount > 0 && (brightCnt / winCount) >= 0.65) {
               regX1 = x + 1;
               break;
             }

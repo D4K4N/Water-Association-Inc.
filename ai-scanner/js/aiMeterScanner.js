@@ -354,10 +354,14 @@ class OfflineAIMeterScanner {
     }
 
     if (!evalRes.stable) {
+      if (evalRes.reading && /^\d{5}$/.test(evalRes.reading) && !/^1+$/.test(evalRes.reading)) {
+        this.digits = evalRes.reading.split('').map(Number);
+        this.renderRollerDrums(false);
+      }
       this.drawDetectionOverlay(frameW, frameH, det, charBoxes);
       this.updateGlassDiagnostic(
         'CLEAR',
-        `🎯 ${this.STATES.VERIFYING} — Candidate: ${evalRes.reading || '...'} m³ (${evalRes.matchStreak || 1}/2)`
+        `🎯 ${this.STATES.VERIFYING} — Candidate: ${evalRes.reading || '...'} m³ (${evalRes.matchStreak || 1}/${this.validator ? this.validator.requiredMatches : 3})`
       );
       return;
     }

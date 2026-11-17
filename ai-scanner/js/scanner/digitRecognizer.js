@@ -449,7 +449,19 @@
       const digits = [];
       const charBoxes = [];
       let sumScore = 0;
-      const validCells = validBlobs.slice(0, 5);
+      let validCells = validBlobs.slice(0, 5);
+      // If blob extraction missed a drum (e.g. Sensus 620 09702), fall back to 5 equal drum cells
+      if (validCells.length !== 5 && bw >= bh * 3.2) {
+        validCells = [];
+        const cellW = bw / 5;
+        for (let k = 0; k < 5; k++) {
+          let tx1 = Math.max(1, Math.floor(k * cellW + cellW * 0.10));
+          let tx2 = Math.min(bw - 2, Math.floor((k + 1) * cellW - cellW * 0.10));
+          while (tx1 < tx2 && colBrightCount[tx1] < 2) tx1++;
+          while (tx2 > tx1 && colBrightCount[tx2] < 2) tx2--;
+          validCells.push({ x1: tx1, x2: tx2, w: Math.max(4, tx2 - tx1 + 1) });
+        }
+      }
       for (const c of validCells) {
         const res = this.classifySingleRollerBlob(patch, c.x1, c.x2, yStart, yEnd, inkThresh);
         digits.push(res.digit);

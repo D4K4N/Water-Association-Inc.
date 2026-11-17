@@ -11,9 +11,9 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '4.0.0-AI';
-    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 40;
-    this.cacheName = 'dicklum-water-ai-v40';
+    this.localVersion = '4.1.0-AI';
+    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 41;
+    this.cacheName = 'dicklum-water-ai-v41';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'ai-scanner';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}/ai-scanner`;

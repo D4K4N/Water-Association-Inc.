@@ -160,16 +160,75 @@
       }
       rawCtx.putImageData(imgData, 0, 0);
 
-      const pad = 24;
-      const prepCanvas = document.createElement('canvas');
-      prepCanvas.width = targetW + pad * 2;
-      prepCanvas.height = targetH + pad * 2;
-      const prepCtx = prepCanvas.getContext('2d');
-      prepCtx.fillStyle = '#FFFFFF';
-      prepCtx.fillRect(0, 0, prepCanvas.width, prepCanvas.height);
-      prepCtx.drawImage(rawCanvas, pad, pad);
+      // Step 2B: Dynamically segment individual digit columns (4, 5, or 6 digits — never hardcoded!)
+      const colInk = new Int16Array(targetW);
+      const yTop = Math.floor(targetH * 0.12);
+      const yBot = Math.ceil(targetH * 0.88);
+      for (let x = 0; x < targetW; x++) {
+        let cnt = 0;
+        for (let y = yTop; y < yBot; y++) {
+          if (d[(y * targetW + x) * 4] < 110) cnt++;
+        }
+        colInk[x] = cnt;
+      }
 
-      return { rawCanvas, prepCanvas, imgData };
+      const segs = [];
+      let inSeg = false, segStart = 0;
+      for (let x = 1; x < targetW - 1; x++) {
+        if (colInk[x] >= 2) {
+          if (!inSeg) { inSeg = true; segStart = x; }
+        } else if (inSeg) {
+          if (x - segStart >= 3) segs.push({ x1: segStart, x2: x - 1 });
+          inSeg = false;
+        }
+      }
+      if (inSeg && targetW - 1 - segStart >= 3) segs.push({ x1: segStart, x2: targetW - 2 });
+
+      // Filter out tiny noise specks and split merged double-wide blobs if needed
+      const cleanSegs = [];
+      const maxDigitW = Math.max(12, Math.floor(targetW * 0.24));
+      for (const s of segs) {
+        const sw = s.x2 - s.x1 + 1;
+        if (sw > maxDigitW && sw < targetW * 0.65) {
+          const parts = Math.max(2, Math.round(sw / Math.max(10, targetW / 5)));
+          const pw = sw / parts;
+          for (let k = 0; k < parts; k++) {
+            cleanSegs.push({ x1: Math.round(s.x1 + k * pw), x2: Math.round(s.x1 + (k + 1) * pw - 1) });
+          }
+        } else if (sw >= 3 && sw <= targetW * 0.45) {
+          cleanSegs.push(s);
+        }
+      }
+
+      const pad = 22;
+      const digitGap = 18;
+      let prepCanvas;
+      if (cleanSegs.length >= 4 && cleanSegs.length <= 6) {
+        // Assemble clean spaced digits with wide white gaps (zero drum dividers!)
+        const totalSegW = cleanSegs.reduce((acc, s) => acc + (s.x2 - s.x1 + 1), 0);
+        prepCanvas = document.createElement('canvas');
+        prepCanvas.width = totalSegW + (cleanSegs.length - 1) * digitGap + pad * 2;
+        prepCanvas.height = targetH + pad * 2;
+        const prepCtx = prepCanvas.getContext('2d');
+        prepCtx.fillStyle = '#FFFFFF';
+        prepCtx.fillRect(0, 0, prepCanvas.width, prepCanvas.height);
+        let curX = pad;
+        for (const s of cleanSegs) {
+          const sw = s.x2 - s.x1 + 1;
+          prepCtx.drawImage(rawCanvas, s.x1, 0, sw, targetH, curX, pad, sw, targetH);
+          curX += sw + digitGap;
+        }
+      } else {
+        prepCanvas = document.createElement('canvas');
+        prepCanvas.width = targetW + pad * 2;
+        prepCanvas.height = targetH + pad * 2;
+        const prepCtx = prepCanvas.getContext('2d');
+        prepCtx.fillStyle = '#FFFFFF';
+        prepCtx.fillRect(0, 0, prepCanvas.width, prepCanvas.height);
+        prepCtx.drawImage(rawCanvas, pad, pad);
+      }
+
+      return { rawCanvas, prepCanvas, imgData, segmentedCount: cleanSegs.length, segs: cleanSegs, targetW };
     }
 
     async recognizeWithTesseract(fullCanvas, det, analysisW, analysisH, analysisImgData = null) {
@@ -178,18 +237,17 @@
       }
       this.tesseractBusy = true;
       try {
-        const { rawCanvas, prepCanvas, imgData } = this.prepareNormalizedCrop(fullCanvas, det, analysisW, analysisH);
+        const { rawCanvas, prepCanvas, imgData, segs, targetW } = this.prepareNormalizedCrop(fullCanvas, det, analysisW, analysisH);
         const previewDataUrl = rawCanvas.toDataURL('image/png');
         const { data: res } = await this.tesseractWorker.recognize(prepCanvas);
         const digitsOnly = (res && res.text ? res.text : '').replace(/\D/g, '');
         const conf = res && typeof res.confidence === 'number' ? Math.round(res.confidence) : 0;
 
         const isAllOnes = /^1+$/.test(digitsOnly) && conf < 82;
-        if (digitsOnly.length < 4 || digitsOnly.length > 5 || conf < 35 || isAllOnes) {
-          // If Tesseract got confused by drum divider lines, fall back to topological classifier if high-confidence
+        if (digitsOnly.length < 4 || digitsOnly.length > 6 || conf < 35 || isAllOnes) {
           if (analysisImgData) {
             const topo = this.classifyTopological(analysisImgData, det);
-            if (topo && topo.validCharCount >= 4 && topo.overallConfidence >= 90) {
+            if (topo && topo.validCharCount >= 4 && topo.overallConfidence >= 94) {
               return { ...topo, previewDataUrl };
             }
           }
@@ -207,7 +265,7 @@
 
         const halfFlags = this.detectHalfRolledDrums(imgData, digitsOnly.length);
         const hasHalfRolled = halfFlags.some(Boolean);
-        const paddedStr = digitsOnly.padStart(5, '0').slice(-5);
+        const paddedStr = digitsOnly.length <= 5 ? digitsOnly.padStart(5, '0') : digitsOnly.slice(-5);
         const digitsArr = paddedStr.split('').map(Number);
 
         const digitPredictions = digitsArr.map((d, idx) => ({
@@ -216,15 +274,27 @@
           halfRolled: halfFlags[idx] || false
         }));
 
-        const count = digitsOnly.length;
-        const cellW = det.w / Math.max(1, count);
-        const charBoxes = digitsOnly.split('').map((ch, idx) => ({
-          x: Math.round(det.x + idx * cellW + 1),
-          y: det.y + 2,
-          w: Math.max(6, Math.round(cellW - 2)),
-          h: Math.max(8, det.h - 4),
-          digit: Number(ch)
-        }));
+        // Map individual green digit boxes directly from detected digit segments when available
+        let charBoxes;
+        if (segs && segs.length === digitsOnly.length && targetW > 0) {
+          charBoxes = segs.map((s, idx) => ({
+            x: Math.round(det.x + (s.x1 / targetW) * det.w) - 1,
+            y: det.y + 1,
+            w: Math.max(6, Math.round(((s.x2 - s.x1 + 1) / targetW) * det.w) + 2),
+            h: Math.max(8, det.h - 2),
+            digit: Number(digitsOnly[idx])
+          }));
+        } else {
+          const count = digitsOnly.length;
+          const cellW = det.w / Math.max(1, count);
+          charBoxes = digitsOnly.split('').map((ch, idx) => ({
+            x: Math.round(det.x + idx * cellW + 1),
+            y: det.y + 1,
+            w: Math.max(6, Math.round(cellW - 2)),
+            h: Math.max(8, det.h - 2),
+            digit: Number(ch)
+          }));
+        }
 
         return {
           reading: paddedStr,

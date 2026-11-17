@@ -294,7 +294,13 @@ class OfflineAIMeterScanner {
 
     // Fast-path (< 10ms): run high-precision topological classifier first
     const topoRec = this.recognizer.classifyTopological(fullImgData, det);
-    if (topoRec && topoRec.validCharCount >= 4 && topoRec.overallConfidence >= 92 && !/^1+$/.test(topoRec.reading)) {
+    if (
+      topoRec &&
+      topoRec.validCharCount >= 4 &&
+      topoRec.overallConfidence >= 95 &&
+      !/^1+$/.test(topoRec.reading) &&
+      !/^0?8+$/.test(topoRec.reading)
+    ) {
       this._handleRecognitionResult(topoRec, prevBaseline, det, analysisW, analysisH, immediateLock, topoRec.charBoxes);
       return;
     }
@@ -441,18 +447,21 @@ class OfflineAIMeterScanner {
 
     if (charBoxes && charBoxes.length > 0) {
       ctx.save();
-      ctx.font = 'bold 9.5px monospace';
+      ctx.font = 'bold 10px monospace';
       for (const cb of charBoxes) {
-        ctx.strokeStyle = 'rgba(56, 189, 248, 0.95)';
-        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = '#22C55E';
+        ctx.lineWidth = 2.0;
+        ctx.shadowColor = 'rgba(34, 197, 94, 0.75)';
+        ctx.shadowBlur = 5;
         ctx.strokeRect(cb.x - 1, cb.y - 1, cb.w + 2, cb.h + 2);
         if (cb.digit !== undefined && cb.digit !== null) {
+          ctx.shadowBlur = 0;
           const dLabel = String(cb.digit);
           const lx = cb.x + Math.max(0, Math.floor((cb.w - 11) / 2));
-          const ly = Math.min(frameH - 3, cb.y + cb.h + 11);
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+          const ly = Math.min(frameH - 3, cb.y + cb.h + 12);
+          ctx.fillStyle = 'rgba(6, 78, 59, 0.94)';
           ctx.fillRect(lx - 2, ly - 9, 13, 11);
-          ctx.fillStyle = '#38BDF8';
+          ctx.fillStyle = '#6EE7B7';
           ctx.fillText(dLabel, lx + 1, ly);
         }
       }

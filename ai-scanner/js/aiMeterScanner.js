@@ -305,7 +305,7 @@ class OfflineAIMeterScanner {
         this.validator.setState(this.STATES.READING);
         const rec = await this.recognizer.recognizeWithTesseract(fullCanvas, det, analysisW, analysisH, fullImgData);
         if (rec && this.isOpen) {
-          this._handleRecognitionResult(rec, prevBaseline, det, analysisW, analysisH, immediateLock);
+          this._handleRecognitionResult(rec, prevBaseline, det, analysisW, analysisH, immediateLock, rec.charBoxes || []);
         }
       }
       return;
@@ -441,9 +441,21 @@ class OfflineAIMeterScanner {
 
     if (charBoxes && charBoxes.length > 0) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
-      ctx.lineWidth = 1.2;
-      for (const cb of charBoxes) ctx.strokeRect(cb.x - 1, cb.y - 1, cb.w + 2, cb.h + 2);
+      ctx.font = 'bold 9.5px monospace';
+      for (const cb of charBoxes) {
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.95)';
+        ctx.lineWidth = 1.6;
+        ctx.strokeRect(cb.x - 1, cb.y - 1, cb.w + 2, cb.h + 2);
+        if (cb.digit !== undefined && cb.digit !== null) {
+          const dLabel = String(cb.digit);
+          const lx = cb.x + Math.max(0, Math.floor((cb.w - 11) / 2));
+          const ly = Math.min(frameH - 3, cb.y + cb.h + 11);
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+          ctx.fillRect(lx - 2, ly - 9, 13, 11);
+          ctx.fillStyle = '#38BDF8';
+          ctx.fillText(dLabel, lx + 1, ly);
+        }
+      }
       ctx.restore();
     }
   }

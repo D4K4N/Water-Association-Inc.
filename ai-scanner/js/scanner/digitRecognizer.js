@@ -216,11 +216,22 @@
           halfRolled: halfFlags[idx] || false
         }));
 
+        const count = digitsOnly.length;
+        const cellW = det.w / Math.max(1, count);
+        const charBoxes = digitsOnly.split('').map((ch, idx) => ({
+          x: Math.round(det.x + idx * cellW + 1),
+          y: det.y + 2,
+          w: Math.max(6, Math.round(cellW - 2)),
+          h: Math.max(8, det.h - 4),
+          digit: Number(ch)
+        }));
+
         return {
           reading: paddedStr,
           numericValue: Number(paddedStr),
           digits: digitsArr,
           digitPredictions,
+          charBoxes,
           overallConfidence: Math.max(82, Math.min(99, conf)),
           profileId: det.type || 'LINFLOW_BLACK_ON_WHITE',
           status: hasHalfRolled ? 'HALF_ROLLED' : 'CONFIRMED',

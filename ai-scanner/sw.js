@@ -6,7 +6,7 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '36';
+const CACHE_VERSION = '37';
 const CACHE_NAME = `dicklum-water-ai-v${CACHE_VERSION}`;
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v2';
 
@@ -326,20 +326,43 @@ self.addEventListener('fetch', (e) => {
                          url.pathname.endsWith('/') ||
                          url.pathname.endsWith('/index.html');
 
+    const isAppCode = (isNavigation || url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) &&
+                      !url.pathname.includes('/vendor/');
+
     e.respondWith(
       (async () => {
         const cache = await caches.open(CACHE_NAME);
 
-        // Look up in current cache (ignoring ?v=20 query strings so cached files always hit)
-        let cachedResponse = await cache.match(e.request, { ignoreSearch: true });
-        if (!cachedResponse && isNavigation) {
-          cachedResponse = await cache.match('./index.html', { ignoreSearch: true }) ||
-                           await cache.match('./', { ignoreSearch: true }) ||
-                           await caches.match('./index.html', { ignoreSearch: true });
+        const getCached = async () => {
+          let c = await cache.match(e.request, { ignoreSearch: true });
+          if (!c && isNavigation) {
+            c = await cache.match('./index.html', { ignoreSearch: true }) ||
+                await cache.match('./', { ignoreSearch: true }) ||
+                await caches.match('./index.html', { ignoreSearch: true });
+          }
+          if (!c) c = await caches.match(e.request, { ignoreSearch: true });
+          return c;
+        };
+
+        // For app HTML/JS/CSS: Network-First (1.8s timeout) so updates apply immediately on refresh, with instant offline fallback
+        if (isAppCode) {
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 1800);
+            const netResp = await fetch(e.request, { cache: 'no-cache', signal: controller.signal });
+            clearTimeout(timer);
+            if (netResp && netResp.ok) {
+              const copy = netResp.clone();
+              cache.put(e.request, copy).catch(() => {});
+              return netResp;
+            }
+          } catch (_) {}
+          const fallback = await getCached();
+          if (fallback) return fallback;
         }
-        if (!cachedResponse) {
-          cachedResponse = await caches.match(e.request, { ignoreSearch: true });
-        }
+
+        // Cache-First + background revalidate for heavy vendor/WASM/asset files
+        const cachedResponse = await getCached();
 
         // Background network update (non-blocking when cachedResponse exists)
         const networkUpdatePromise = fetch(e.request, { cache: 'no-cache' })

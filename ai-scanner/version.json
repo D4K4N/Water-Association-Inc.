@@ -1,11 +1,11 @@
 {
   "appName": "Dicklum Water AI — Smart Meter Scanner Edition",
-  "version": "3.4.0-AI",
-  "buildNumber": 34,
-  "cacheName": "dicklum-water-ai-v34",
-  "releasedAt": "2026-11-17T09:03:00+08:00",
+  "version": "3.7.0-AI",
+  "buildNumber": 37,
+  "cacheName": "dicklum-water-ai-v37",
+  "releasedAt": "2026-11-17T12:54:00+08:00",
   "githubRepo": "D4K4N/Water-Association-Inc.",
-  "githubBranch": "main",
+  "githubBranch": "ai-scanner",
   "apkDownloadUrl": "https://github.com/D4K4N/Water-Association-Inc./releases/latest/download/Dicklum-Water-AI-Scanner.apk",
   "pwaUrl": "https://d4k4n.github.io/Water-Association-Inc./ai-scanner/"
 }

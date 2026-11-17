@@ -11,11 +11,11 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '3.4.0-AI';
-    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 34;
-    this.cacheName = 'dicklum-water-ai-v34';
+    this.localVersion = '3.7.0-AI';
+    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 37;
+    this.cacheName = 'dicklum-water-ai-v37';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
-    this.githubBranch = 'main';
+    this.githubBranch = 'ai-scanner';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}/ai-scanner`;
     this.apkDownloadUrl = `https://github.com/${this.githubRepo}/releases/latest/download/Dicklum-Water-AI-Scanner.apk`;
     this.swRegistration = null;
@@ -40,6 +40,11 @@ class DicklumOtaUpdater {
       { local: './js/offlineTileEngine.js', remote: 'js/offlineTileEngine.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/mapEngine.js', remote: 'js/mapEngine.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/maplibreEngine.js', remote: 'js/maplibreEngine.js', type: 'application/javascript; charset=utf-8' },
+      { local: './js/scanner/meterProfiles.js', remote: 'js/scanner/meterProfiles.js', type: 'application/javascript; charset=utf-8' },
+      { local: './js/scanner/cameraController.js', remote: 'js/scanner/cameraController.js', type: 'application/javascript; charset=utf-8' },
+      { local: './js/scanner/meterDetector.js', remote: 'js/scanner/meterDetector.js', type: 'application/javascript; charset=utf-8' },
+      { local: './js/scanner/digitRecognizer.js', remote: 'js/scanner/digitRecognizer.js', type: 'application/javascript; charset=utf-8' },
+      { local: './js/scanner/readingValidator.js', remote: 'js/scanner/readingValidator.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/aiMeterScanner.js', remote: 'js/aiMeterScanner.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/otaUpdater.js', remote: 'js/otaUpdater.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/app.js', remote: 'js/app.js', type: 'application/javascript; charset=utf-8' }

@@ -112,8 +112,8 @@
       const srcW = Math.max(12, Math.min(fullCanvas.width - srcX, Math.round(det.w * scaleX)));
       const srcH = Math.max(8, Math.min(fullCanvas.height - srcY, Math.round(rawSrcH * 0.86)));
 
-      const targetH = Math.max(54, Math.min(108, srcH * 2));
-      const targetW = Math.max(96, Math.round(srcW * (targetH / Math.max(1, srcH))));
+      const targetH = Math.max(40, Math.min(64, srcH * 2));
+      const targetW = Math.max(88, Math.round(srcW * (targetH / Math.max(1, srcH))));
 
       const rawCanvas = document.createElement('canvas');
       rawCanvas.width = targetW;
@@ -144,6 +144,20 @@
         const val = norm > 142 ? 255 : (norm < 92 ? 0 : norm);
         d[i] = val; d[i + 1] = val; d[i + 2] = val;
       }
+
+      // Remove full-height thin vertical drum-divider seams (prevents Tesseract reading "|" as "1")
+      for (let x = 0; x < targetW; x++) {
+        let darkRows = 0;
+        for (let y = 0; y < targetH; y++) {
+          if (d[(y * targetW + x) * 4] < 110) darkRows++;
+        }
+        if (darkRows >= Math.floor(targetH * 0.88)) {
+          for (let y = 0; y < targetH; y++) {
+            const idx = (y * targetW + x) * 4;
+            d[idx] = 255; d[idx + 1] = 255; d[idx + 2] = 255;
+          }
+        }
+      }
       rawCtx.putImageData(imgData, 0, 0);
 
       const pad = 24;
@@ -170,7 +184,8 @@
         const digitsOnly = (res && res.text ? res.text : '').replace(/\D/g, '');
         const conf = res && typeof res.confidence === 'number' ? Math.round(res.confidence) : 0;
 
-        if (digitsOnly.length < 4 || digitsOnly.length > 5 || conf < 35) {
+        const isAllOnes = /^1+$/.test(digitsOnly) && conf < 82;
+        if (digitsOnly.length < 4 || digitsOnly.length > 5 || conf < 35 || isAllOnes) {
           // If Tesseract got confused by drum divider lines, fall back to topological classifier if high-confidence
           if (analysisImgData) {
             const topo = this.classifyTopological(analysisImgData, det);

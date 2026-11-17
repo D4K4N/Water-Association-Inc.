@@ -292,6 +292,13 @@ class OfflineAIMeterScanner {
     const prevBaseline = this.getPreviousReadingBaseline();
     const now = Date.now();
 
+    // Fast-path (< 10ms): run high-precision topological classifier first
+    const topoRec = this.recognizer.classifyTopological(fullImgData, det);
+    if (topoRec && topoRec.validCharCount >= 4 && topoRec.overallConfidence >= 92 && !/^1+$/.test(topoRec.reading)) {
+      this._handleRecognitionResult(topoRec, prevBaseline, det, analysisW, analysisH, immediateLock, topoRec.charBoxes);
+      return;
+    }
+
     if (this.recognizer.tesseractReady) {
       if (!this.recognizer.tesseractBusy && (immediateLock || now - this.lastTesseractRunAt >= 260)) {
         this.lastTesseractRunAt = now;
@@ -304,8 +311,7 @@ class OfflineAIMeterScanner {
       return;
     }
 
-    // Fallback before WASM boots: topological recognizer
-    const topoRec = this.recognizer.classifyTopological(fullImgData, det);
+    // Fallback before WASM boots
     this._handleRecognitionResult(topoRec, prevBaseline, det, analysisW, analysisH, immediateLock, topoRec.charBoxes);
   }
 

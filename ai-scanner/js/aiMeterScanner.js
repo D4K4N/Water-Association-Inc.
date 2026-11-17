@@ -289,6 +289,16 @@ class OfflineAIMeterScanner {
     }
     this.drawDetectionOverlay(analysisW, analysisH, det, []);
 
+    if (!immediateLock && det.motionStats && (det.motionStats.isMovingTooMuch || det.motionStats.isBlurry)) {
+      this.updateGlassDiagnostic(
+        'LOW_CONTRAST',
+        det.motionStats.isMovingTooMuch
+          ? '⚠️ Camera moving too much — hold steady over water meter'
+          : '⚠️ Image unclear / blurry — adjust camera distance'
+      );
+      return;
+    }
+
     const prevBaseline = this.getPreviousReadingBaseline();
     const now = Date.now();
 
@@ -301,6 +311,7 @@ class OfflineAIMeterScanner {
       !/^1+$/.test(topoRec.reading) &&
       !/^0?8+$/.test(topoRec.reading)
     ) {
+      topoRec.meterConfig = det.meterConfig || null;
       this._handleRecognitionResult(topoRec, prevBaseline, det, analysisW, analysisH, immediateLock, topoRec.charBoxes);
       return;
     }
@@ -311,6 +322,7 @@ class OfflineAIMeterScanner {
         this.validator.setState(this.STATES.READING);
         const rec = await this.recognizer.recognizeWithTesseract(fullCanvas, det, analysisW, analysisH, fullImgData);
         if (rec && this.isOpen) {
+          rec.meterConfig = det.meterConfig || null;
           this._handleRecognitionResult(rec, prevBaseline, det, analysisW, analysisH, immediateLock, rec.charBoxes || []);
         }
       }
@@ -318,6 +330,7 @@ class OfflineAIMeterScanner {
     }
 
     // Fallback before WASM boots
+    topoRec.meterConfig = det.meterConfig || null;
     this._handleRecognitionResult(topoRec, prevBaseline, det, analysisW, analysisH, immediateLock, topoRec.charBoxes);
   }
 
@@ -406,35 +419,58 @@ class OfflineAIMeterScanner {
       ctx.restore();
     }
 
-    // Phase 3: Excluded Liter Zone
+    // Excluded Red Fractional Liter Zone
     if (det.redLitersBox) {
       const rb = det.redLitersBox;
+      const scaleTag = det.meterConfig && det.meterConfig.redScale ? det.meterConfig.redScale : 'LITERS';
       ctx.save();
       ctx.strokeStyle = 'rgba(248, 113, 113, 0.9)';
       ctx.lineWidth = 1.6;
       ctx.setLineDash([4, 3]);
       ctx.strokeRect(rb.x - 2, rb.y - 3, rb.w + 4, rb.h + 6);
-      ctx.fillStyle = 'rgba(220, 38, 38, 0.85)';
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.88)';
       ctx.font = 'bold 8px sans-serif';
-      ctx.fillText('EXCLUDED', rb.x, Math.max(10, rb.y - 5));
+      ctx.fillText(`RED (${scaleTag})`, rb.x, Math.max(10, rb.y - 5));
       ctx.restore();
     }
 
-    // Phase 2: Inner Number Window Target Boundary
-    ctx.save();
-    ctx.strokeStyle = '#34D399';
-    ctx.lineWidth = 2.5;
-    ctx.shadowColor = 'rgba(52, 211, 153, 0.85)';
-    ctx.shadowBlur = 8;
-    ctx.strokeRect(det.x - 3, det.y - 4, det.w + 6, det.h + 8);
-    ctx.restore();
+    // Detected Small Circular Auxiliary Liter Dial(s)
+    if (det.auxiliaryDials && det.auxiliaryDials.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([3, 3]);
+      for (const ad of det.auxiliaryDials) {
+        ctx.beginPath();
+        ctx.arc(ad.x, ad.y, ad.r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(ad.x - 24, ad.y + ad.r + 2, 48, 11);
+        ctx.fillStyle = '#38BDF8';
+        ctx.font = 'bold 7.5px sans-serif';
+        ctx.fillText('AUX DIAL', ad.x - 20, ad.y + ad.r + 10);
+      }
+      ctx.restore();
+    }
+
+    // Only draw subtle guide outline when individual digit boxes haven't segmented yet;
+    // once segmented, draw 5 SEPARATE green detection boxes (never one large box around all 5!)
+    if (!charBoxes || charBoxes.length === 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(52, 211, 153, 0.75)';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(det.x - 2, det.y - 3, det.w + 4, det.h + 6);
+      ctx.restore();
+    }
 
     ctx.save();
     const stateLabel = this.validator ? this.validator.state : 'TRACKING';
+    const cfgSummary = det.meterConfig && det.meterConfig.summary ? ` • ${det.meterConfig.summary}` : '';
     const labelText = stateLabel === this.STATES.STABLE
-      ? `✓ STABLE: ${String(this.getNumberFromDigits()).padStart(5, '0')} m³`
-      : `🎯 ${stateLabel}`;
-    ctx.font = 'bold 10.5px monospace';
+      ? `✓ VALIDATED: ${String(this.getNumberFromDigits()).padStart(5, '0')} m³`
+      : `🎯 ${stateLabel}${cfgSummary}`;
+    ctx.font = 'bold 10px monospace';
     const tw = ctx.measureText(labelText).width + 14;
     ctx.fillStyle = 'rgba(6, 78, 59, 0.94)';
     ctx.fillRect(det.x - 3, Math.max(4, det.y - 22), tw, 17);
@@ -447,11 +483,11 @@ class OfflineAIMeterScanner {
 
     if (charBoxes && charBoxes.length > 0) {
       ctx.save();
-      ctx.font = 'bold 10px monospace';
+      ctx.font = 'bold 9.5px monospace';
       for (const cb of charBoxes) {
         ctx.strokeStyle = '#22C55E';
-        ctx.lineWidth = 2.0;
-        ctx.shadowColor = 'rgba(34, 197, 94, 0.75)';
+        ctx.lineWidth = 2.1;
+        ctx.shadowColor = 'rgba(34, 197, 94, 0.8)';
         ctx.shadowBlur = 5;
         ctx.strokeRect(cb.x - 1, cb.y - 1, cb.w + 2, cb.h + 2);
         if (cb.digit !== undefined && cb.digit !== null) {

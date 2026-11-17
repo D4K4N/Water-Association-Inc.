@@ -275,6 +275,7 @@
         }));
 
         // Map individual green digit boxes directly from detected digit segments when available
+        const boxConf = Math.max(75, Math.min(99, conf));
         let charBoxes;
         if (segs && segs.length === digitsOnly.length && targetW > 0) {
           charBoxes = segs.map((s, idx) => ({
@@ -282,7 +283,8 @@
             y: det.y + 1,
             w: Math.max(6, Math.round(((s.x2 - s.x1 + 1) / targetW) * det.w) + 2),
             h: Math.max(8, det.h - 2),
-            digit: Number(digitsOnly[idx])
+            digit: Number(digitsOnly[idx]),
+            confidence: boxConf
           }));
         } else {
           const count = digitsOnly.length;
@@ -292,9 +294,26 @@
             y: det.y + 1,
             w: Math.max(6, Math.round(cellW - 2)),
             h: Math.max(8, det.h - 2),
-            digit: Number(ch)
+            digit: Number(ch),
+            confidence: boxConf
           }));
         }
+
+        // Ensure 5 separate tracking boxes (Box 1..Box 5)
+        if (charBoxes.length === 4) {
+          const first = charBoxes[0];
+          const estW = first.w;
+          charBoxes.unshift({
+            x: Math.max(2, first.x - estW - 2),
+            y: first.y,
+            w: estW,
+            h: first.h,
+            digit: 0,
+            confidence: 99,
+            isLeadingZeroSlot: true
+          });
+        }
+        charBoxes = charBoxes.slice(0, 5).map((cb, idx) => ({ ...cb, boxIndex: idx + 1 }));
 
         return {
           reading: paddedStr,

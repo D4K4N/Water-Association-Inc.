@@ -13,12 +13,144 @@
       this.trackedWindow = null;
       this.trackedMeterBody = null;
       this.missedFrames = 0;
+      this.prevWindowLuma = null;
     }
 
     reset() {
       this.trackedWindow = null;
       this.trackedMeterBody = null;
       this.missedFrames = 0;
+      this.prevWindowLuma = null;
+    }
+
+    /**
+     * Detects small circular red auxiliary liter dials (x1, x10, x100 L) below the main counter.
+     * Prevents them from ever being confused with the main cubic meter register.
+     */
+    detectAuxiliaryDials(imgData, winBox) {
+      if (!winBox || !winBox.meterBodyBox) return [];
+      const w = imgData.width;
+      const h = imgData.height;
+      const data = imgData.data;
+      const mb = winBox.meterBodyBox;
+      const yStart = Math.min(h - 10, winBox.y + winBox.h + Math.max(8, Math.round(winBox.h * 0.4)));
+      const yEnd = Math.min(h - 4, mb.y + mb.h);
+      const xStart = Math.max(4, mb.x);
+      const xEnd = Math.min(w - 4, mb.x + mb.w);
+      if (yEnd - yStart < 14 || xEnd - xStart < 14) return [];
+
+      let sumX = 0, sumY = 0, cnt = 0;
+      let minX = w, maxX = 0, minY = h, maxY = 0;
+      for (let y = yStart; y < yEnd; y += 2) {
+        for (let x = xStart; x < xEnd; x += 2) {
+          const idx = (y * w + x) * 4;
+          const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+          if ((r - g) > 22 && (r - g) > (g - b) * 1.15 && r > 85) {
+            sumX += x; sumY += y; cnt++;
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (cnt < 8) return [];
+      const dw = maxX - minX + 1;
+      const dh = maxY - minY + 1;
+      const aspect = dw / Math.max(1, dh);
+      if (dw >= 8 && dh >= 8 && aspect >= 0.5 && aspect <= 1.9) {
+        return [{
+          x: Math.round(sumX / cnt),
+          y: Math.round(sumY / cnt),
+          r: Math.max(10, Math.round(Math.max(dw, dh) * 0.75)),
+          scaleHint: 'AUXILIARY_LITER_DIAL'
+        }];
+      }
+      return [];
+    }
+
+    /**
+     * Automatically calibrates meter configuration (whole m³ count, red fractional count & scale).
+     */
+    calibrateMeterConfig(winBox, auxiliaryDials = []) {
+      const wholeDigits = (winBox.type === 'MONO_ODOMETER_REGISTER' || winBox.type === 'ITRON_WHITE_ON_BLACK' || winBox.w >= winBox.h * 3.55) ? 5 : 4;
+      let redDigits = 0;
+      let redScale = 'NONE';
+      let needsScaleConfirmation = false;
+
+      if (winBox.redLitersBox) {
+        const ratio = winBox.redLitersBox.w / Math.max(1, winBox.h);
+        if (winBox.type === 'POLARITY_SPLIT_REGISTER') {
+          redDigits = 2;
+          redScale = 'x10 L (0.01 m³)';
+        } else if (ratio < 0.90) {
+          redDigits = 1;
+          redScale = 'x100 L (0.1 m³)';
+        } else if (ratio < 1.48) {
+          redDigits = 2;
+          redScale = 'x10 L (0.01 m³)';
+        } else {
+          redDigits = 3;
+          redScale = 'x1 L (0.001 m³)';
+        }
+      } else if (auxiliaryDials.length > 0) {
+        redScale = 'AUXILIARY_DIAL_ONLY';
+      } else {
+        needsScaleConfirmation = true;
+      }
+
+      return {
+        wholeDigits,
+        redDigits,
+        redScale,
+        hasAuxiliaryDial: auxiliaryDials.length > 0,
+        needsScaleConfirmation,
+        summary: `${wholeDigits} m³${redDigits > 0 ? ` + ${redDigits} Red (${redScale})` : ''}${auxiliaryDials.length > 0 ? ' + Aux Dial' : ''}`
+      };
+    }
+
+    /**
+     * Checks frame-to-frame motion and edge sharpness inside the detected window.
+     */
+    computeMotionAndSharpness(imgData, winBox) {
+      if (!winBox) return { isMovingTooMuch: false, isBlurry: false, motionDelta: 0, sharpness: 100 };
+      const w = imgData.width;
+      const data = imgData.data;
+      const x1 = Math.max(0, winBox.x);
+      const y1 = Math.max(0, winBox.y);
+      const x2 = Math.min(w - 1, winBox.x + winBox.w);
+      const y2 = Math.min(imgData.height - 1, winBox.y + winBox.h);
+
+      let edgeSum = 0, pxCnt = 0;
+      const sample = [];
+      for (let y = y1; y < y2; y += 2) {
+        for (let x = x1; x < x2; x += 2) {
+          const idx = (y * w + x) * 4;
+          const l = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+          sample.push(l);
+          if (x + 2 < x2) {
+            const idx2 = (y * w + x + 2) * 4;
+            const l2 = Math.round(0.299 * data[idx2] + 0.587 * data[idx2 + 1] + 0.114 * data[idx2 + 2]);
+            edgeSum += Math.abs(l - l2);
+          }
+          pxCnt++;
+        }
+      }
+      const sharpness = pxCnt > 0 ? edgeSum / pxCnt : 0;
+      let motionDelta = 0;
+      if (this.prevWindowLuma && this.prevWindowLuma.length === sample.length) {
+        let diff = 0;
+        for (let i = 0; i < sample.length; i++) diff += Math.abs(sample[i] - this.prevWindowLuma[i]);
+        motionDelta = diff / sample.length;
+      }
+      this.prevWindowLuma = sample;
+
+      return {
+        isMovingTooMuch: motionDelta > 34,
+        isBlurry: sharpness < 7.5,
+        motionDelta: Math.round(motionDelta),
+        sharpness: Math.round(sharpness * 10) / 10
+      };
     }
 
     /**
@@ -481,17 +613,25 @@
             };
             this.trackedMeterBody = rawDet.meterBodyBox;
             this.missedFrames = 0;
-            return { ...this.trackedWindow, trackingState: 'TRACKING' };
+            const auxiliaryDials = this.detectAuxiliaryDials(imgData, this.trackedWindow);
+            const meterConfig = this.calibrateMeterConfig(this.trackedWindow, auxiliaryDials);
+            const motionStats = immediate ? { isMovingTooMuch: false, isBlurry: false } : this.computeMotionAndSharpness(imgData, this.trackedWindow);
+            return { ...this.trackedWindow, auxiliaryDials, meterConfig, motionStats, trackingState: 'TRACKING' };
           } else if (this.missedFrames < 3) {
             this.missedFrames++;
-            return { ...this.trackedWindow, trackingState: 'ALIGNING' };
+            const auxiliaryDials = this.detectAuxiliaryDials(imgData, this.trackedWindow);
+            const meterConfig = this.calibrateMeterConfig(this.trackedWindow, auxiliaryDials);
+            return { ...this.trackedWindow, auxiliaryDials, meterConfig, motionStats: { isMovingTooMuch: false, isBlurry: false }, trackingState: 'ALIGNING' };
           }
         }
 
         this.trackedWindow = { ...rawDet };
         this.trackedMeterBody = rawDet.meterBodyBox;
         this.missedFrames = 0;
-        return { ...this.trackedWindow, trackingState: 'DETECTING NUMBER WINDOW' };
+        const auxiliaryDials = this.detectAuxiliaryDials(imgData, this.trackedWindow);
+        const meterConfig = this.calibrateMeterConfig(this.trackedWindow, auxiliaryDials);
+        const motionStats = immediate ? { isMovingTooMuch: false, isBlurry: false } : this.computeMotionAndSharpness(imgData, this.trackedWindow);
+        return { ...this.trackedWindow, auxiliaryDials, meterConfig, motionStats, trackingState: 'DETECTING NUMBER WINDOW' };
       }
 
       if (this.trackedWindow && !immediate && this.missedFrames < 3) {

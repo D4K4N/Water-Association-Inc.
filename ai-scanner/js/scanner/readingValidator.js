@@ -20,7 +20,7 @@
   };
 
   class ReadingValidator {
-    constructor(requiredMatches = 2) {
+    constructor(requiredMatches = 3) {
       this.requiredMatches = requiredMatches;
       this.state = SCANNER_STATES.SEARCHING;
       this.frameHistory = [];
@@ -106,6 +106,7 @@
         digits: recognitionResult.digits,
         confidence: recognitionResult.overallConfidence,
         profileId: recognitionResult.profileId,
+        meterConfig: recognitionResult.meterConfig || null,
         previousReading: prev,
         consumption: Math.max(0, diff),
         warnings,

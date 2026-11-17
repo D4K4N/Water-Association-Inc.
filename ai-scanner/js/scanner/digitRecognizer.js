@@ -356,7 +356,7 @@
       }
 
       if (polarity === 'BLACK_ON_WHITE') {
-        const numDrums = 4;
+        const numDrums = (box.type === 'MONO_ODOMETER_REGISTER' || bw >= bh * 3.55) ? 5 : 4;
         const cellW = bw / numDrums;
         const digits = [];
         const charBoxes = [];
@@ -364,7 +364,8 @@
 
         for (let k = 0; k < numDrums; k++) {
           const cx1 = Math.max(1, Math.floor(k * cellW + cellW * 0.06));
-          const cx2 = Math.min(bw - 2, Math.floor((k + 1) * cellW - cellW * 0.44));
+          const rightTrim = numDrums === 4 ? 0.44 : 0.14;
+          const cx2 = Math.min(bw - 2, Math.floor((k + 1) * cellW - cellW * rightTrim));
           let tx1 = cx1, tx2 = cx2;
           while (tx1 < tx2 && colBrightCount[tx1] < 2) tx1++;
           while (tx2 > tx1 && colBrightCount[tx2] < 2) tx2--;
@@ -374,14 +375,14 @@
           charBoxes.push({
             x: bx + tx1,
             y: by + yStart,
-            w: tx2 - tx1 + 1,
+            w: Math.max(4, tx2 - tx1 + 1),
             h: yEnd - yStart,
             digit: d.digit
           });
         }
 
         const avgConf = Math.min(99, Math.round((sumScore / numDrums) * 100));
-        const padded = [0, ...digits].slice(0, 5);
+        const padded = numDrums === 5 ? digits.slice(0, 5) : [0, ...digits].slice(0, 5);
         return {
           reading: padded.join(''),
           numericValue: Number(padded.join('')),

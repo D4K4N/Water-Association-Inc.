@@ -169,7 +169,8 @@
         const regH = regY2 - regY1 + 1;
         const regX2 = rMin - 2;
 
-        if ((rMax - rMin + 1) < regH * 1.45) continue;
+        // Support 1, 2, or 3 red liter digits (x100 L, x10 L, x1 L)
+        if ((rMax - rMin + 1) < regH * 0.45) continue;
 
         const sampleLums = [];
         const sampleLeft = Math.max(8, regX2 - Math.round(regH * 3.0));
@@ -222,8 +223,8 @@
           const aboveMean = aboveCnt > 0 ? (aboveLumSum / aboveCnt) : 0;
           if (aboveMean < rollerMean + 12) continue;
         } else {
-          const span4 = Math.max(Math.round(regH * 3.04), Math.round(redSpan * 1.35));
-          const span5 = Math.max(Math.round(regH * 3.85), Math.round(redSpan * 1.72));
+          const span4 = Math.round(regH * 3.05);
+          const span5 = Math.round(regH * 3.85);
           const x4 = Math.max(6, regX2 - span4);
           const x5 = Math.max(6, regX2 - span5);
           let has5thDrum = false;

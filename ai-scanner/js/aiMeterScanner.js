@@ -284,6 +284,9 @@ class OfflineAIMeterScanner {
     this.registerDetected = true;
     this.lastDetectionBox = det;
     this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
+    if (this.validator.state === this.STATES.SEARCHING || this.validator.state === this.STATES.LOST) {
+      this.validator.setState(det.trackingState || this.STATES.TRACKING);
+    }
     this.drawDetectionOverlay(analysisW, analysisH, det, []);
 
     const prevBaseline = this.getPreviousReadingBaseline();
@@ -293,7 +296,7 @@ class OfflineAIMeterScanner {
       if (!this.recognizer.tesseractBusy && (immediateLock || now - this.lastTesseractRunAt >= 260)) {
         this.lastTesseractRunAt = now;
         this.validator.setState(this.STATES.READING);
-        const rec = await this.recognizer.recognizeWithTesseract(fullCanvas, det, analysisW, analysisH);
+        const rec = await this.recognizer.recognizeWithTesseract(fullCanvas, det, analysisW, analysisH, fullImgData);
         if (rec && this.isOpen) {
           this._handleRecognitionResult(rec, prevBaseline, det, analysisW, analysisH, immediateLock);
         }
@@ -315,6 +318,7 @@ class OfflineAIMeterScanner {
     const evalRes = this.validator.evaluateFrame(rec, prevBaseline, immediateLock);
 
     if (evalRes.uncertain) {
+      this.drawDetectionOverlay(frameW, frameH, det, charBoxes);
       this.updateGlassDiagnostic(
         'LOW_CONTRAST',
         evalRes.halfRolled
@@ -325,6 +329,7 @@ class OfflineAIMeterScanner {
     }
 
     if (!evalRes.stable) {
+      this.drawDetectionOverlay(frameW, frameH, det, charBoxes);
       this.updateGlassDiagnostic(
         'CLEAR',
         `🎯 ${this.STATES.VERIFYING} — Candidate: ${evalRes.reading || '...'} m³ (${evalRes.matchStreak || 1}/2)`
@@ -532,7 +537,7 @@ class OfflineAIMeterScanner {
         ctx.font = 'bold 16px monospace';
         ctx.fillText(r === 0 ? '8' : (r === 1 ? '9' : '1'), rx + 9, regY + regH / 2 + 1);
       }
-    } else if (type === 'clean' || type === 'cloudy') {
+    } else if (type === 'clean' || type === 'cloudy' || type === 'itron' || type === 'scratched') {
       ctx.fillStyle = '#1E293B';
       ctx.font = 'bold 18px sans-serif';
       ctx.textAlign = 'center';
@@ -556,7 +561,7 @@ class OfflineAIMeterScanner {
         ctx.textBaseline = 'middle';
         ctx.fillText(dStr[i], cx + 11, regY + regH / 2 + 1);
       }
-      if (type === 'cloudy') {
+      if (type === 'cloudy' || type === 'scratched') {
         ctx.fillStyle = 'rgba(226, 232, 240, 0.35)';
         ctx.beginPath();
         ctx.arc(240, 185, 140, 0, Math.PI * 2);

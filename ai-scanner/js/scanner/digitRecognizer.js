@@ -106,9 +106,11 @@
       const scaleY = fullCanvas.height / Math.max(1, analysisH);
 
       const srcX = Math.max(0, Math.round(det.x * scaleX));
-      const srcY = Math.max(0, Math.round(det.y * scaleY));
+      const rawSrcY = Math.round(det.y * scaleY);
+      const rawSrcH = Math.round(det.h * scaleY);
+      const srcY = Math.max(0, rawSrcY + Math.round(rawSrcH * 0.08));
       const srcW = Math.max(12, Math.min(fullCanvas.width - srcX, Math.round(det.w * scaleX)));
-      const srcH = Math.max(8, Math.min(fullCanvas.height - srcY, Math.round(det.h * scaleY)));
+      const srcH = Math.max(8, Math.min(fullCanvas.height - srcY, Math.round(rawSrcH * 0.86)));
 
       const targetH = Math.max(54, Math.min(108, srcH * 2));
       const targetW = Math.max(96, Math.round(srcW * (targetH / Math.max(1, srcH))));
@@ -156,7 +158,7 @@
       return { rawCanvas, prepCanvas, imgData };
     }
 
-    async recognizeWithTesseract(fullCanvas, det, analysisW, analysisH) {
+    async recognizeWithTesseract(fullCanvas, det, analysisW, analysisH, analysisImgData = null) {
       if (!this.tesseractWorker || !this.tesseractReady || this.tesseractBusy) {
         return null;
       }
@@ -168,7 +170,14 @@
         const digitsOnly = (res && res.text ? res.text : '').replace(/\D/g, '');
         const conf = res && typeof res.confidence === 'number' ? Math.round(res.confidence) : 0;
 
-        if (digitsOnly.length < 4 || digitsOnly.length > 5 || conf < 52) {
+        if (digitsOnly.length < 4 || digitsOnly.length > 5 || conf < 35) {
+          // If Tesseract got confused by drum divider lines, fall back to topological classifier if high-confidence
+          if (analysisImgData) {
+            const topo = this.classifyTopological(analysisImgData, det);
+            if (topo && topo.validCharCount >= 4 && topo.overallConfidence >= 90) {
+              return { ...topo, previewDataUrl };
+            }
+          }
           return {
             reading: digitsOnly.padStart(5, '0').slice(-5),
             numericValue: Number(digitsOnly) || 0,

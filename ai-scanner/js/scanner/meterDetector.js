@@ -294,15 +294,15 @@
         let devSum = 0;
         for (const r of b.rows) devSum += Math.abs(r.rMin - rMin);
         const meanDev = devSum / b.rows.length;
-        if (meanDev > 8.5) continue;
+        if (meanDev > 5.5) continue;
 
         const regY1 = Math.max(0, b.yStart + 1);
         const regY2 = Math.min(h - 1, b.yEnd + 1);
         const regH = regY2 - regY1 + 1;
         const regX2 = rMin - 2;
 
-        // Support 1, 2, or 3 red liter digits (x100 L, x10 L, x1 L)
-        if ((rMax - rMin + 1) < regH * 0.45) continue;
+        // Require at least 1 full red liter drum width (rejects tiny red specks/pointers)
+        if ((rMax - rMin + 1) < regH * 0.85) continue;
 
         const sampleLums = [];
         const sampleLeft = Math.max(8, regX2 - Math.round(regH * 3.0));
@@ -561,7 +561,8 @@
             let ocrScore = 88;
             if (fallbackValidator) {
               const ocr = fallbackValidator(imgData, candidate);
-              if (ocr.validCharCount < 4 || ocr.confidence < 82) continue;
+              const eightCount = (ocr.digits || []).filter(d => d === 8).length;
+              if (ocr.validCharCount < 4 || ocr.confidence < 88 || eightCount >= 4) continue;
               ocrScore = ocr.confidence;
             }
 

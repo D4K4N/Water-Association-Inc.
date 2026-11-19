@@ -11,9 +11,9 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '4.2.0-AI';
-    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 42;
-    this.cacheName = 'dicklum-water-ai-v42';
+    this.localVersion = '4.3.0-AI';
+    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 43;
+    this.cacheName = 'dicklum-water-ai-v43';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'ai-scanner';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}/ai-scanner`;
@@ -45,6 +45,7 @@ class DicklumOtaUpdater {
       { local: './js/scanner/meterDetector.js', remote: 'js/scanner/meterDetector.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/scanner/digitRecognizer.js', remote: 'js/scanner/digitRecognizer.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/scanner/readingValidator.js', remote: 'js/scanner/readingValidator.js', type: 'application/javascript; charset=utf-8' },
+      { local: './js/scanner/inferenceWorker.js', remote: 'js/scanner/inferenceWorker.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/aiMeterScanner.js', remote: 'js/aiMeterScanner.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/otaUpdater.js', remote: 'js/otaUpdater.js', type: 'application/javascript; charset=utf-8' },
       { local: './js/app.js', remote: 'js/app.js', type: 'application/javascript; charset=utf-8' }

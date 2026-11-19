@@ -6,7 +6,7 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '42';
+const CACHE_VERSION = '43';
 const CACHE_NAME = `dicklum-water-ai-v${CACHE_VERSION}`;
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v2';
 
@@ -44,6 +44,7 @@ const ASSETS_TO_CACHE = [
   './js/scanner/meterDetector.js',
   './js/scanner/digitRecognizer.js',
   './js/scanner/readingValidator.js',
+  './js/scanner/inferenceWorker.js',
   './js/aiMeterScanner.js',
   './js/otaUpdater.js',
   './js/app.js',

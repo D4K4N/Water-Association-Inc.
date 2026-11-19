@@ -13,6 +13,9 @@
       this.torchEnabled = false;
       this.torchSupported = false;
       this.autofocusSupported = false;
+      // Reusable in-memory offscreen canvases (zero permanent photo storage)
+      this._fullCanvas = null;
+      this._analysisCanvas = null;
     }
 
     isSupported() {
@@ -131,15 +134,17 @@
       if (simCanvas && simCanvas.style.display !== 'none' && simCanvas.width > 0) {
         const w = simCanvas.width;
         const h = simCanvas.height;
-        const fullCanvas = document.createElement('canvas');
-        fullCanvas.width = w;
-        fullCanvas.height = h;
-        fullCanvas.getContext('2d').drawImage(simCanvas, 0, 0, w, h);
+        if (!this._fullCanvas) this._fullCanvas = document.createElement('canvas');
+        if (this._fullCanvas.width !== w || this._fullCanvas.height !== h) {
+          this._fullCanvas.width = w;
+          this._fullCanvas.height = h;
+        }
+        this._fullCanvas.getContext('2d', { willReadFrequently: true }).drawImage(simCanvas, 0, 0, w, h);
         return {
-          analysisCanvas: fullCanvas,
+          analysisCanvas: this._fullCanvas,
           analysisW: w,
           analysisH: h,
-          fullCanvas,
+          fullCanvas: this._fullCanvas,
           fullW: w,
           fullH: h
         };
@@ -151,19 +156,30 @@
 
       const fullW = videoEl.videoWidth;
       const fullH = videoEl.videoHeight;
-      const fullCanvas = document.createElement('canvas');
-      fullCanvas.width = fullW;
-      fullCanvas.height = fullH;
-      fullCanvas.getContext('2d').drawImage(videoEl, 0, 0, fullW, fullH);
+      if (!this._fullCanvas) this._fullCanvas = document.createElement('canvas');
+      if (this._fullCanvas.width !== fullW || this._fullCanvas.height !== fullH) {
+        this._fullCanvas.width = fullW;
+        this._fullCanvas.height = fullH;
+      }
+      this._fullCanvas.getContext('2d', { willReadFrequently: true }).drawImage(videoEl, 0, 0, fullW, fullH);
 
       const analysisW = analysisWidth;
       const analysisH = Math.max(1, Math.round(fullH * (analysisWidth / fullW)));
-      const analysisCanvas = document.createElement('canvas');
-      analysisCanvas.width = analysisW;
-      analysisCanvas.height = analysisH;
-      analysisCanvas.getContext('2d').drawImage(fullCanvas, 0, 0, analysisW, analysisH);
+      if (!this._analysisCanvas) this._analysisCanvas = document.createElement('canvas');
+      if (this._analysisCanvas.width !== analysisW || this._analysisCanvas.height !== analysisH) {
+        this._analysisCanvas.width = analysisW;
+        this._analysisCanvas.height = analysisH;
+      }
+      this._analysisCanvas.getContext('2d', { willReadFrequently: true }).drawImage(this._fullCanvas, 0, 0, analysisW, analysisH);
 
-      return { analysisCanvas, analysisW, analysisH, fullCanvas, fullW, fullH };
+      return {
+        analysisCanvas: this._analysisCanvas,
+        analysisW,
+        analysisH,
+        fullCanvas: this._fullCanvas,
+        fullW,
+        fullH
+      };
     }
 
     stop() {

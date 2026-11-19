@@ -1,0 +1,9 @@
+path: ./dataset/detector
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: meter_body
+  1: odometer_window
+  2: red_liter_zone

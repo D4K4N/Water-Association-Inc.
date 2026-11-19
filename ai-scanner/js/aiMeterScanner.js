@@ -45,12 +45,33 @@ class OfflineAIMeterScanner {
     this.capturedDataUrl = null;
     this.simulationMode = null;
     this.lastAiMetadata = null;
+    this.onnxWorker = null;
+    this.onnxReady = false;
+    this.onnxMissingFiles = [];
   }
 
   init() {
     this.bindEvents();
+    this.initOnnxWorker();
     if (this.recognizer) {
       setTimeout(() => this.recognizer.initOfflineWorker(), 700);
+    }
+  }
+
+  initOnnxWorker() {
+    if (typeof Worker === 'undefined' || this.onnxWorker) return;
+    try {
+      this.onnxWorker = new Worker('./js/scanner/inferenceWorker.js');
+      this.onnxWorker.onmessage = (e) => {
+        const msg = e.data || {};
+        if (msg.type === 'INIT_STATUS') {
+          this.onnxReady = !!msg.ready;
+          this.onnxMissingFiles = Array.isArray(msg.missing) ? msg.missing : [];
+        }
+      };
+      this.onnxWorker.postMessage({ type: 'INIT' });
+    } catch (_) {
+      this.onnxReady = false;
     }
   }
 
@@ -275,17 +296,15 @@ class OfflineAIMeterScanner {
     if (det.mossObstructed || det.type === 'MOSS_OBSTRUCTED') {
       this.registerDetected = false;
       this.confidence = 12;
-      this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
       this.validator.setState(this.STATES.UNREADABLE);
       this.clearDetectionOverlay();
-      this.updateGlassDiagnostic('MOSS_ALGAE', '⚠️ UNREADABLE — Moss / Algae obstructing meter glass');
+      this.updateGlassDiagnostic('MOSS_ALGAE', '⚠️ Unable to read — Moss / Algae obstructing meter glass');
       this.renderRollerDrums(false);
       return;
     }
 
     this.registerDetected = true;
     this.lastDetectionBox = det;
-    this.capturedDataUrl = fullCanvas.toDataURL('image/jpeg', 0.90);
     if (this.validator.state === this.STATES.SEARCHING || this.validator.state === this.STATES.LOST) {
       this.validator.setState(det.trackingState || this.STATES.TRACKING);
     }
@@ -758,9 +777,16 @@ class OfflineAIMeterScanner {
   }
 
   async applyScannedReadingToForm(closeAfterApply = true) {
-    if (!this.capturedDataUrl) await this.performAIScan(true);
-
+    // Process in-memory only: NEVER save captured camera photos or screenshots.
+    // Pass ONLY the confirmed numeric reading and lightweight metadata to the existing billing form.
     const scannedValue = this.getNumberFromDigits();
+    if (!this.validator || this.validator.state !== this.STATES.STABLE) {
+      if (window.app && typeof window.app.showToast === 'function') {
+        window.app.showToast('⚠️ Reading not yet validated — hold camera steady or enter manually.', 2600);
+      }
+      return;
+    }
+
     this.syncReadingToMainFormSilently(scannedValue);
 
     const currentInput = document.getElementById('rdg-current-input');
@@ -769,35 +795,15 @@ class OfflineAIMeterScanner {
         ...this.lastAiMetadata,
         confirmedReading: scannedValue,
         consumerId: window.app && window.app.activeConsumer ? window.app.activeConsumer.id : null,
-        meterId: window.app && window.app.activeMeter ? window.app.activeMeter.id : null
+        meterId: window.app && window.app.activeMeter ? window.app.activeMeter.id : null,
+        photoSaved: false
       });
-    }
-
-    if (this.capturedDataUrl && window.readingModule) {
-      const consumerName = (window.app && window.app.activeConsumer) ? window.app.activeConsumer.name : 'Consumer';
-      const meterNo = (window.app && window.app.activeMeter) ? window.app.activeMeter.meterNo : 'N/A';
-      const gpsText = (window.app && window.app.mapEngine && window.app.mapEngine.userGps)
-        ? `${window.app.mapEngine.userGps.lat.toFixed(5)}, ${window.app.mapEngine.userGps.lng.toFixed(5)}`
-        : 'Barangay Diclum, Manolo Fortich';
-
-      try {
-        const watermarked = await window.readingModule.watermarkPhoto(this.capturedDataUrl, {
-          meterNo: `${meterNo} [AI-OCR ${this.confidence || 96}%]`,
-          reading: scannedValue,
-          consumerName,
-          timestamp: new Date().toLocaleString(),
-          gps: gpsText
-        });
-        this.attachPhotoToReadingForm(watermarked);
-      } catch (_) {
-        this.attachPhotoToReadingForm(this.capturedDataUrl);
-      }
     }
 
     if (closeAfterApply) {
       this.closeScannerModal();
       if (window.app && typeof window.app.showToast === 'function') {
-        window.app.showToast(`✓ AI Reading (${scannedValue} m³) & Bill Calculated!`, 2600);
+        window.app.showToast(`✓ Confirmed AI Reading (${scannedValue} m³) applied — zero photos saved.`, 2600);
       }
     }
   }

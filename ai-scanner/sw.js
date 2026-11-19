@@ -6,8 +6,9 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '43';
+const CACHE_VERSION = '44';
 const CACHE_NAME = `dicklum-water-ai-v${CACHE_VERSION}`;
+const OTA_OVERRIDE_CACHE = 'dicklum-ota-override-v1';
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v2';
 
 const ASSETS_TO_CACHE = [
@@ -189,7 +190,7 @@ self.addEventListener('activate', (e) => {
     caches.keys().then((keys) => {
       return Promise.all(
         keys
-          .filter((key) => key !== CACHE_NAME && key !== TILE_CACHE_NAME && key !== 'dicklum-tiles-cache-v1')
+          .filter((key) => key !== CACHE_NAME && key !== OTA_OVERRIDE_CACHE && key !== TILE_CACHE_NAME && key !== 'dicklum-tiles-cache-v1')
           .map((key) => caches.delete(key))
       );
     }).then(() => self.clients.claim())
@@ -345,8 +346,18 @@ self.addEventListener('fetch', (e) => {
           return c;
         };
 
-        // For app HTML/JS/CSS: Network-First (1.8s timeout) so updates apply immediately on refresh, with instant offline fallback
+        // 0. Always prefer live OTA-updated files from GitHub when present (so Capacitor APKs auto-update!)
         if (isAppCode) {
+          try {
+            const otaCache = await caches.open(OTA_OVERRIDE_CACHE);
+            let otaMatch = await otaCache.match(e.request, { ignoreSearch: true });
+            if (!otaMatch && isNavigation) {
+              otaMatch = await otaCache.match('./index.html', { ignoreSearch: true }) ||
+                         await otaCache.match('./', { ignoreSearch: true });
+            }
+            if (otaMatch) return otaMatch;
+          } catch (_) {}
+
           try {
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 1800);

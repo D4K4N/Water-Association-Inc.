@@ -215,7 +215,7 @@
       // Pass A: Red-Anchored Register Detector (Solid Red Drums OR Red-Ink-on-White Digits)
       const validRows = [];
       const yMinSearch = Math.floor(h * 0.12);
-      const yMaxSearch = Math.floor(h * 0.88);
+      const yMaxSearch = Math.floor(h * 0.65);
       const minRedPerRow = Math.max(4, Math.floor(w * 0.008));
 
       for (let y = yMinSearch; y < yMaxSearch; y++) {
@@ -516,13 +516,16 @@
         for (let y1 = Math.floor(h * 0.22); y1 <= Math.floor(h * 0.66) - bandH; y1 += 6) {
           const y2 = y1 + bandH;
           for (let x1 = Math.floor(w * 0.14); x1 <= Math.floor(w * 0.86) - boxW; x1 += 10) {
-            let minL = 255, maxL = 0, edgeCnt = 0;
+            let minL = 255, maxL = 0, edgeCnt = 0, chromaSum = 0, pxSample = 0;
             const cellDark = [0, 0, 0, 0, 0];
             const cellTotal = [0, 0, 0, 0, 0];
             const cellW = boxW / 5;
             for (let y = y1 + 2; y < y2 - 2; y += 2) {
               for (let x = x1 + 2; x < x1 + boxW - 2; x += 2) {
                 const l = lum[y * w + x];
+                const pIdx = (y * w + x) * 4;
+                chromaSum += Math.abs(data[pIdx] - data[pIdx + 1]) + Math.abs(data[pIdx + 1] - data[pIdx + 2]);
+                pxSample++;
                 if (l < minL) minL = l;
                 if (l > maxL) maxL = l;
                 if (x > x1 + 4 && Math.abs(l - lum[y * w + x - 2]) > 26) edgeCnt++;
@@ -531,7 +534,8 @@
                 if (l < 115) cellDark[ci]++;
               }
             }
-            if ((maxL - minL) < 55 || maxL < 140 || edgeCnt < 22) continue;
+            const meanChroma = pxSample > 0 ? chromaSum / pxSample : 99;
+            if (meanChroma > 36 || (maxL - minL) < 55 || maxL < 140 || edgeCnt < 22) continue;
 
             let activeDrums = 0;
             for (let c = 0; c < 5; c++) {

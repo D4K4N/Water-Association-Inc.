@@ -11,9 +11,10 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '4.3.0-AI';
-    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 43;
-    this.cacheName = 'dicklum-water-ai-v43';
+    this.localVersion = '4.4.0-AI';
+    this.localBuild = Number(localStorage.getItem('dicklum_ai_ota_build_num')) || 44;
+    this.cacheName = 'dicklum-water-ai-v44';
+    this.otaOverrideCache = 'dicklum-ota-override-v1';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'ai-scanner';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}/ai-scanner`;
@@ -199,7 +200,8 @@ class DicklumOtaUpdater {
    */
   async pullFilesFromGitHubIntoCache() {
     if (typeof caches === 'undefined') return;
-    const cache = await caches.open(this.cacheName);
+    const overrideCache = await caches.open(this.otaOverrideCache);
+    const appCache = await caches.open(this.cacheName);
 
     await Promise.all(
       this.updatableFiles.map(async (item) => {
@@ -210,22 +212,20 @@ class DicklumOtaUpdater {
             const body = await res.blob();
             const headers = new Headers({
               'Content-Type': item.type,
-              'Cache-Control': 'public, max-age=31536000',
+              'Cache-Control': 'no-cache',
               'X-OTA-Updated-At': new Date().toISOString()
             });
             const syntheticResp = new Response(body, { status: 200, headers });
-            await cache.put(item.local, syntheticResp.clone());
+            await overrideCache.put(item.local, syntheticResp.clone());
+            await appCache.put(item.local, syntheticResp.clone());
             if (item.local === './index.html') {
-              await cache.put('./', syntheticResp.clone());
+              await overrideCache.put('./', syntheticResp.clone());
+              await appCache.put('./', syntheticResp.clone());
             }
           }
         } catch (_) {}
       })
     );
-
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({ type: 'FORCE_UPDATE_CACHE' });
-    }
   }
 
   updateStatusBadge(text, badgeClass = 'badge-success') {
@@ -238,8 +238,11 @@ class DicklumOtaUpdater {
 
   notifyUpdateReady(msg) {
     if (window.app && typeof window.app.showToast === 'function') {
-      window.app.showToast(`${msg} — Reloading in 2s or tap Sync in Settings.`, 3200);
+      window.app.showToast(`${msg} — Reloading now...`, 2200);
     }
+    setTimeout(() => {
+      try { window.location.reload(); } catch (_) {}
+    }, 1600);
   }
 
   bindUIEvents() {

@@ -35,7 +35,7 @@
     [124.885, 8.415]  // [maxLng, maxLat]
   ];
 
-  // MapLibre raster tile styles
+  // MapLibre raster tile styles (100% CORS-enabled for WebGL on Android phones)
   const MAPLIBRE_TILE_STYLES = {
     google_hybrid: {
       version: 8,
@@ -43,13 +43,26 @@
         'base-tiles': {
           type: 'raster',
           tiles: [
-            'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            'https://mt2.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            'https://mt3.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
           ],
           tileSize: 256,
-          maxzoom: 22
+          maxzoom: 19
+        },
+        'hybrid-roads': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'
+          ],
+          tileSize: 256,
+          maxzoom: 19
+        },
+        'hybrid-labels': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+          ],
+          tileSize: 256,
+          maxzoom: 19
         }
       },
       layers: [
@@ -57,9 +70,19 @@
           id: 'base-tiles-layer',
           type: 'raster',
           source: 'base-tiles',
-          paint: {
-            'raster-fade-duration': 120
-          }
+          paint: { 'raster-fade-duration': 120 }
+        },
+        {
+          id: 'hybrid-roads-layer',
+          type: 'raster',
+          source: 'hybrid-roads',
+          paint: { 'raster-fade-duration': 120, 'raster-opacity': 0.85 }
+        },
+        {
+          id: 'hybrid-labels-layer',
+          type: 'raster',
+          source: 'hybrid-labels',
+          paint: { 'raster-fade-duration': 120 }
         }
       ]
     },
@@ -69,13 +92,26 @@
         'base-tiles': {
           type: 'raster',
           tiles: [
-            'https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            'https://mt2.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-            'https://mt3.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
           ],
           tileSize: 256,
-          maxzoom: 22
+          maxzoom: 19
+        },
+        'hybrid-roads': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'
+          ],
+          tileSize: 256,
+          maxzoom: 19
+        },
+        'hybrid-labels': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
+          ],
+          tileSize: 256,
+          maxzoom: 19
         }
       },
       layers: [
@@ -83,9 +119,19 @@
           id: 'base-tiles-layer',
           type: 'raster',
           source: 'base-tiles',
-          paint: {
-            'raster-fade-duration': 120
-          }
+          paint: { 'raster-fade-duration': 120 }
+        },
+        {
+          id: 'hybrid-roads-layer',
+          type: 'raster',
+          source: 'hybrid-roads',
+          paint: { 'raster-fade-duration': 120, 'raster-opacity': 0.85 }
+        },
+        {
+          id: 'hybrid-labels-layer',
+          type: 'raster',
+          source: 'hybrid-labels',
+          paint: { 'raster-fade-duration': 120 }
         }
       ]
     },
@@ -98,7 +144,7 @@
             'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
           ],
           tileSize: 256,
-          maxzoom: 20
+          maxzoom: 19
         }
       },
       layers: [

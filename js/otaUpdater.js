@@ -11,9 +11,9 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '2.5.0';
-    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 25;
-    this.cacheName = 'dicklum-water-v25';
+    this.localVersion = '2.6.0';
+    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 26;
+    this.cacheName = 'dicklum-water-v26';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'main';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}`;

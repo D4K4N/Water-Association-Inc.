@@ -6,7 +6,7 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '25';
+const CACHE_VERSION = '26';
 const CACHE_NAME = `dicklum-water-v${CACHE_VERSION}`;
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v2';
 
@@ -50,11 +50,17 @@ function parseMapTileDescriptor(urlObj) {
   const host = urlObj.hostname.toLowerCase();
   const path = urlObj.pathname;
 
-  // 1. Google Satellite / Hybrid: https://mt0.google.com/vt/lyrs=y&x=13873&y=7808&z=14
+  // 1. Google Satellite / Hybrid: supports both /vt?lyrs=y&x=... and /vt/lyrs=y&x=...
   if (host.includes('google.com') && path.includes('/vt')) {
-    const x = urlObj.searchParams.get('x');
-    const y = urlObj.searchParams.get('y');
-    const z = urlObj.searchParams.get('z');
+    let x = urlObj.searchParams.get('x');
+    let y = urlObj.searchParams.get('y');
+    let z = urlObj.searchParams.get('z');
+    if (x === null || y === null || z === null) {
+      const mx = path.match(/[&/]x=(\d+)/);
+      const my = path.match(/[&/]y=(\d+)/);
+      const mz = path.match(/[&/]z=(\d+)/);
+      if (mx && my && mz) { x = mx[1]; y = my[1]; z = mz[1]; }
+    }
     if (x !== null && y !== null && z !== null) {
       return {
         layer: 'google_hybrid',
@@ -85,19 +91,23 @@ function parseMapTileDescriptor(urlObj) {
     }
   }
 
-  // 3. ESRI World Imagery: https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}
+  // 3. ESRI World Imagery + Reference Hybrid Overlays
   if (host.includes('arcgisonline.com')) {
     const m = path.match(/\/tile\/(\d+)\/(\d+)\/(\d+)$/i);
     if (m) {
       const [, z, y, x] = m;
+      const isLabels = path.includes('World_Boundaries_and_Places');
+      const isRoads = path.includes('World_Transportation');
+      const layer = isLabels ? 'esri_labels' : (isRoads ? 'esri_roads' : 'esri_satellite');
+      const ext = (isLabels || isRoads) ? 'png' : 'jpg';
       return {
-        layer: 'esri_satellite',
+        layer,
         z: Number(z),
         x: Number(x),
         y: Number(y),
-        ext: 'jpg',
-        canonicalUrl: `https://tile-cache.dicklum.local/esri_satellite/${z}/${x}/${y}.jpg`,
-        idbKey: `esri_satellite_${z}_${x}_${y}`
+        ext,
+        canonicalUrl: `https://tile-cache.dicklum.local/${layer}/${z}/${x}/${y}.${ext}`,
+        idbKey: `${layer}_${z}_${x}_${y}`
       };
     }
   }

@@ -11,9 +11,10 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '2.6.0';
-    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 26;
-    this.cacheName = 'dicklum-water-v26';
+    this.localVersion = '2.7.0';
+    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 27;
+    this.cacheName = 'dicklum-water-v27';
+    this.otaOverrideCacheName = 'dicklum-ota-override-v1';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'main';
     this.rawBaseUrl = `https://raw.githubusercontent.com/${this.githubRepo}/${this.githubBranch}`;
@@ -184,7 +185,8 @@ class DicklumOtaUpdater {
    */
   async pullFilesFromGitHubIntoCache() {
     if (typeof caches === 'undefined') return;
-    const cache = await caches.open(this.cacheName);
+    const otaCache = await caches.open(this.otaOverrideCacheName);
+    const shellCache = await caches.open(this.cacheName);
 
     await Promise.all(
       this.updatableFiles.map(async (item) => {
@@ -199,18 +201,16 @@ class DicklumOtaUpdater {
               'X-OTA-Updated-At': new Date().toISOString()
             });
             const syntheticResp = new Response(body, { status: 200, headers });
-            await cache.put(item.local, syntheticResp.clone());
+            await otaCache.put(item.local, syntheticResp.clone());
+            await shellCache.put(item.local, syntheticResp.clone());
             if (item.local === './index.html') {
-              await cache.put('./', syntheticResp.clone());
+              await otaCache.put('./', syntheticResp.clone());
+              await shellCache.put('./', syntheticResp.clone());
             }
           }
         } catch (_) {}
       })
     );
-
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({ type: 'FORCE_UPDATE_CACHE' });
-    }
   }
 
   updateStatusBadge(text, badgeClass = 'badge-success') {
@@ -223,8 +223,13 @@ class DicklumOtaUpdater {
 
   notifyUpdateReady(msg) {
     if (window.app && typeof window.app.showToast === 'function') {
-      window.app.showToast(`${msg} — Reloading in 2s or tap Sync in Settings.`, 3200);
+      window.app.showToast(`${msg} — Applying update...`, 1800);
     }
+    setTimeout(() => {
+      try {
+        window.location.reload();
+      } catch (_) {}
+    }, 1600);
   }
 
   bindUIEvents() {

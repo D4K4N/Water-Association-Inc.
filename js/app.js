@@ -69,12 +69,12 @@ class WaterBillingApp {
     // 2. Load cached records
     await this.refreshDataCache();
 
-    // 3. Initialize Satellite Map Engine (Direct Launch: MapLibre WebGL GPU or Leaflet fallback)
+    // 3. Initialize Satellite Map Engine (Direct Launch: Leaflet FieldMapEngine with Google 4K Satellite Hybrid + Bundled Offline Tiles)
     const mapContainer = document.getElementById('field-map');
     if (mapContainer) {
-      const MapEngineClass = (typeof window.MapLibreFieldMapEngine !== 'undefined')
-        ? window.MapLibreFieldMapEngine
-        : window.FieldMapEngine;
+      const MapEngineClass = (typeof window.FieldMapEngine !== 'undefined')
+        ? window.FieldMapEngine
+        : window.MapLibreFieldMapEngine;
 
       this.mapEngine = new MapEngineClass(mapContainer, {
         centerLat: 8.3735,

@@ -6,9 +6,10 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '26';
+const CACHE_VERSION = '27';
 const CACHE_NAME = `dicklum-water-v${CACHE_VERSION}`;
-const TILE_CACHE_NAME = 'dicklum-tiles-cache-v2';
+const OTA_OVERRIDE_CACHE = 'dicklum-ota-override-v1';
+const TILE_CACHE_NAME = 'dicklum-tiles-cache-v3';
 
 const ASSETS_TO_CACHE = [
   './',
@@ -121,13 +122,27 @@ function parseMapTileDescriptor(urlObj) {
 function getTileBlobFromIndexedDB(idbKey) {
   if (!idbKey || typeof indexedDB === 'undefined') return Promise.resolve(null);
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+    const timer = setTimeout(() => finish(null), 250);
     try {
       const req = indexedDB.open('dicklum_offline_maps', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('tiles')) {
+          db.createObjectStore('tiles', { keyPath: 'key' });
+        }
+      };
       req.onsuccess = (e) => {
         const db = e.target.result;
         if (!db.objectStoreNames.contains('tiles')) {
           db.close();
-          return resolve(null);
+          clearTimeout(timer);
+          return finish(null);
         }
         try {
           const tx = db.transaction('tiles', 'readonly');
@@ -136,20 +151,31 @@ function getTileBlobFromIndexedDB(idbKey) {
           getReq.onsuccess = () => {
             const rec = getReq.result;
             db.close();
-            resolve(rec && rec.blob ? rec.blob : null);
+            clearTimeout(timer);
+            finish(rec && rec.blob ? rec.blob : null);
           };
           getReq.onerror = () => {
             db.close();
-            resolve(null);
+            clearTimeout(timer);
+            finish(null);
           };
         } catch (_) {
           db.close();
-          resolve(null);
+          clearTimeout(timer);
+          finish(null);
         }
       };
-      req.onerror = () => resolve(null);
+      req.onerror = () => {
+        clearTimeout(timer);
+        finish(null);
+      };
+      req.onblocked = () => {
+        clearTimeout(timer);
+        finish(null);
+      };
     } catch (_) {
-      resolve(null);
+      clearTimeout(timer);
+      finish(null);
     }
   });
 }
@@ -188,7 +214,7 @@ self.addEventListener('activate', (e) => {
     caches.keys().then((keys) => {
       return Promise.all(
         keys
-          .filter((key) => key !== CACHE_NAME && key !== TILE_CACHE_NAME && key !== 'dicklum-tiles-cache-v1')
+          .filter((key) => key !== CACHE_NAME && key !== OTA_OVERRIDE_CACHE && key !== TILE_CACHE_NAME)
           .map((key) => caches.delete(key))
       );
     }).then(() => self.clients.claim())
@@ -237,19 +263,18 @@ self.addEventListener('fetch', (e) => {
         // 1A. Check canonical tile cache key first (normalizes mt0..mt3 and lyrs=y vs lyrs=s,h)
         if (tileDesc) {
           const canonicalMatch = await tileCache.match(tileDesc.canonicalUrl);
-          if (canonicalMatch) return canonicalMatch;
+          if (canonicalMatch && (e.request.mode !== 'cors' || canonicalMatch.type !== 'opaque')) {
+            return canonicalMatch;
+          }
         }
 
         // 1B. Check exact request URL in tile cache
         const directMatch = await tileCache.match(e.request, { ignoreSearch: isBundledTilePath });
-        if (directMatch) return directMatch;
+        if (directMatch && (e.request.mode !== 'cors' || directMatch.type !== 'opaque')) {
+          return directMatch;
+        }
 
-        // 1C. Check legacy v1 tile cache if present
-        const legacyCache = await caches.open('dicklum-tiles-cache-v1');
-        const legacyMatch = await legacyCache.match(e.request);
-        if (legacyMatch) return legacyMatch;
-
-        // 1D. Check IndexedDB (`dicklum_offline_maps`) for user-downloaded offline map packs
+        // 1C. Check IndexedDB (`dicklum_offline_maps`) for user-downloaded offline map packs
         if (tileDesc) {
           const idbBlob = await getTileBlobFromIndexedDB(tileDesc.idbKey);
           if (idbBlob) {
@@ -265,7 +290,7 @@ self.addEventListener('fetch', (e) => {
           }
         }
 
-        // 1E. Try live network fetch if online
+        // 1D. Try live network fetch if online
         try {
           const networkResponse = await fetch(e.request);
           if (networkResponse && (networkResponse.ok || networkResponse.type === 'opaque')) {
@@ -279,9 +304,11 @@ self.addEventListener('fetch', (e) => {
           // Network offline or unreachable — proceed to bundled Diclum tile fallback
         }
 
-        // 1F. Bundled Barangay Diclum tile fallback (zoom 14–17 for google_hybrid, 14–16 for streets)
-        if (tileDesc && (tileDesc.layer === 'google_hybrid' || tileDesc.layer === 'streets')) {
-          const bundledRelUrl = `./assets/dicklum-tiles/${tileDesc.layer}/${tileDesc.z}/${tileDesc.x}/${tileDesc.y}.${tileDesc.ext}`;
+        // 1E. Bundled Barangay Diclum tile fallback (zoom 14–17 for google_hybrid/esri_satellite, 14–16 for streets)
+        if (tileDesc && (tileDesc.layer === 'google_hybrid' || tileDesc.layer === 'esri_satellite' || tileDesc.layer === 'streets')) {
+          const fallbackFolder = tileDesc.layer === 'streets' ? 'streets' : 'google_hybrid';
+          const fallbackExt = tileDesc.layer === 'streets' ? 'png' : 'jpg';
+          const bundledRelUrl = `./assets/dicklum-tiles/${fallbackFolder}/${tileDesc.z}/${tileDesc.x}/${tileDesc.y}.${fallbackExt}`;
           const cachedBundled = await caches.match(bundledRelUrl, { ignoreSearch: true }) ||
                                 await tileCache.match(bundledRelUrl, { ignoreSearch: true });
           if (cachedBundled) return cachedBundled;
@@ -302,8 +329,7 @@ self.addEventListener('fetch', (e) => {
   }
 
   // 2. Same-Origin App Shell Assets (HTML, CSS, JS, Vendor Libraries, Icons, Manifest)
-  // Strategy: CACHE-FIRST + BACKGROUND REVALIDATE (Stale-While-Revalidate)
-  // Guarantees 0ms instant boot when phone restarts 100% offline, while still updating from GitHub in the background!
+  // Strategy: OTA_OVERRIDE_CACHE -> NETWORK-FIRST (1.8s timeout) for code assets -> CACHE-FIRST fallback
   if (url.origin === self.location.origin) {
     // Always fetch version.json fresh when checking for updates (fallback to cache offline)
     if (url.pathname.endsWith('/version.json')) {
@@ -326,12 +352,25 @@ self.addEventListener('fetch', (e) => {
                          url.pathname.endsWith('/') ||
                          url.pathname.endsWith('/index.html');
 
+    const isCodeAsset = isNavigation ||
+                        url.pathname.endsWith('.js') ||
+                        url.pathname.endsWith('.css') ||
+                        url.pathname.endsWith('.html');
+
     e.respondWith(
       (async () => {
         const cache = await caches.open(CACHE_NAME);
+        const otaCache = await caches.open(OTA_OVERRIDE_CACHE);
 
-        // Look up in current cache (ignoring ?v=20 query strings so cached files always hit)
-        let cachedResponse = await cache.match(e.request, { ignoreSearch: true });
+        // 2A. Check if OTA updater stored a newer file from GitHub in OTA_OVERRIDE_CACHE
+        let otaMatch = await otaCache.match(e.request, { ignoreSearch: true });
+        if (!otaMatch && isNavigation) {
+          otaMatch = await otaCache.match('./index.html', { ignoreSearch: true }) ||
+                     await otaCache.match('./', { ignoreSearch: true });
+        }
+
+        // 2B. Look up in current app shell cache
+        let cachedResponse = otaMatch || await cache.match(e.request, { ignoreSearch: true });
         if (!cachedResponse && isNavigation) {
           cachedResponse = await cache.match('./index.html', { ignoreSearch: true }) ||
                            await cache.match('./', { ignoreSearch: true }) ||
@@ -341,28 +380,51 @@ self.addEventListener('fetch', (e) => {
           cachedResponse = await caches.match(e.request, { ignoreSearch: true });
         }
 
-        // Background network update (non-blocking when cachedResponse exists)
-        const networkUpdatePromise = fetch(e.request, { cache: 'no-cache' })
-          .then((networkResp) => {
+        // 2C. If OTA override exists (used by Capacitor APK), serve it immediately
+        if (otaMatch) {
+          return otaMatch;
+        }
+
+        // 2D. For HTML/JS/CSS on GitHub Pages PWA, try Network-First with 1.8s fast timeout
+        if (isCodeAsset) {
+          try {
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 1800) : null;
+            const networkResp = await fetch(e.request, {
+              cache: 'no-cache',
+              signal: controller ? controller.signal : undefined
+            });
+            if (timeoutId) clearTimeout(timeoutId);
             if (networkResp && networkResp.status === 200) {
               cache.put(e.request, networkResp.clone());
               if (isNavigation) {
                 cache.put('./index.html', networkResp.clone());
               }
+              return networkResp;
             }
-            return networkResp;
-          })
-          .catch(() => null);
+          } catch (_) {
+            // Network timeout or offline — fall through to instant cachedResponse
+          }
+        } else {
+          // Non-code static assets (icons, vendor libs): background revalidate
+          const networkUpdatePromise = fetch(e.request, { cache: 'no-cache' })
+            .then((networkResp) => {
+              if (networkResp && networkResp.status === 200) {
+                cache.put(e.request, networkResp.clone());
+              }
+              return networkResp;
+            })
+            .catch(() => null);
 
-        // Return cached response immediately (0ms offline boot!)
-        if (cachedResponse) {
-          e.waitUntil(networkUpdatePromise);
-          return cachedResponse;
+          if (cachedResponse) {
+            e.waitUntil(networkUpdatePromise);
+            return cachedResponse;
+          }
         }
 
-        // If not in cache yet (very first visit ever), await network
-        const netResp = await networkUpdatePromise;
-        if (netResp) return netResp;
+        if (cachedResponse) {
+          return cachedResponse;
+        }
 
         // Ultimate offline fallback for document navigation
         if (isNavigation) {

@@ -62,51 +62,45 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk ./Dicklum-Water-Billing.apk
           ls -lh ./Dicklum-Water-Billing.apk
 
-      # ─── 2. BUILD SEPARATE AI SCANNER EDITION APK (Dicklum-Water-AI-Scanner.apk) ───
-      - name: Prepare Separate AI Scanner Bundle & Config
+      # ─── 2. BUILD SEPARATE AI SCANNER EDITION APK (If ai-scanner/ exists on branch) ───
+      - name: Build Separate AI Scanner APK if Present
         run: |
-          rm -rf www android
-          cp -r ai-scanner www
-          node -e '
-            const fs = require("fs");
-            const cfg = JSON.parse(fs.readFileSync("capacitor.config.json", "utf8"));
-            cfg.appId = "com.dicklum.waterbilling.ai";
-            cfg.appName = "Dicklum Water AI";
-            cfg.webDir = "www";
-            fs.writeFileSync("capacitor.config.json", JSON.stringify(cfg, null, 2));
-          '
-          npx cap add android
-          npx cap sync android
-          git checkout capacitor.config.json
-
-      - name: Inject Camera, Flashlight, GPS & Bluetooth Permissions for AI Edition
-        run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          if [ -f "$MANIFEST" ]; then
-            sed -i 's|<application|<!-- Camera, Torch Flashlight, GPS & Bluetooth Permissions -->\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.FLASHLIGHT" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.BLUETOOTH" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <application android:usesCleartextTraffic="true"|' "$MANIFEST"
+          if [ -d "ai-scanner" ]; then
+            rm -rf www android
+            cp -r ai-scanner www
+            node -e '
+              const fs = require("fs");
+              const cfg = JSON.parse(fs.readFileSync("capacitor.config.json", "utf8"));
+              cfg.appId = "com.dicklum.waterbilling.ai";
+              cfg.appName = "Dicklum Water AI";
+              cfg.webDir = "www";
+              fs.writeFileSync("capacitor.config.json", JSON.stringify(cfg, null, 2));
+            '
+            npx cap add android
+            npx cap sync android
+            git checkout capacitor.config.json
+            MANIFEST="android/app/src/main/AndroidManifest.xml"
+            if [ -f "$MANIFEST" ]; then
+              sed -i 's|<application|<!-- Camera, Torch Flashlight, GPS & Bluetooth Permissions -->\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.FLASHLIGHT" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.BLUETOOTH" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <application android:usesCleartextTraffic="true"|' "$MANIFEST"
+            fi
+            (cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon)
+            cp android/app/build/outputs/apk/debug/app-debug.apk ./Dicklum-Water-AI-Scanner.apk
+            ls -lh ./Dicklum-Water-AI-Scanner.apk
+          else
+            echo "On main branch (no ai-scanner/ directory) — skipping AI Scanner APK build."
           fi
 
-      - name: Compile Dicklum-Water-AI-Scanner.apk (AI Scanner App)
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Save Dicklum-Water-AI-Scanner.apk
-        run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk ./Dicklum-Water-AI-Scanner.apk
-          ls -lh ./Dicklum-Water-AI-Scanner.apk
-
-      - name: Upload Both APK Artifacts
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Dicklum-Water-APKs
           path: |
             ./Dicklum-Water-Billing.apk
             ./Dicklum-Water-AI-Scanner.apk
+          if-no-files-found: ignore
           retention-days: 90
 
-      - name: Publish Both APKs to GitHub Releases
+      - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
@@ -119,10 +113,9 @@ jobs:
             ### 2. New Offline AI Camera Scanner Edition: `Dicklum-Water-AI-Scanner.apk`
             - **Package ID**: `com.dicklum.waterbilling.ai` (App Name: **Dicklum Water AI**)
             - Installs as a **separate second app** on your phone (never overwrites your original app!).
-            - Equipped with **100% Offline Edge AI Water Meter Scanner**, 5-drum mechanical roller recognition, real-time moss/algae ("lumot") & glare glass diagnostics, and built-in client demo simulator.
           files: |
-            ./Dicklum-Water-Billing.apk
-            ./Dicklum-Water-AI-Scanner.apk
+            ./Dicklum-Water-Billing*.apk
+            ./Dicklum-Water-AI-Scanner*.apk
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

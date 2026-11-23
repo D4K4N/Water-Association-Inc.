@@ -11,9 +11,9 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '2.8.0';
-    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 28;
-    this.cacheName = 'dicklum-water-v28';
+    this.localVersion = '2.9.0';
+    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 29;
+    this.cacheName = 'dicklum-water-v29';
     this.otaOverrideCacheName = 'dicklum-ota-override-v1';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'main';
@@ -187,6 +187,10 @@ class DicklumOtaUpdater {
     if (typeof caches === 'undefined') return;
     const otaCache = await caches.open(this.otaOverrideCacheName);
     const shellCache = await caches.open(this.cacheName);
+    // Also write into legacy v25/v26/v27/v28 shell caches so ANY running Service Worker version serves the updated files immediately!
+    const legacyCaches = await Promise.all(
+      ['dicklum-water-v25', 'dicklum-water-v26', 'dicklum-water-v27', 'dicklum-water-v28'].map((n) => caches.open(n))
+    );
 
     await Promise.all(
       this.updatableFiles.map(async (item) => {
@@ -203,9 +207,15 @@ class DicklumOtaUpdater {
             const syntheticResp = new Response(body, { status: 200, headers });
             await otaCache.put(item.local, syntheticResp.clone());
             await shellCache.put(item.local, syntheticResp.clone());
+            for (const lc of legacyCaches) {
+              try { await lc.put(item.local, syntheticResp.clone()); } catch (_) {}
+            }
             if (item.local === './index.html') {
               await otaCache.put('./', syntheticResp.clone());
               await shellCache.put('./', syntheticResp.clone());
+              for (const lc of legacyCaches) {
+                try { await lc.put('./', syntheticResp.clone()); } catch (_) {}
+              }
             }
           }
         } catch (_) {}

@@ -1892,6 +1892,10 @@ html, body {
 .custom-map-pin {
   background: transparent !important;
   border: none !important;
+  touch-action: none !important;
+  -webkit-touch-callout: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 .map-pin {
@@ -1906,6 +1910,8 @@ html, body {
   transition: transform 0.12s ease;
   transform-origin: bottom center;
   rotate: var(--map-counter-rotate, 0deg);
+  touch-action: none !important;
+  -webkit-touch-callout: none !important;
   user-select: none;
   -webkit-user-select: none;
 }

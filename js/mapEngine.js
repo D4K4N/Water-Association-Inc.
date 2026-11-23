@@ -752,9 +752,11 @@ class FieldMapEngine {
     const iconEl = marker.getElement();
     if (!iconEl || iconEl._longPressDragBound) return;
     iconEl._longPressDragBound = true;
+    iconEl.style.touchAction = 'none';
 
     let pressTimer = null;
     let isDraggingPin = false;
+    let activePointerId = null;
     let startClientX = 0;
     let startClientY = 0;
     let currentLatLng = marker.getLatLng();
@@ -797,7 +799,7 @@ class FieldMapEngine {
       pressTimer = null;
       isDraggingPin = true;
       marker._suppressNextPinClick = true;
-      this._suppressMapClickUntil = Date.now() + 800;
+      this._suppressMapClickUntil = Date.now() + 900;
 
       if (this._map && this._map.dragging) {
         this._map.dragging.disable();
@@ -818,10 +820,17 @@ class FieldMapEngine {
     };
 
     const onMove = (ev) => {
+      if (activePointerId !== null && ev.pointerId !== undefined && ev.pointerId !== activePointerId) {
+        return;
+      }
       const pt = getClientXY(ev);
       if (!isDraggingPin) {
-        if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 10) {
+        // Allow up to 18px finger tremor during the 300ms hold on mobile touchscreens
+        if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 18) {
           cancelPressTimer();
+          if (this._map && this._map.dragging && !this._map.dragging.enabled()) {
+            this._map.dragging.enable();
+          }
         }
         return;
       }
@@ -844,13 +853,24 @@ class FieldMapEngine {
       updateCoordBadge(newLatLng.lat, newLatLng.lng);
     };
 
-    const onEnd = (ev) => {
-      cancelPressTimer();
+    const cleanupListeners = () => {
+      window.removeEventListener('pointermove', onMove, false);
+      window.removeEventListener('pointerup', onEnd, false);
+      window.removeEventListener('pointercancel', onEnd, false);
       window.removeEventListener('mousemove', onMove, false);
       window.removeEventListener('mouseup', onEnd, false);
-      window.removeEventListener('touchmove', onMove, { passive: false });
+      window.removeEventListener('touchmove', onMove, false);
       window.removeEventListener('touchend', onEnd, false);
       window.removeEventListener('touchcancel', onEnd, false);
+    };
+
+    const onEnd = (ev) => {
+      cancelPressTimer();
+      cleanupListeners();
+      if (activePointerId !== null && iconEl.releasePointerCapture) {
+        try { iconEl.releasePointerCapture(activePointerId); } catch (_) {}
+      }
+      activePointerId = null;
 
       if (!isDraggingPin) return;
       isDraggingPin = false;
@@ -858,7 +878,7 @@ class FieldMapEngine {
       if (ev && ev.cancelable) ev.preventDefault();
       if (ev) ev.stopPropagation();
 
-      this._suppressMapClickUntil = Date.now() + 450;
+      this._suppressMapClickUntil = Date.now() + 500;
       if (this._map && this._map.dragging) {
         this._map.dragging.enable();
       }
@@ -883,20 +903,35 @@ class FieldMapEngine {
 
     const onStart = (ev) => {
       if (ev.type === 'mousedown' && ev.button !== 0) return;
+      if (ev.type === 'pointerdown' && ev.pointerType === 'mouse' && ev.button !== 0) return;
       if (ev.touches && ev.touches.length > 1) {
         cancelPressTimer();
         return;
       }
+
+      // Stop event from bubbling to Leaflet map._container so Leaflet doesn't start panning the map while holding the pin!
+      ev.stopPropagation();
 
       const pt = getClientXY(ev);
       startClientX = pt.x;
       startClientY = pt.y;
       currentLatLng = marker.getLatLng();
 
-      cancelPressTimer();
-      pressTimer = setTimeout(activatePinDrag, 350);
+      if (ev.pointerId !== undefined) {
+        activePointerId = ev.pointerId;
+        if (iconEl.setPointerCapture) {
+          try { iconEl.setPointerCapture(ev.pointerId); } catch (_) {}
+        }
+      }
 
-      if (ev.type === 'touchstart') {
+      cancelPressTimer();
+      pressTimer = setTimeout(activatePinDrag, 300);
+
+      if (typeof window.PointerEvent !== 'undefined' && ev.type === 'pointerdown') {
+        window.addEventListener('pointermove', onMove, false);
+        window.addEventListener('pointerup', onEnd, false);
+        window.addEventListener('pointercancel', onEnd, false);
+      } else if (ev.type === 'touchstart') {
         window.addEventListener('touchmove', onMove, { passive: false });
         window.addEventListener('touchend', onEnd, false);
         window.addEventListener('touchcancel', onEnd, false);
@@ -906,8 +941,18 @@ class FieldMapEngine {
       }
     };
 
-    iconEl.addEventListener('mousedown', onStart, false);
-    iconEl.addEventListener('touchstart', onStart, { passive: true });
+    // Suppress Android long-press context menu on pin markers
+    iconEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, false);
+
+    if (typeof window.PointerEvent !== 'undefined') {
+      iconEl.addEventListener('pointerdown', onStart, false);
+    } else {
+      iconEl.addEventListener('mousedown', onStart, false);
+      iconEl.addEventListener('touchstart', onStart, { passive: true });
+    }
   }
 
   _createPinHTML(pin) {

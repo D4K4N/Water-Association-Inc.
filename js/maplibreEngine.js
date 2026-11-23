@@ -829,9 +829,11 @@
     _bindLongPressPinDrag(marker, wrapper, pin) {
       if (!wrapper || wrapper._longPressDragBound) return;
       wrapper._longPressDragBound = true;
+      wrapper.style.touchAction = 'none';
 
       let pressTimer = null;
       let isDraggingPin = false;
+      let activePointerId = null;
       let startClientX = 0;
       let startClientY = 0;
       let currentLngLat = marker.getLngLat();
@@ -874,7 +876,7 @@
         pressTimer = null;
         isDraggingPin = true;
         wrapper._suppressNextPinClick = true;
-        this._suppressMapClickUntil = Date.now() + 800;
+        this._suppressMapClickUntil = Date.now() + 900;
 
         if (this._map && this._map.dragPan) {
           this._map.dragPan.disable();
@@ -895,10 +897,16 @@
       };
 
       const onMove = (ev) => {
+        if (activePointerId !== null && ev.pointerId !== undefined && ev.pointerId !== activePointerId) {
+          return;
+        }
         const pt = getClientXY(ev);
         if (!isDraggingPin) {
-          if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 10) {
+          if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 18) {
             cancelPressTimer();
+            if (this._map && this._map.dragPan) {
+              this._map.dragPan.enable();
+            }
           }
           return;
         }
@@ -920,13 +928,24 @@
         updateCoordBadge(newLngLat.lat, newLngLat.lng);
       };
 
-      const onEnd = (ev) => {
-        cancelPressTimer();
+      const cleanupListeners = () => {
+        window.removeEventListener('pointermove', onMove, false);
+        window.removeEventListener('pointerup', onEnd, false);
+        window.removeEventListener('pointercancel', onEnd, false);
         window.removeEventListener('mousemove', onMove, false);
         window.removeEventListener('mouseup', onEnd, false);
-        window.removeEventListener('touchmove', onMove, { passive: false });
+        window.removeEventListener('touchmove', onMove, false);
         window.removeEventListener('touchend', onEnd, false);
         window.removeEventListener('touchcancel', onEnd, false);
+      };
+
+      const onEnd = (ev) => {
+        cancelPressTimer();
+        cleanupListeners();
+        if (activePointerId !== null && wrapper.releasePointerCapture) {
+          try { wrapper.releasePointerCapture(activePointerId); } catch (_) {}
+        }
+        activePointerId = null;
 
         if (!isDraggingPin) return;
         isDraggingPin = false;
@@ -934,7 +953,7 @@
         if (ev && ev.cancelable) ev.preventDefault();
         if (ev) ev.stopPropagation();
 
-        this._suppressMapClickUntil = Date.now() + 450;
+        this._suppressMapClickUntil = Date.now() + 500;
         if (this._map && this._map.dragPan) {
           this._map.dragPan.enable();
         }
@@ -958,20 +977,34 @@
 
       const onStart = (ev) => {
         if (ev.type === 'mousedown' && ev.button !== 0) return;
+        if (ev.type === 'pointerdown' && ev.pointerType === 'mouse' && ev.button !== 0) return;
         if (ev.touches && ev.touches.length > 1) {
           cancelPressTimer();
           return;
         }
+
+        ev.stopPropagation();
 
         const pt = getClientXY(ev);
         startClientX = pt.x;
         startClientY = pt.y;
         currentLngLat = marker.getLngLat();
 
-        cancelPressTimer();
-        pressTimer = setTimeout(activatePinDrag, 350);
+        if (ev.pointerId !== undefined) {
+          activePointerId = ev.pointerId;
+          if (wrapper.setPointerCapture) {
+            try { wrapper.setPointerCapture(ev.pointerId); } catch (_) {}
+          }
+        }
 
-        if (ev.type === 'touchstart') {
+        cancelPressTimer();
+        pressTimer = setTimeout(activatePinDrag, 300);
+
+        if (typeof window.PointerEvent !== 'undefined' && ev.type === 'pointerdown') {
+          window.addEventListener('pointermove', onMove, false);
+          window.addEventListener('pointerup', onEnd, false);
+          window.addEventListener('pointercancel', onEnd, false);
+        } else if (ev.type === 'touchstart') {
           window.addEventListener('touchmove', onMove, { passive: false });
           window.addEventListener('touchend', onEnd, false);
           window.addEventListener('touchcancel', onEnd, false);
@@ -981,8 +1014,17 @@
         }
       };
 
-      wrapper.addEventListener('mousedown', onStart, false);
-      wrapper.addEventListener('touchstart', onStart, { passive: true });
+      wrapper.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }, false);
+
+      if (typeof window.PointerEvent !== 'undefined') {
+        wrapper.addEventListener('pointerdown', onStart, false);
+      } else {
+        wrapper.addEventListener('mousedown', onStart, false);
+        wrapper.addEventListener('touchstart', onStart, { passive: true });
+      }
     }
 
     _createPinHTML(pin) {

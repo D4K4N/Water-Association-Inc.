@@ -6,7 +6,7 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '27';
+const CACHE_VERSION = '28';
 const CACHE_NAME = `dicklum-water-v${CACHE_VERSION}`;
 const OTA_OVERRIDE_CACHE = 'dicklum-ota-override-v1';
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v3';
@@ -290,9 +290,14 @@ self.addEventListener('fetch', (e) => {
           }
         }
 
-        // 1D. Try live network fetch if online
+        // 1D. Try live network fetch if online (with fast 5s timeout so weak mobile data falls back to offline tiles instead of hanging)
         try {
-          const networkResponse = await fetch(e.request);
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timer = controller ? setTimeout(() => controller.abort(), 5000) : null;
+          const networkResponse = await fetch(e.request, {
+            signal: controller ? controller.signal : undefined
+          });
+          if (timer) clearTimeout(timer);
           if (networkResponse && (networkResponse.ok || networkResponse.type === 'opaque')) {
             if (tileDesc && networkResponse.ok) {
               tileCache.put(tileDesc.canonicalUrl, networkResponse.clone());
@@ -301,25 +306,32 @@ self.addEventListener('fetch', (e) => {
             return networkResponse;
           }
         } catch (_) {
-          // Network offline or unreachable — proceed to bundled Diclum tile fallback
+          // Network offline, slow mobile data, or unreachable — proceed to bundled Diclum tile fallback
         }
 
-        // 1E. Bundled Barangay Diclum tile fallback (zoom 14–17 for google_hybrid/esri_satellite, 14–16 for streets)
-        if (tileDesc && (tileDesc.layer === 'google_hybrid' || tileDesc.layer === 'esri_satellite' || tileDesc.layer === 'streets')) {
-          const fallbackFolder = tileDesc.layer === 'streets' ? 'streets' : 'google_hybrid';
-          const fallbackExt = tileDesc.layer === 'streets' ? 'png' : 'jpg';
-          const bundledRelUrl = `./assets/dicklum-tiles/${fallbackFolder}/${tileDesc.z}/${tileDesc.x}/${tileDesc.y}.${fallbackExt}`;
-          const cachedBundled = await caches.match(bundledRelUrl, { ignoreSearch: true }) ||
-                                await tileCache.match(bundledRelUrl, { ignoreSearch: true });
-          if (cachedBundled) return cachedBundled;
+        // 1E. Bundled Barangay Diclum tile fallback (checks requested layer first, then cross-falls back to bundled Diclum streets Z14-Z16)
+        if (tileDesc) {
+          const candidates = [];
+          if (tileDesc.layer === 'google_hybrid' || tileDesc.layer === 'esri_satellite') {
+            candidates.push(`./assets/dicklum-tiles/google_hybrid/${tileDesc.z}/${tileDesc.x}/${tileDesc.y}.jpg`);
+          }
+          // Always include the 90 bundled Barangay Diclum street tiles (Z14-Z16) as a guaranteed offline fallback
+          if (tileDesc.z >= 14 && tileDesc.z <= 16) {
+            candidates.push(`./assets/dicklum-tiles/streets/${tileDesc.z}/${tileDesc.x}/${tileDesc.y}.png`);
+          }
 
-          try {
-            const bundledResp = await fetch(bundledRelUrl);
-            if (bundledResp && bundledResp.ok) {
-              tileCache.put(tileDesc.canonicalUrl, bundledResp.clone());
-              return bundledResp;
-            }
-          } catch (_) {}
+          for (const bundledRelUrl of candidates) {
+            const cachedBundled = await caches.match(bundledRelUrl, { ignoreSearch: true }) ||
+                                  await tileCache.match(bundledRelUrl, { ignoreSearch: true });
+            if (cachedBundled) return cachedBundled;
+
+            try {
+              const bundledResp = await fetch(bundledRelUrl);
+              if (bundledResp && bundledResp.ok) {
+                return bundledResp;
+              }
+            } catch (_) {}
+          }
         }
 
         return new Response('', { status: 408, statusText: 'Offline Tile Unavailable' });

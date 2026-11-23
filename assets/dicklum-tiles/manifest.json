@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-04T15:13:08.900Z",
+  "generatedAt": "2026-11-23T11:40:00.000Z",
   "bounds": {
     "minLat": 8.3465,
     "maxLat": 8.4005,
@@ -8,9 +8,13 @@
   },
   "layers": {
     "google_hybrid": {
-      "minZoom": 14,
-      "maxBundledZoom": 17,
-      "ext": "jpg"
+      "minZoom": 16,
+      "maxBundledZoom": 16,
+      "ext": "jpg",
+      "bundledTiles": [
+        "16_55498_31239",
+        "16_55498_31240"
+      ]
     },
     "streets": {
       "minZoom": 14,

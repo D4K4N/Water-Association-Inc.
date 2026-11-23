@@ -1916,6 +1916,42 @@ html, body {
   transform: scale(1.1);
 }
 
+/* Long-Press Drag-to-Move Active Pin State */
+.map-pin.is-dragging-pin {
+  transform: translateY(-10px) scale(1.22) !important;
+  cursor: grabbing !important;
+  z-index: 12000 !important;
+}
+
+.map-pin.is-dragging-pin .pin-body {
+  border-color: #38BDF8 !important;
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.45), 0 8px 18px rgba(0, 0, 0, 0.65) !important;
+}
+
+.map-pin.is-dragging-pin .pin-popup-label {
+  display: inline-flex !important;
+  border-color: #34D399 !important;
+}
+
+.pin-drag-coords-pill {
+  position: absolute;
+  bottom: calc(100% + 28px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(6, 78, 59, 0.96);
+  border: 1px solid #34D399;
+  color: #ECFDF5;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.55);
+  z-index: 30;
+}
+
 .pin-body {
   position: relative;
   width: 26px;

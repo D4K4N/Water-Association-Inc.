@@ -85,6 +85,7 @@ class WaterBillingApp {
 
       this.mapEngine.selectPinCallback = (pin) => this.handlePinSelect(pin);
       this.mapEngine.dropPinCallback = (lat, lng) => this.handleMapTapToPin(lat, lng);
+      this.mapEngine.movePinCallback = (pin, lat, lng) => this.handlePinMove(pin, lat, lng);
 
       [50, 150, 350, 800].forEach(delay => {
         setTimeout(() => {
@@ -727,6 +728,88 @@ class WaterBillingApp {
 
   handleMapTapToPin(lat, lng) {
     this.openDropPinModal(lat, lng);
+  }
+
+  async handlePinMove(pin, newLat, newLng) {
+    if (!pin || isNaN(newLat) || isNaN(newLng)) return;
+    const lat = Number(newLat.toFixed(6));
+    const lng = Number(newLng.toFixed(6));
+
+    try {
+      if (pin.type === 'household') {
+        const consumerId = (pin.data && pin.data.consumerId) || pin.id;
+        const consumer = this.cachedConsumers.find(c => c.id === consumerId);
+        if (consumer) {
+          const prevLat = Number(consumer.householdLat);
+          const prevLng = Number(consumer.householdLng);
+          consumer.householdLat = lat;
+          consumer.householdLng = lng;
+          consumer.updatedAt = new Date().toISOString();
+          await window.db.put('consumers', consumer);
+
+          // If this consumer's standalone water meter was pinned at the exact same spot, move it together if user hasn't separated them
+          const linkedMeter = this.cachedMeters.find(m => m.consumerId === consumer.id && !m.isClustered);
+          if (linkedMeter && linkedMeter.meterLat && linkedMeter.meterLng &&
+              Math.abs(Number(linkedMeter.meterLat) - prevLat) < 0.000005 &&
+              Math.abs(Number(linkedMeter.meterLng) - prevLng) < 0.000005) {
+            linkedMeter.meterLat = lat;
+            linkedMeter.meterLng = lng;
+            linkedMeter.updatedAt = new Date().toISOString();
+            await window.db.put('meters', linkedMeter);
+          }
+
+          await this.refreshDataCache();
+          this.syncPinsToMap();
+          this.renderConsumerList();
+          this.autoSyncToOfficePcSilent();
+          this.showToast(`Moved ${consumer.name}'s House pin to ${lat.toFixed(5)}, ${lng.toFixed(5)}`, 2400);
+        }
+      } else if (pin.type === 'meter') {
+        const meterId = (pin.data && pin.data.meterId) || pin.id;
+        const meter = this.cachedMeters.find(m => m.id === meterId);
+        if (meter) {
+          meter.meterLat = lat;
+          meter.meterLng = lng;
+          meter.updatedAt = new Date().toISOString();
+          await window.db.put('meters', meter);
+
+          const consumer = this.cachedConsumers.find(c => c.id === meter.consumerId);
+          const label = (consumer && consumer.name) ? consumer.name : (meter.ownerName || meter.meterNo);
+
+          await this.refreshDataCache();
+          this.syncPinsToMap();
+          this.renderConsumerList();
+          this.autoSyncToOfficePcSilent();
+          this.showToast(`Moved Water Meter (${label}) to ${lat.toFixed(5)}, ${lng.toFixed(5)}`, 2400);
+        }
+      } else if (pin.type === 'cluster') {
+        const clusterId = (pin.data && pin.data.clusterId) || pin.id;
+        const cluster = this.cachedClusters.find(cl => cl.id === clusterId);
+        if (cluster) {
+          cluster.lat = lat;
+          cluster.lng = lng;
+          cluster.updatedAt = new Date().toISOString();
+          await window.db.put('clusters', cluster);
+
+          const clusterMeters = this.cachedMeters.filter(m => m.clusterId === cluster.id);
+          for (const m of clusterMeters) {
+            m.meterLat = lat;
+            m.meterLng = lng;
+            m.updatedAt = new Date().toISOString();
+            await window.db.put('meters', m);
+          }
+
+          await this.refreshDataCache();
+          this.syncPinsToMap();
+          this.renderConsumerList();
+          this.autoSyncToOfficePcSilent();
+          this.showToast(`Moved Clustered Meters (${clusterMeters.length} WM) to ${lat.toFixed(5)}, ${lng.toFixed(5)}`, 2400);
+        }
+      }
+    } catch (err) {
+      console.error('Error saving moved pin location:', err);
+      this.showToast('Could not save new pin location: ' + err.message, 2500);
+    }
   }
 
   openConsumerSheet(consumerId, highlightMeterId = null, pinType = null) {
@@ -4544,7 +4627,9 @@ class WaterBillingApp {
 
     try {
       this.showToast('Starting Barangay Diclum offline map download...', 2000);
+      const currentLayer = (this.mapEngine && this.mapEngine._currentLayerKey) || 'google_hybrid';
       const res = await window.offlineTileEngine.downloadDiclumMapPack({
+        layer: currentLayer,
         minZoom: 14,
         maxZoom: 18,
         onProgress: (p) => {
@@ -4555,8 +4640,11 @@ class WaterBillingApp {
       });
 
       if (labelEl) labelEl.textContent = 'Offline Diclum Map 100% Cached!';
-      this.showToast(`Diclum Map Download Complete! ${res.saved} new tiles saved for 100% offline use.`, 3500);
+      this.showToast(`Diclum Map Download Complete! ${res.saved} tiles saved in IndexedDB for 100% offline use.`, 3500);
       await this.updateOfflineMapStatsUI();
+      if (this.mapEngine && this.mapEngine._activeTileLayer && typeof this.mapEngine._activeTileLayer.redraw === 'function') {
+        this.mapEngine._activeTileLayer.redraw();
+      }
     } catch (err) {
       console.error('Offline map download failed:', err);
       this.showToast('Offline download cancelled or paused: ' + err.message, 3000);

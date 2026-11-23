@@ -125,9 +125,9 @@ const LAYER_PROVIDERS = {
         maxZoom: 22,
         maxNativeZoom: 20, // Real native ultra-crisp Google satellite up to zoom 20!
         tileSize: 256,
-        updateWhenZooming: true,
-        updateWhenIdle: false,
-        keepBuffer: 20,
+        updateWhenZooming: false,
+        updateWhenIdle: true,
+        keepBuffer: 6,
         attribution: '© Google Maps'
       },
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
@@ -146,9 +146,9 @@ const LAYER_PROVIDERS = {
         maxZoom: 22,
         maxNativeZoom: 19,
         tileSize: 256,
-        updateWhenZooming: true,
-        updateWhenIdle: false,
-        keepBuffer: 20,
+        updateWhenZooming: false,
+        updateWhenIdle: true,
+        keepBuffer: 6,
         attribution: '© Esri, Maxar, Earthstar Geographics'
       },
       'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
@@ -163,9 +163,9 @@ const LAYER_PROVIDERS = {
         subdomains: ['a', 'b', 'c'],
         maxZoom: 22,
         maxNativeZoom: 19,
-        updateWhenZooming: true,
-        updateWhenIdle: false,
-        keepBuffer: 20,
+        updateWhenZooming: false,
+        updateWhenIdle: true,
+        keepBuffer: 6,
         attribution: '© OpenStreetMap contributors'
       }
     )
@@ -219,6 +219,7 @@ class FieldMapEngine {
     // Public callbacks
     this.selectPinCallback = null;
     this.dropPinCallback = null;
+    this.movePinCallback = null;
 
     // Layer providers for app.js UI compatibility
     this.layerProviders = LAYER_PROVIDERS;
@@ -317,44 +318,21 @@ class FieldMapEngine {
       }, delay);
     });
 
-    // Preload Barangay Diclum whole tile envelope so zooming has zero white gaps
+    // Lightweight warm-up of bundled Diclum overview tiles (no mobile data flood!)
     this._preloadDiclumTiles();
   }
 
-  // Preload whole Diclum map boundary tiles into browser HTTP cache
+  // Warm up only the 6 bundled local Zoom-14 overview tiles so mobile data is never flooded by 1,000+ background requests
   _preloadDiclumTiles() {
-    if (typeof window === 'undefined' || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-
-    const diclumBounds = {
-      minLat: 8.348,
-      maxLat: 8.400,
-      minLng: 124.840,
-      maxLng: 124.865
-    };
-
+    if (typeof window === 'undefined') return;
     setTimeout(() => {
-      const subdomains = ['0', '1', '2', '3'];
-      let subIdx = 0;
-
-      [14, 15, 16, 17, 18].forEach(z => {
-        const n = Math.pow(2, z);
-        const latRadMax = (diclumBounds.maxLat * Math.PI) / 180;
-        const latRadMin = (diclumBounds.minLat * Math.PI) / 180;
-
-        const minX = Math.floor(((diclumBounds.minLng + 180) / 360) * n);
-        const maxX = Math.floor(((diclumBounds.maxLng + 180) / 360) * n);
-        const minY = Math.floor(((1 - Math.log(Math.tan(latRadMax) + 1 / Math.cos(latRadMax)) / Math.PI) / 2) * n);
-        const maxY = Math.floor(((1 - Math.log(Math.tan(latRadMin) + 1 / Math.cos(latRadMin)) / Math.PI) / 2) * n);
-
-        for (let x = minX; x <= maxX; x++) {
-          for (let y = minY; y <= maxY; y++) {
-            const sub = subdomains[(subIdx++) % 4];
-            const img = new Image();
-            img.src = `https://mt${sub}.google.com/vt/lyrs=y&x=${x}&y=${y}&z=${z}`;
-          }
-        }
+      [13873, 13874].forEach(x => {
+        [7808, 7809, 7810].forEach(y => {
+          const img = new Image();
+          img.src = `assets/dicklum-tiles/streets/14/${x}/${y}.png`;
+        });
       });
-    }, 800);
+    }, 600);
   }
 
   // ─── Public Getters / Setters ─────────────────────────────────────────────
@@ -742,7 +720,15 @@ class FieldMapEngine {
 
       marker.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
+        if (marker._suppressNextPinClick) {
+          marker._suppressNextPinClick = false;
+          return;
+        }
         this.selectPinById(pin.id, pin.type);
+      });
+
+      marker.on('add', () => {
+        this._bindLongPressPinDrag(marker, pin);
       });
 
       marker._pinData = pin;
@@ -756,6 +742,172 @@ class FieldMapEngine {
       const [selId, selType] = this._selectedPinKey.split('_');
       this._applyPinSelectionDOM(selId, selType, false);
     }
+  }
+
+  /**
+   * Long-press (~360ms) on any Household, Water Meter, or Cluster Manifold pin
+   * unlocks smooth 360° drag-to-move repositioning for exact field GPS placement.
+   */
+  _bindLongPressPinDrag(marker, pin) {
+    const iconEl = marker.getElement();
+    if (!iconEl || iconEl._longPressDragBound) return;
+    iconEl._longPressDragBound = true;
+
+    let pressTimer = null;
+    let isDraggingPin = false;
+    let startClientX = 0;
+    let startClientY = 0;
+    let currentLatLng = marker.getLatLng();
+
+    const getClientXY = (ev) => {
+      if (ev.touches && ev.touches.length > 0) {
+        return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+      }
+      if (ev.changedTouches && ev.changedTouches.length > 0) {
+        return { x: ev.changedTouches[0].clientX, y: ev.changedTouches[0].clientY };
+      }
+      return { x: ev.clientX, y: ev.clientY };
+    };
+
+    const updateCoordBadge = (lat, lng) => {
+      const pinEl = iconEl.querySelector('.map-pin');
+      if (!pinEl) return;
+      let badge = pinEl.querySelector('.pin-drag-coords-pill');
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'pin-drag-coords-pill';
+        pinEl.appendChild(badge);
+      }
+      badge.textContent = `MOVE · ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    };
+
+    const removeCoordBadge = () => {
+      const badge = iconEl.querySelector('.pin-drag-coords-pill');
+      if (badge) badge.remove();
+    };
+
+    const cancelPressTimer = () => {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    };
+
+    const activatePinDrag = () => {
+      pressTimer = null;
+      isDraggingPin = true;
+      marker._suppressNextPinClick = true;
+      this._suppressMapClickUntil = Date.now() + 800;
+
+      if (this._map && this._map.dragging) {
+        this._map.dragging.disable();
+      }
+
+      const pinEl = iconEl.querySelector('.map-pin');
+      if (pinEl) {
+        pinEl.classList.add('is-dragging-pin', 'selected');
+      }
+      iconEl.style.zIndex = '12000';
+
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate(45); } catch (_) {}
+      }
+
+      currentLatLng = marker.getLatLng();
+      updateCoordBadge(currentLatLng.lat, currentLatLng.lng);
+    };
+
+    const onMove = (ev) => {
+      const pt = getClientXY(ev);
+      if (!isDraggingPin) {
+        if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 10) {
+          cancelPressTimer();
+        }
+        return;
+      }
+
+      if (ev.cancelable) ev.preventDefault();
+      ev.stopPropagation();
+
+      if (!this._map) return;
+      const containerPt = this._map.mouseEventToContainerPoint({
+        clientX: pt.x,
+        clientY: pt.y
+      });
+      const newLatLng = this._map.containerPointToLatLng(containerPt);
+      if (!newLatLng || isNaN(newLatLng.lat) || isNaN(newLatLng.lng)) return;
+
+      currentLatLng = newLatLng;
+      marker.setLatLng(newLatLng);
+      pin.lat = newLatLng.lat;
+      pin.lng = newLatLng.lng;
+      updateCoordBadge(newLatLng.lat, newLatLng.lng);
+    };
+
+    const onEnd = (ev) => {
+      cancelPressTimer();
+      window.removeEventListener('mousemove', onMove, false);
+      window.removeEventListener('mouseup', onEnd, false);
+      window.removeEventListener('touchmove', onMove, { passive: false });
+      window.removeEventListener('touchend', onEnd, false);
+      window.removeEventListener('touchcancel', onEnd, false);
+
+      if (!isDraggingPin) return;
+      isDraggingPin = false;
+
+      if (ev && ev.cancelable) ev.preventDefault();
+      if (ev) ev.stopPropagation();
+
+      this._suppressMapClickUntil = Date.now() + 450;
+      if (this._map && this._map.dragging) {
+        this._map.dragging.enable();
+      }
+
+      const pinEl = iconEl.querySelector('.map-pin');
+      if (pinEl) {
+        pinEl.classList.remove('is-dragging-pin');
+      }
+      removeCoordBadge();
+
+      // Recompute elastic Barangay Diclum red boundary for the new position
+      this._renderDicklumBoundary();
+
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate(25); } catch (_) {}
+      }
+
+      if (this.movePinCallback && currentLatLng) {
+        this.movePinCallback(pin, Number(currentLatLng.lat), Number(currentLatLng.lng));
+      }
+    };
+
+    const onStart = (ev) => {
+      if (ev.type === 'mousedown' && ev.button !== 0) return;
+      if (ev.touches && ev.touches.length > 1) {
+        cancelPressTimer();
+        return;
+      }
+
+      const pt = getClientXY(ev);
+      startClientX = pt.x;
+      startClientY = pt.y;
+      currentLatLng = marker.getLatLng();
+
+      cancelPressTimer();
+      pressTimer = setTimeout(activatePinDrag, 350);
+
+      if (ev.type === 'touchstart') {
+        window.addEventListener('touchmove', onMove, { passive: false });
+        window.addEventListener('touchend', onEnd, false);
+        window.addEventListener('touchcancel', onEnd, false);
+      } else {
+        window.addEventListener('mousemove', onMove, false);
+        window.addEventListener('mouseup', onEnd, false);
+      }
+    };
+
+    iconEl.addEventListener('mousedown', onStart, false);
+    iconEl.addEventListener('touchstart', onStart, { passive: true });
   }
 
   _createPinHTML(pin) {

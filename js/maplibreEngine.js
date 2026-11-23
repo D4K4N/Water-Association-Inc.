@@ -238,6 +238,7 @@
 
       this.selectPinCallback = null;
       this.dropPinCallback = null;
+      this.movePinCallback = null;
 
       // Select initial style
       const initialStyle = MAPLIBRE_TILE_STYLES[this._currentLayerKey] || MAPLIBRE_TILE_STYLES.google_hybrid;
@@ -799,6 +800,10 @@
 
         wrapper.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (wrapper._suppressNextPinClick) {
+            wrapper._suppressNextPinClick = false;
+            return;
+          }
           this.selectPinById(pin.id, pin.type);
         });
 
@@ -809,6 +814,8 @@
         .setLngLat([lng, lat])
         .addTo(this._map);
 
+        this._bindLongPressPinDrag(marker, wrapper, pin);
+
         const key = `${pin.id || pin.accountNo || Math.random()}_${type}`;
         this._pinMarkers.set(key, marker);
       }
@@ -817,6 +824,165 @@
         const [selId, selType] = this._selectedPinKey.split('_');
         this._applyPinSelectionDOM(selId, selType, false);
       }
+    }
+
+    _bindLongPressPinDrag(marker, wrapper, pin) {
+      if (!wrapper || wrapper._longPressDragBound) return;
+      wrapper._longPressDragBound = true;
+
+      let pressTimer = null;
+      let isDraggingPin = false;
+      let startClientX = 0;
+      let startClientY = 0;
+      let currentLngLat = marker.getLngLat();
+
+      const getClientXY = (ev) => {
+        if (ev.touches && ev.touches.length > 0) {
+          return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+        }
+        if (ev.changedTouches && ev.changedTouches.length > 0) {
+          return { x: ev.changedTouches[0].clientX, y: ev.changedTouches[0].clientY };
+        }
+        return { x: ev.clientX, y: ev.clientY };
+      };
+
+      const updateCoordBadge = (lat, lng) => {
+        const pinEl = wrapper.querySelector('.map-pin');
+        if (!pinEl) return;
+        let badge = pinEl.querySelector('.pin-drag-coords-pill');
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'pin-drag-coords-pill';
+          pinEl.appendChild(badge);
+        }
+        badge.textContent = `MOVE · ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      };
+
+      const removeCoordBadge = () => {
+        const badge = wrapper.querySelector('.pin-drag-coords-pill');
+        if (badge) badge.remove();
+      };
+
+      const cancelPressTimer = () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      };
+
+      const activatePinDrag = () => {
+        pressTimer = null;
+        isDraggingPin = true;
+        wrapper._suppressNextPinClick = true;
+        this._suppressMapClickUntil = Date.now() + 800;
+
+        if (this._map && this._map.dragPan) {
+          this._map.dragPan.disable();
+        }
+
+        const pinEl = wrapper.querySelector('.map-pin');
+        if (pinEl) {
+          pinEl.classList.add('is-dragging-pin', 'selected');
+        }
+        wrapper.style.zIndex = '12000';
+
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate(45); } catch (_) {}
+        }
+
+        currentLngLat = marker.getLngLat();
+        updateCoordBadge(currentLngLat.lat, currentLngLat.lng);
+      };
+
+      const onMove = (ev) => {
+        const pt = getClientXY(ev);
+        if (!isDraggingPin) {
+          if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 10) {
+            cancelPressTimer();
+          }
+          return;
+        }
+
+        if (ev.cancelable) ev.preventDefault();
+        ev.stopPropagation();
+
+        if (!this._map) return;
+        const rect = this._map.getCanvas().getBoundingClientRect();
+        const x = pt.x - rect.left;
+        const y = pt.y - rect.top;
+        const newLngLat = this._map.unproject([x, y]);
+        if (!newLngLat || isNaN(newLngLat.lat) || isNaN(newLngLat.lng)) return;
+
+        currentLngLat = newLngLat;
+        marker.setLngLat([newLngLat.lng, newLngLat.lat]);
+        pin.lat = newLngLat.lat;
+        pin.lng = newLngLat.lng;
+        updateCoordBadge(newLngLat.lat, newLngLat.lng);
+      };
+
+      const onEnd = (ev) => {
+        cancelPressTimer();
+        window.removeEventListener('mousemove', onMove, false);
+        window.removeEventListener('mouseup', onEnd, false);
+        window.removeEventListener('touchmove', onMove, { passive: false });
+        window.removeEventListener('touchend', onEnd, false);
+        window.removeEventListener('touchcancel', onEnd, false);
+
+        if (!isDraggingPin) return;
+        isDraggingPin = false;
+
+        if (ev && ev.cancelable) ev.preventDefault();
+        if (ev) ev.stopPropagation();
+
+        this._suppressMapClickUntil = Date.now() + 450;
+        if (this._map && this._map.dragPan) {
+          this._map.dragPan.enable();
+        }
+
+        const pinEl = wrapper.querySelector('.map-pin');
+        if (pinEl) {
+          pinEl.classList.remove('is-dragging-pin');
+        }
+        removeCoordBadge();
+
+        this._renderDicklumBoundary();
+
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate(25); } catch (_) {}
+        }
+
+        if (this.movePinCallback && currentLngLat) {
+          this.movePinCallback(pin, Number(currentLngLat.lat), Number(currentLngLat.lng));
+        }
+      };
+
+      const onStart = (ev) => {
+        if (ev.type === 'mousedown' && ev.button !== 0) return;
+        if (ev.touches && ev.touches.length > 1) {
+          cancelPressTimer();
+          return;
+        }
+
+        const pt = getClientXY(ev);
+        startClientX = pt.x;
+        startClientY = pt.y;
+        currentLngLat = marker.getLngLat();
+
+        cancelPressTimer();
+        pressTimer = setTimeout(activatePinDrag, 350);
+
+        if (ev.type === 'touchstart') {
+          window.addEventListener('touchmove', onMove, { passive: false });
+          window.addEventListener('touchend', onEnd, false);
+          window.addEventListener('touchcancel', onEnd, false);
+        } else {
+          window.addEventListener('mousemove', onMove, false);
+          window.addEventListener('mouseup', onEnd, false);
+        }
+      };
+
+      wrapper.addEventListener('mousedown', onStart, false);
+      wrapper.addEventListener('touchstart', onStart, { passive: true });
     }
 
     _createPinHTML(pin) {

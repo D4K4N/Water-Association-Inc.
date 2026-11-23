@@ -1096,6 +1096,7 @@
             ${clusterDotBadge}
           </div>
           <div class="pin-tail" style="border-top-color:${effectiveAccent};"></div>
+          <div class="pin-drag-crosshair"></div>
         </div>
       `;
     }

@@ -727,12 +727,9 @@ class FieldMapEngine {
         this.selectPinById(pin.id, pin.type);
       });
 
-      marker.on('add', () => {
-        this._bindLongPressPinDrag(marker, pin);
-      });
-
       marker._pinData = pin;
       this._pinsLayerGroup.addLayer(marker);
+      this._bindLongPressPinDrag(marker, pin);
 
       const key = `${pin.id || pin.accountNo || Math.random()}_${type}`;
       this._pinMarkers.set(key, marker);
@@ -745,8 +742,8 @@ class FieldMapEngine {
   }
 
   /**
-   * Long-press (~360ms) on any Household, Water Meter, or Cluster Manifold pin
-   * unlocks smooth 360° drag-to-move repositioning for exact field GPS placement.
+   * Long-press (~280ms) on any Household, Water Meter, or Cluster Manifold pin
+   * unlocks smooth 360° hover/drag-to-relocate repositioning for exact field GPS placement.
    */
   _bindLongPressPinDrag(marker, pin) {
     const iconEl = marker.getElement();
@@ -780,7 +777,7 @@ class FieldMapEngine {
         badge.className = 'pin-drag-coords-pill';
         pinEl.appendChild(badge);
       }
-      badge.textContent = `MOVE · ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      badge.textContent = `RELOCATE · ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
     };
 
     const removeCoordBadge = () => {
@@ -805,6 +802,7 @@ class FieldMapEngine {
         this._map.dragging.disable();
       }
 
+      iconEl.classList.add('is-dragging-pin-marker');
       const pinEl = iconEl.querySelector('.map-pin');
       if (pinEl) {
         pinEl.classList.add('is-dragging-pin', 'selected');
@@ -812,7 +810,7 @@ class FieldMapEngine {
       iconEl.style.zIndex = '12000';
 
       if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        try { navigator.vibrate(45); } catch (_) {}
+        try { navigator.vibrate(50); } catch (_) {}
       }
 
       currentLatLng = marker.getLatLng();
@@ -825,8 +823,8 @@ class FieldMapEngine {
       }
       const pt = getClientXY(ev);
       if (!isDraggingPin) {
-        // Allow up to 18px finger tremor during the 300ms hold on mobile touchscreens
-        if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 18) {
+        // Allow up to 22px finger tremor during the 280ms hold on mobile touchscreens
+        if (pressTimer && Math.hypot(pt.x - startClientX, pt.y - startClientY) > 22) {
           cancelPressTimer();
           if (this._map && this._map.dragging && !this._map.dragging.enabled()) {
             this._map.dragging.enable();
@@ -883,6 +881,7 @@ class FieldMapEngine {
         this._map.dragging.enable();
       }
 
+      iconEl.classList.remove('is-dragging-pin-marker');
       const pinEl = iconEl.querySelector('.map-pin');
       if (pinEl) {
         pinEl.classList.remove('is-dragging-pin');
@@ -925,7 +924,7 @@ class FieldMapEngine {
       }
 
       cancelPressTimer();
-      pressTimer = setTimeout(activatePinDrag, 300);
+      pressTimer = setTimeout(activatePinDrag, 260);
 
       if (typeof window.PointerEvent !== 'undefined' && ev.type === 'pointerdown') {
         window.addEventListener('pointermove', onMove, false);
@@ -1024,6 +1023,7 @@ class FieldMapEngine {
           ${clusterDotBadge}
         </div>
         <div class="pin-tail" style="border-top-color:${effectiveAccent};"></div>
+        <div class="pin-drag-crosshair"></div>
       </div>
     `;
   }

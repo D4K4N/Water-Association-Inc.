@@ -420,6 +420,21 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer(async (req, res) => {
+  // Allow cross-origin & Private Network Access from mobile Capacitor APK (`https://localhost`) and PWA over Wi-Fi
+  const reqOrigin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Office-Pin');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   let reqPath = req.url.split('?')[0];
 
   // ─── 1. Server-Enforced Security & Office PC Database Sync API ─────────────

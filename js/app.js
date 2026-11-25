@@ -3039,6 +3039,10 @@ class WaterBillingApp {
   }
 
   _isLocalOfficeServer() {
+    // Inside Capacitor Android APK, hostname is 'localhost' — that is the phone's bundled WebView, NOT the Office PC server!
+    if (typeof window !== 'undefined' && typeof window.Capacitor !== 'undefined') {
+      return false;
+    }
     const host = (window.location && window.location.hostname) || '';
     return (
       host === 'localhost' ||
@@ -3626,7 +3630,7 @@ class WaterBillingApp {
 
   getOfficePcSyncEndpoint() {
     const savedBase = (localStorage.getItem('dicklum_office_pc_url') || '').trim().replace(/\/+$/, '');
-    if (savedBase && !this._isLocalOfficeServer()) {
+    if (savedBase) {
       return `${savedBase}/api/sync`;
     }
     return '/api/sync';

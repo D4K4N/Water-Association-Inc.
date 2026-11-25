@@ -26,6 +26,25 @@ class BackupEngine {
       /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
     );
 
+    // 0. Native Android APK MediaStore.Downloads Bridge (Saves directly into phone Downloads/DicklumWater/ with ZERO browser!)
+    if (typeof window !== 'undefined' && window.AndroidBackupBridge && typeof window.AndroidBackupBridge.saveJsonToDownloads === 'function') {
+      try {
+        const rawRes = window.AndroidBackupBridge.saveJsonToDownloads(filename, jsonString);
+        const parsed = typeof rawRes === 'string' ? JSON.parse(rawRes) : rawRes;
+        if (parsed && parsed.ok) {
+          return {
+            success: true,
+            filename,
+            savedPath: parsed.path || `Downloads/DicklumWater/${filename}`,
+            method: 'android-downloads-folder',
+            timestamp: dump.exportedAt
+          };
+        }
+      } catch (nativeErr) {
+        console.warn('AndroidBackupBridge notice:', nativeErr);
+      }
+    }
+
     // 1. Capacitor Native Filesystem + Share Plugins (when available inside Hybrid Android APK)
     if (isCapacitorNative && window.Capacitor.Plugins) {
       const { Filesystem, Share } = window.Capacitor.Plugins;

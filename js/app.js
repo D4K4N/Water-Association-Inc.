@@ -6044,7 +6044,11 @@ class WaterBillingApp {
         const res = await window.backupEngine.exportBackup();
         if (res && res.cancelled) return;
         if (res && res.method === 'apk-safe-modal') return;
-        this.showToast(`JSON Backup saved: ${res.filename}`, 3500);
+        if (res && res.savedPath) {
+          this.showToast(`Saved to Phone Folder: ${res.savedPath}`, 4500);
+        } else {
+          this.showToast(`JSON Backup saved: ${res.filename}`, 3500);
+        }
       } catch (err) {
         alert(`Backup export failed: ${err.message}`);
       }

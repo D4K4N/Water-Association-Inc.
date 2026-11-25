@@ -44,12 +44,14 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Inject Permissions for Original App
+      - name: Inject Permissions & Native Downloads Folder Bridge for Original App
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
-            sed -i 's|<application|<!-- GPS, Bluetooth Xprinter XP-P300 & Network Sync Permissions -->\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.BLUETOOTH" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <application android:usesCleartextTraffic="true"|' "$MANIFEST"
+            sed -i 's|<application|<!-- GPS, Bluetooth Xprinter XP-P300, Legacy Storage & Network Sync Permissions -->\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.BLUETOOTH" />\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />\n    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />\n    <application android:usesCleartextTraffic="true"|' "$MANIFEST"
           fi
+          mkdir -p android/app/src/main/java/com/dicklum/waterbilling
+          cp scripts/MainActivity.java android/app/src/main/java/com/dicklum/waterbilling/MainActivity.java
 
       - name: Compile Dicklum-Water-Billing.apk (Original App)
         working-directory: android

@@ -1,9 +1,9 @@
 {
   "appName": "Dicklum Water Billing & Field Operations",
-  "version": "3.2.0",
-  "buildNumber": 32,
-  "cacheName": "dicklum-water-v32",
-  "releasedAt": "2026-11-25T23:27:00+08:00",
+  "version": "3.3.0",
+  "buildNumber": 33,
+  "cacheName": "dicklum-water-v33",
+  "releasedAt": "2026-11-25T23:44:00+08:00",
   "githubRepo": "D4K4N/Water-Association-Inc.",
   "githubBranch": "main",
   "apkDownloadUrl": "https://github.com/D4K4N/Water-Association-Inc./releases/latest/download/Dicklum-Water-Billing.apk",

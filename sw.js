@@ -6,7 +6,7 @@
  * - Automatic background silent updates when internet is available (zero data loss; IndexedDB is never touched)
  */
 
-const CACHE_VERSION = '32';
+const CACHE_VERSION = '33';
 const CACHE_NAME = `dicklum-water-v${CACHE_VERSION}`;
 const OTA_OVERRIDE_CACHE = 'dicklum-ota-override-v1';
 const TILE_CACHE_NAME = 'dicklum-tiles-cache-v3';

@@ -32,7 +32,7 @@ jobs:
         run: node test-suite.js
 
       - name: Install Capacitor Android Builder
-        run: npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
+        run: npm install --no-save @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/filesystem@6 @capacitor/share@6
 
       # ─── 1. BUILD ORIGINAL PRODUCTION APK (Dicklum-Water-Billing.apk) ───
       - name: Assemble Original Production Bundle (./www)

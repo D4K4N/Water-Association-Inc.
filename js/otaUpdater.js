@@ -11,9 +11,9 @@
 
 class DicklumOtaUpdater {
   constructor() {
-    this.localVersion = '3.1.0';
-    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 31;
-    this.cacheName = 'dicklum-water-v31';
+    this.localVersion = '3.2.0';
+    this.localBuild = Number(localStorage.getItem('dicklum_ota_build_num')) || 32;
+    this.cacheName = 'dicklum-water-v32';
     this.otaOverrideCacheName = 'dicklum-ota-override-v1';
     this.githubRepo = 'D4K4N/Water-Association-Inc.';
     this.githubBranch = 'main';
@@ -187,9 +187,9 @@ class DicklumOtaUpdater {
     if (typeof caches === 'undefined') return;
     const otaCache = await caches.open(this.otaOverrideCacheName);
     const shellCache = await caches.open(this.cacheName);
-    // Also write into legacy v25..v30 shell caches so ANY running Service Worker version serves the updated files immediately!
+    // Also write into legacy v25..v31 shell caches so ANY running Service Worker version serves the updated files immediately!
     const legacyCaches = await Promise.all(
-      ['dicklum-water-v25', 'dicklum-water-v26', 'dicklum-water-v27', 'dicklum-water-v28', 'dicklum-water-v29', 'dicklum-water-v30'].map((n) => caches.open(n))
+      ['dicklum-water-v25', 'dicklum-water-v26', 'dicklum-water-v27', 'dicklum-water-v28', 'dicklum-water-v29', 'dicklum-water-v30', 'dicklum-water-v31'].map((n) => caches.open(n))
     );
 
     await Promise.all(

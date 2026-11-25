@@ -6042,7 +6042,9 @@ class WaterBillingApp {
     document.getElementById('btn-export-backup').addEventListener('click', async () => {
       try {
         const res = await window.backupEngine.exportBackup();
-        alert(`Backup file exported successfully: ${res.filename}`);
+        if (res && res.cancelled) return;
+        if (res && res.method === 'apk-safe-modal') return;
+        this.showToast(`JSON Backup saved: ${res.filename}`, 3500);
       } catch (err) {
         alert(`Backup export failed: ${err.message}`);
       }

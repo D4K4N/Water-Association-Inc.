@@ -17,10 +17,10 @@ import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends BridgeActivity {
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (this.bridge != null && this.bridge.getWebView() != null) {
-            WebView webView = this.bridge.getWebView();
+        if (this.getBridge() != null && this.getBridge().getWebView() != null) {
+            WebView webView = this.getBridge().getWebView();
             webView.addJavascriptInterface(new AndroidBackupBridge(), "AndroidBackupBridge");
         }
     }

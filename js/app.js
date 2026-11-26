@@ -37,6 +37,8 @@ class WaterBillingApp {
     this.pinGateMode = 'unlock';
     this.hasPinConfigured = false;
     this.pinDeleteEnabled = localStorage.getItem('dicklum_pin_delete_enabled') === 'true';
+    this.pinMoveEnabled = localStorage.getItem('dicklum_pin_move_enabled') === 'true';
+    this._pendingPinMove = null;
     this._pendingAdminCallback = null;
   }
 
@@ -86,6 +88,13 @@ class WaterBillingApp {
       this.mapEngine.selectPinCallback = (pin) => this.handlePinSelect(pin);
       this.mapEngine.dropPinCallback = (lat, lng) => this.handleMapTapToPin(lat, lng);
       this.mapEngine.movePinCallback = (pin, lat, lng) => this.handlePinMove(pin, lat, lng);
+      this.mapEngine.pinMoveEnabled = this.pinMoveEnabled;
+      this.mapEngine.onPinMoveBlocked = () => {
+        this.showToast('Move Pin is LOCKED (Safe Mode). Tap the Lock/Move button on the map or Settings to enable.', 2800);
+      };
+      this.mapEngine.onRequestPinMoveConfirm = (pin, marker) => {
+        this.openConfirmPinMoveModal(pin, marker);
+      };
 
       [50, 150, 350, 800].forEach(delay => {
         setTimeout(() => {
@@ -727,7 +736,103 @@ class WaterBillingApp {
   }
 
   handleMapTapToPin(lat, lng) {
+    if (this.mapEngine && this.mapEngine._activeMoveSession) return;
     this.openDropPinModal(lat, lng);
+  }
+
+  setPinMoveEnabled(enabled) {
+    this.pinMoveEnabled = Boolean(enabled);
+    try {
+      localStorage.setItem('dicklum_pin_move_enabled', String(this.pinMoveEnabled));
+    } catch (_) {}
+    if (this.mapEngine) {
+      this.mapEngine.pinMoveEnabled = this.pinMoveEnabled;
+      if (!this.pinMoveEnabled && this.mapEngine._activeMoveSession) {
+        this.finishActivePinMove(false);
+      }
+    }
+    this.syncPinMoveGuardUI();
+    this.showToast(
+      this.pinMoveEnabled
+        ? 'Move Pinned Location ENABLED. Hold any pin to relocate (will ask Yes/No first).'
+        : 'Move Pinned Location DISABLED (Locked Safe). Pins cannot be accidentally dragged.',
+      3000
+    );
+  }
+
+  syncPinMoveGuardUI() {
+    const chk = document.getElementById('toggle-pin-move-allow');
+    if (chk) chk.checked = this.pinMoveEnabled;
+
+    const pill = document.getElementById('pin-move-status-pill');
+    if (pill) {
+      pill.textContent = this.pinMoveEnabled ? 'ENABLED (UNLOCKED)' : 'LOCKED (SAFE)';
+      pill.className = this.pinMoveEnabled ? 'badge badge-success' : 'badge badge-warning';
+    }
+
+    const fab = document.getElementById('fab-toggle-pin-move');
+    const iconLocked = document.getElementById('fab-icon-move-locked');
+    const iconUnlocked = document.getElementById('fab-icon-move-unlocked');
+    if (fab) {
+      fab.title = this.pinMoveEnabled
+        ? 'Move Pinned Locations: ENABLED — Tap to Lock Safe'
+        : 'Move Pinned Locations: DISABLED (Locked Safe) — Tap to Enable';
+      fab.style.borderColor = this.pinMoveEnabled ? '#F59E0B' : 'rgba(148,163,184,0.45)';
+      fab.style.background = this.pinMoveEnabled ? 'rgba(245, 158, 11, 0.18)' : '';
+      fab.style.color = this.pinMoveEnabled ? '#F59E0B' : '#94A3B8';
+    }
+    if (iconLocked) iconLocked.classList.toggle('hidden', this.pinMoveEnabled);
+    if (iconUnlocked) iconUnlocked.classList.toggle('hidden', !this.pinMoveEnabled);
+  }
+
+  openConfirmPinMoveModal(pin, marker) {
+    this._pendingPinMove = { pin, marker };
+    const nameEl = document.getElementById('confirm-pin-move-name');
+    if (nameEl) {
+      const label = pin.title || (pin.data && (pin.data.ownerSummary || pin.data.ownerName || pin.data.name || pin.data.meterNo)) || 'Selected Pin';
+      const typeLabel = pin.type === 'cluster' ? 'Clustered Meters' : (pin.type === 'meter' ? 'Water Meter' : 'House Pin');
+      nameEl.textContent = `${label} (${typeLabel})`;
+    }
+    const modal = document.getElementById('modal-confirm-pin-move');
+    if (modal) modal.classList.add('active');
+  }
+
+  confirmPinMoveYes() {
+    const modal = document.getElementById('modal-confirm-pin-move');
+    if (modal) modal.classList.remove('active');
+    const pending = this._pendingPinMove;
+    this._pendingPinMove = null;
+    if (!pending || !this.mapEngine || typeof this.mapEngine.startConfirmedPinMove !== 'function') return;
+
+    this.closeConsumerSheet();
+    this.closeClusterSheet();
+    this.mapEngine.startConfirmedPinMove(pending.pin, pending.marker);
+
+    const bar = document.getElementById('pin-move-active-bar');
+    const lbl = document.getElementById('pin-move-active-label');
+    if (lbl) {
+      const pinTitle = pending.pin.title || (pending.pin.data && (pending.pin.data.ownerName || pending.pin.data.name)) || 'Pin';
+      lbl.textContent = `Drag "${pinTitle}" in any direction or tap the new spot, then tap Save.`;
+    }
+    if (bar) bar.classList.remove('hidden');
+  }
+
+  confirmPinMoveNo() {
+    const modal = document.getElementById('modal-confirm-pin-move');
+    if (modal) modal.classList.remove('active');
+    this._pendingPinMove = null;
+    this.showToast('Pin stayed locked in its original position.', 1800);
+  }
+
+  finishActivePinMove(save = false) {
+    const bar = document.getElementById('pin-move-active-bar');
+    if (bar) bar.classList.add('hidden');
+    if (this.mapEngine && typeof this.mapEngine.finishConfirmedPinMove === 'function') {
+      this.mapEngine.finishConfirmedPinMove(save);
+    }
+    if (!save) {
+      this.showToast('Pin move cancelled — restored to original location.', 2000);
+    }
   }
 
   async handlePinMove(pin, newLat, newLng) {
@@ -6160,6 +6265,38 @@ class WaterBillingApp {
         this.showToast(msg, 3000);
       });
     }
+
+    // Move Pinned Location Safety Lock Toggle (Settings + Map Floating Button)
+    const togglePinMove = document.getElementById('toggle-pin-move-allow');
+    if (togglePinMove) {
+      togglePinMove.checked = this.pinMoveEnabled;
+      togglePinMove.addEventListener('change', () => {
+        this.setPinMoveEnabled(togglePinMove.checked);
+      });
+    }
+    const fabTogglePinMove = document.getElementById('fab-toggle-pin-move');
+    if (fabTogglePinMove) {
+      fabTogglePinMove.addEventListener('click', () => {
+        this.setPinMoveEnabled(!this.pinMoveEnabled);
+      });
+    }
+    const btnConfirmMoveYes = document.getElementById('btn-confirm-pin-move-yes');
+    if (btnConfirmMoveYes) {
+      btnConfirmMoveYes.addEventListener('click', () => this.confirmPinMoveYes());
+    }
+    const btnConfirmMoveNo = document.getElementById('btn-confirm-pin-move-no');
+    if (btnConfirmMoveNo) {
+      btnConfirmMoveNo.addEventListener('click', () => this.confirmPinMoveNo());
+    }
+    const btnSavePinMove = document.getElementById('btn-save-pin-move');
+    if (btnSavePinMove) {
+      btnSavePinMove.addEventListener('click', () => this.finishActivePinMove(true));
+    }
+    const btnCancelPinMove = document.getElementById('btn-cancel-pin-move');
+    if (btnCancelPinMove) {
+      btnCancelPinMove.addEventListener('click', () => this.finishActivePinMove(false));
+    }
+    this.syncPinMoveGuardUI();
 
     // Tariff Configuration Save (Phase 5, Section 13)
     document.getElementById('btn-save-tariff').addEventListener('click', async () => {

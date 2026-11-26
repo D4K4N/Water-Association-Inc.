@@ -794,9 +794,47 @@ class FieldMapEngine {
 
     const activatePinDrag = () => {
       pressTimer = null;
-      isDraggingPin = true;
       marker._suppressNextPinClick = true;
       this._suppressMapClickUntil = Date.now() + 900;
+
+      // Safety Guard 1: If Move Pinned Location is DISABLED (Locked Safe), block dragging immediately!
+      if (!this.pinMoveEnabled) {
+        cleanupListeners();
+        if (activePointerId !== null && iconEl.releasePointerCapture) {
+          try { iconEl.releasePointerCapture(activePointerId); } catch (_) {}
+        }
+        activePointerId = null;
+        if (this._map && this._map.dragging && !this._map.dragging.enabled()) {
+          this._map.dragging.enable();
+        }
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate([20, 40, 20]); } catch (_) {}
+        }
+        if (typeof this.onPinMoveBlocked === 'function') {
+          this.onPinMoveBlocked(pin);
+        }
+        return;
+      }
+
+      // Safety Guard 2: If Move Pinned Location is ENABLED and confirmation callback is set,
+      // ask "Move this to any direction? (Yes / No)" BEFORE unlocking the pin!
+      if (typeof this.onRequestPinMoveConfirm === 'function' && (!this._activeMoveSession || this._activeMoveSession.marker !== marker)) {
+        cleanupListeners();
+        if (activePointerId !== null && iconEl.releasePointerCapture) {
+          try { iconEl.releasePointerCapture(activePointerId); } catch (_) {}
+        }
+        activePointerId = null;
+        if (this._map && this._map.dragging && !this._map.dragging.enabled()) {
+          this._map.dragging.enable();
+        }
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate(35); } catch (_) {}
+        }
+        this.onRequestPinMoveConfirm(pin, marker);
+        return;
+      }
+
+      isDraggingPin = true;
 
       if (this._map && this._map.dragging) {
         this._map.dragging.disable();
@@ -896,7 +934,11 @@ class FieldMapEngine {
       }
 
       if (this.movePinCallback && currentLatLng) {
-        this.movePinCallback(pin, Number(currentLatLng.lat), Number(currentLatLng.lng));
+        if (this._activeMoveSession && this._activeMoveSession.marker === marker) {
+          this._activeMoveSession.currentLatLng = currentLatLng;
+        } else {
+          this.movePinCallback(pin, Number(currentLatLng.lat), Number(currentLatLng.lng));
+        }
       }
     };
 
@@ -951,6 +993,117 @@ class FieldMapEngine {
     } else {
       iconEl.addEventListener('mousedown', onStart, false);
       iconEl.addEventListener('touchstart', onStart, { passive: true });
+    }
+  }
+
+  /**
+   * Unlocks a single confirmed pin so the user can freely drag it in any direction
+   * OR tap the new spot on the map, then tap Save or Cancel.
+   */
+  startConfirmedPinMove(pin, marker) {
+    if (!pin || !marker || !this._map) return;
+    if (this._activeMoveSession) {
+      this.finishConfirmedPinMove(false);
+    }
+
+    const origLatLng = marker.getLatLng();
+    const iconEl = marker.getElement();
+    if (iconEl) {
+      iconEl.classList.add('is-dragging-pin-marker');
+      iconEl.style.zIndex = '12000';
+      const pinEl = iconEl.querySelector('.map-pin');
+      if (pinEl) {
+        pinEl.classList.add('is-dragging-pin', 'selected');
+        let badge = pinEl.querySelector('.pin-drag-coords-pill');
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'pin-drag-coords-pill';
+          pinEl.appendChild(badge);
+        }
+        badge.textContent = `MOVE · ${origLatLng.lat.toFixed(6)}, ${origLatLng.lng.toFixed(6)}`;
+      }
+    }
+
+    const updateBadge = (ll) => {
+      const el = marker.getElement();
+      const badge = el && el.querySelector('.pin-drag-coords-pill');
+      if (badge) badge.textContent = `MOVE · ${ll.lat.toFixed(6)}, ${ll.lng.toFixed(6)}`;
+    };
+
+    if (marker.dragging) {
+      marker.dragging.enable();
+    }
+    const onMarkerDrag = () => {
+      const ll = marker.getLatLng();
+      if (this._activeMoveSession) this._activeMoveSession.currentLatLng = ll;
+      pin.lat = ll.lat;
+      pin.lng = ll.lng;
+      updateBadge(ll);
+    };
+    marker.on('drag', onMarkerDrag);
+
+    const onMapTapMove = (e) => {
+      if (!e || !e.latlng) return;
+      const ll = e.latlng;
+      marker.setLatLng(ll);
+      if (this._activeMoveSession) this._activeMoveSession.currentLatLng = ll;
+      pin.lat = ll.lat;
+      pin.lng = ll.lng;
+      updateBadge(ll);
+    };
+    this._map.on('click', onMapTapMove);
+    this._suppressMapClickUntil = Date.now() + 9999999;
+
+    this._activeMoveSession = {
+      pin,
+      marker,
+      origLatLng,
+      currentLatLng: origLatLng,
+      onMarkerDrag,
+      onMapTapMove
+    };
+  }
+
+  finishConfirmedPinMove(save = false) {
+    const sess = this._activeMoveSession;
+    if (!sess) return;
+    this._activeMoveSession = null;
+    this._suppressMapClickUntil = Date.now() + 400;
+
+    const { pin, marker, origLatLng, currentLatLng, onMarkerDrag, onMapTapMove } = sess;
+    if (marker.dragging) {
+      marker.dragging.disable();
+    }
+    marker.off('drag', onMarkerDrag);
+    if (this._map) {
+      this._map.off('click', onMapTapMove);
+      if (this._map.dragging && !this._map.dragging.enabled()) {
+        this._map.dragging.enable();
+      }
+    }
+
+    const iconEl = marker.getElement();
+    if (iconEl) {
+      iconEl.classList.remove('is-dragging-pin-marker');
+      iconEl.style.zIndex = '';
+      const pinEl = iconEl.querySelector('.map-pin');
+      if (pinEl) pinEl.classList.remove('is-dragging-pin');
+      const badge = iconEl.querySelector('.pin-drag-coords-pill');
+      if (badge) badge.remove();
+    }
+
+    if (save && currentLatLng) {
+      marker.setLatLng(currentLatLng);
+      pin.lat = Number(currentLatLng.lat);
+      pin.lng = Number(currentLatLng.lng);
+      this._renderDicklumBoundary();
+      if (this.movePinCallback) {
+        this.movePinCallback(pin, Number(currentLatLng.lat), Number(currentLatLng.lng));
+      }
+    } else if (origLatLng) {
+      marker.setLatLng(origLatLng);
+      pin.lat = Number(origLatLng.lat);
+      pin.lng = Number(origLatLng.lng);
     }
   }
 

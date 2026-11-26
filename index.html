@@ -147,6 +147,16 @@
           <!-- Floating Zoom, Compass, Pin Drop, Pin Visibility, and Route Controls -->
           <div class="map-floating-controls">
             <!-- Toggle All Pins Floating Eye Button -->
+            <!-- Move Pinned Location Safety Lock Toggle (Disabled by default for field safety) -->
+            <button type="button" id="fab-toggle-pin-move" class="map-circle-btn" title="Move Pinned Locations: DISABLED (Locked Safe) — Tap to Enable" style="border: 1.5px solid rgba(148,163,184,0.45); color: #94A3B8;">
+              <svg id="fab-icon-move-locked" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <svg id="fab-icon-move-unlocked" class="hidden" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/>
+              </svg>
+            </button>
             <button type="button" id="fab-toggle-pins" class="map-circle-btn map-pins-floating-btn" title="Toggle Show / Hide All Pins (Searching isolates single pin)">
               <svg id="fab-icon-pins-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>
@@ -198,6 +208,43 @@
                 <path d="M5 12h14"/><path d="M12 5v14"/>
               </svg>
             </button>
+          </div>
+        </div>
+
+        <!-- Floating Active Pin-Move Bar (shown after user confirms Yes to move pin) -->
+        <div id="pin-move-active-bar" class="hidden" style="position: absolute; bottom: 72px; left: 50%; transform: translateX(-50%); z-index: 1150; width: min(94%, 410px); background: rgba(15, 23, 42, 0.96); border: 1.5px solid #F59E0B; border-radius: 12px; padding: 10px 12px; box-shadow: 0 10px 28px rgba(0,0,0,0.45); display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <div>
+              <div style="font-size: 12px; font-weight: 700; color: #FBBF24;">Move Pin Mode Active</div>
+              <div id="pin-move-active-label" style="font-size: 11px; color: #E2E8F0;">Drag the pin in any direction or tap the new spot on the map</div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" id="btn-save-pin-move" class="btn btn-sm btn-primary" style="flex: 1; background: #16A34A; border-color: #16A34A; font-weight: 700;">Save New Location</button>
+            <button type="button" id="btn-cancel-pin-move" class="btn btn-sm btn-outline" style="flex: 0.7; color: #F87171; border-color: rgba(248,113,113,0.45);">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Pin Move Confirmation Popup ("Move this to any direction? Yes / No") -->
+        <div id="modal-confirm-pin-move" class="app-modal">
+          <div class="modal-backdrop"></div>
+          <div class="modal-card" style="max-width: 340px; width: 90%; text-align: center;">
+            <div class="modal-header" style="justify-content: center; border-bottom: 1px solid var(--border);">
+              <h3 style="margin: 0; font-size: 15px; color: #FBBF24;">Move Pinned Location</h3>
+            </div>
+            <div class="modal-body" style="padding: 16px;">
+              <div id="confirm-pin-move-name" style="font-size: 12.5px; font-weight: 700; color: var(--primary-light); margin-bottom: 6px;"></div>
+              <p style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 6px 0;">
+                Move this to any direction?
+              </p>
+              <p style="font-size: 11.5px; color: var(--text-muted); margin: 0;">
+                Tap <strong>Yes</strong> to unlock and drag this pin, or <strong>No</strong> to keep its current location safe.
+              </p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: center;">
+              <button type="button" id="btn-confirm-pin-move-no" class="btn btn-outline" style="flex: 1; font-weight: 700;">No</button>
+              <button type="button" id="btn-confirm-pin-move-yes" class="btn btn-primary" style="flex: 1; background: #F59E0B; border-color: #F59E0B; color: #0F172A; font-weight: 800;">Yes</button>
+            </div>
           </div>
         </div>
 
@@ -1517,6 +1564,23 @@
             Enable Map Pin Deletion
           </label>
           <input type="checkbox" id="toggle-pin-delete-allow" style="transform: scale(1.3); cursor: pointer;">
+        </div>
+      </div>
+
+      <!-- 2C. Map Safety: Move Pinned Location Switch Guard -->
+      <div class="settings-section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <h3 style="margin: 0;">Move Pinned Location Guard</h3>
+          <span id="pin-move-status-pill" class="badge badge-warning">LOCKED (SAFE)</span>
+        </div>
+        <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.45;">
+          Prevents accidentally dragging pinned houses or water meters while working in the field. When enabled, pressing and holding a pin asks <strong>"Move this to any direction? (Yes / No)"</strong> before unlocking it.
+        </p>
+        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--surface-alt); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+          <label for="toggle-pin-move-allow" style="font-size: 12.5px; font-weight: 600; margin: 0; cursor: pointer; color: var(--text-primary);">
+            Enable Move Pinned Locations
+          </label>
+          <input type="checkbox" id="toggle-pin-move-allow" style="transform: scale(1.3); cursor: pointer;">
         </div>
       </div>
 

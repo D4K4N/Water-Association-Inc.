@@ -18,13 +18,14 @@ class OfflineTileEngine {
     this.dbName = 'dicklum_offline_maps';
     this.dbVersion = 1;
     this.db = null;
-    this.memoryCache = new Map(); // key -> objectUrl
-    this.memoryCacheLimit = 350;
+    this.memoryCache = new Map(); // key -> objectUrl / dataUrl
+    this.memoryCacheLimit = 650;
     this.isDownloading = false;
     this.cancelDownloadFlag = false;
     this._syntheticGridCache = new Map(); // z_x_y -> dataUrl
+    this._overzoomCache = new Map(); // layer_z_x_y -> dataUrl
 
-    // Barangay Diclum bounding box (official geographic extent + 40m elastic buffer)
+    // Barangay Diclum bounding box (official geographic extent + generous buffer for Zones 1-4 & Sayre Hwy)
     this.diclumBounds = {
       minLat: 8.3460,
       maxLat: 8.4010,
@@ -192,18 +193,63 @@ class OfflineTileEngine {
     }
   }
 
+  _hasNativeVault() {
+    return typeof window !== 'undefined' &&
+      window.AndroidTileVault &&
+      typeof window.AndroidTileVault.getTileDataUrl === 'function';
+  }
+
+  async _blobToBase64(blob) {
+    return new Promise((resolve) => {
+      try {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(blob);
+      } catch (_) {
+        resolve('');
+      }
+    });
+  }
+
+  async hasTileStored(layer, z, x, y) {
+    const normLayer = (layer === 'hybrid') ? 'google_hybrid' : layer;
+    const key = this.makeKey(normLayer, z, x, y);
+    if (this.memoryCache.has(key)) return true;
+    if (this._hasNativeVault()) {
+      try {
+        if (window.AndroidTileVault.hasTile(normLayer, Number(z), Number(x), Number(y))) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    const blobUrl = await this.getTileBlob(normLayer, z, x, y);
+    return Boolean(blobUrl);
+  }
+
   async getTileBlob(layer, z, x, y) {
     const normLayer = (layer === 'hybrid') ? 'google_hybrid' : layer;
     const key = this.makeKey(normLayer, z, x, y);
 
-    // 1. In-memory object URL cache (0ms)
+    // 1. In-memory object/data URL cache (0ms)
     if (this.memoryCache.has(key)) {
       return this.memoryCache.get(key);
     }
 
+    // 2. Native Android Permanent File Vault (1ms — survives phone reboots & Airplane Mode forever!)
+    if (this._hasNativeVault()) {
+      try {
+        const dataUrl = window.AndroidTileVault.getTileDataUrl(normLayer, Number(z), Number(x), Number(y));
+        if (dataUrl && dataUrl.length > 100) {
+          this._rememberInMemoryCache(key, dataUrl);
+          return dataUrl;
+        }
+      } catch (_) {}
+    }
+
     await this.ready();
 
-    // 2. Persistent IndexedDB tile cache (1-2ms)
+    // 3. Persistent IndexedDB tile cache (1-2ms)
     if (this.db) {
       try {
         const blob = await new Promise((resolve) => {
@@ -243,12 +289,71 @@ class OfflineTileEngine {
       }
     }
 
-    // 3. Verified Bundled local pack in assets/dicklum-tiles/
+    // 4. Verified Bundled local pack in assets/dicklum-tiles/
     const bundledExact = this.getBundledTilePath(normLayer, z, x, y);
     if (bundledExact) {
       return bundledExact;
     }
 
+    return null;
+  }
+
+  /**
+   * Zero-Blur Parent-Tile Overzoom:
+   * When zoomed into deep levels (e.g. Z19-Z22) offline, climbs parent zoom levels (z-1..z-4),
+   * finds the highest-resolution saved satellite tile in the Native Vault / IndexedDB,
+   * and crops/upscales the exact quadrant smoothly onto a 256x256 canvas so the map is NEVER blank or grid!
+   */
+  async getParentOverzoomTile(layer, z, x, y) {
+    if (typeof document === 'undefined' || z <= 14) return null;
+    const normLayer = (layer === 'hybrid') ? 'google_hybrid' : layer;
+    const cacheKey = `${normLayer}_${z}_${x}_${y}`;
+    if (this._overzoomCache.has(cacheKey)) {
+      return this._overzoomCache.get(cacheKey);
+    }
+
+    for (let dz = 1; dz <= 4; dz++) {
+      const pz = z - dz;
+      if (pz < 14) break;
+      const scale = Math.pow(2, dz);
+      const px = Math.floor(x / scale);
+      const py = Math.floor(y / scale);
+      const parentSrc = await this.getTileBlob(normLayer, pz, px, py);
+      if (!parentSrc) continue;
+
+      const subX = x - px * scale;
+      const subY = y - py * scale;
+      const cropped = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            const srcW = (img.naturalWidth || 256) / scale;
+            const srcH = (img.naturalHeight || 256) / scale;
+            ctx.drawImage(img, subX * srcW, subY * srcH, srcW, srcH, 0, 0, 256, 256);
+            resolve(canvas.toDataURL('image/jpeg', 0.90));
+          } catch (_) {
+            resolve(null);
+          }
+        };
+        img.onerror = () => resolve(null);
+        img.src = parentSrc;
+      });
+
+      if (cropped) {
+        if (this._overzoomCache.size > 240) {
+          const oldest = this._overzoomCache.keys().next().value;
+          this._overzoomCache.delete(oldest);
+        }
+        this._overzoomCache.set(cacheKey, cropped);
+        return cropped;
+      }
+    }
     return null;
   }
 
@@ -266,31 +371,47 @@ class OfflineTileEngine {
 
   async saveTileBlob(layer, z, x, y, blob) {
     if (!blob || !(blob instanceof Blob) || blob.size === 0) return false;
-    await this.ready();
-    if (!this.db) return false;
-
     const normLayer = (layer === 'hybrid') ? 'google_hybrid' : layer;
-    const key = this.makeKey(normLayer, z, x, y);
-    return new Promise((resolve) => {
+    let savedAny = false;
+
+    // 1. Write permanently to Native Android Tile Vault (survives phone reboot & Airplane Mode forever!)
+    if (this._hasNativeVault() && typeof window.AndroidTileVault.saveTileBase64 === 'function') {
       try {
-        const record = {
-          key,
-          layer: normLayer,
-          z: Number(z),
-          x: Number(x),
-          y: Number(y),
-          size: blob.size,
-          blob: blob,
-          timestamp: Date.now()
-        };
-        const tx = this.db.transaction('tiles', 'readwrite');
-        const req = tx.objectStore('tiles').put(record);
-        req.onsuccess = () => resolve(true);
-        req.onerror = () => resolve(false);
-      } catch (_) {
-        resolve(false);
-      }
-    });
+        const b64 = await this._blobToBase64(blob);
+        if (b64 && window.AndroidTileVault.saveTileBase64(normLayer, Number(z), Number(x), Number(y), b64)) {
+          savedAny = true;
+        }
+      } catch (_) {}
+    }
+
+    // 2. Also persist in IndexedDB for browser / PWA / instant fallback
+    await this.ready();
+    if (this.db) {
+      const key = this.makeKey(normLayer, z, x, y);
+      const idbOk = await new Promise((resolve) => {
+        try {
+          const record = {
+            key,
+            layer: normLayer,
+            z: Number(z),
+            x: Number(x),
+            y: Number(y),
+            size: blob.size,
+            blob: blob,
+            timestamp: Date.now()
+          };
+          const tx = this.db.transaction('tiles', 'readwrite');
+          const req = tx.objectStore('tiles').put(record);
+          req.onsuccess = () => resolve(true);
+          req.onerror = () => resolve(false);
+        } catch (_) {
+          resolve(false);
+        }
+      });
+      if (idbOk) savedAny = true;
+    }
+
+    return savedAny;
   }
 
   /**
@@ -370,13 +491,29 @@ class OfflineTileEngine {
   async getCacheStats() {
     await this.ready();
     const bundled = this.bundledManifest ? (this.bundledManifest.totalBundledTiles || 92) : 92;
+
+    // 1. Check Native Android Permanent Tile Vault first
+    let nativeCount = 0;
+    let nativeBytes = 0;
+    if (this._hasNativeVault() && typeof window.AndroidTileVault.getVaultStats === 'function') {
+      try {
+        const raw = window.AndroidTileVault.getVaultStats();
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        nativeCount = Number(parsed?.count || 0);
+        nativeBytes = Number(parsed?.bytes || 0);
+      } catch (_) {}
+    }
+
     if (!this.db) {
+      const combinedBytes = nativeBytes + (bundled * 26000);
+      const mb = (combinedBytes / (1024 * 1024)).toFixed(1);
       return {
-        count: bundled,
-        totalTiles: 0,
-        totalBytes: 0,
-        sizeFormatted: '2.4 MB',
-        bundledTiles: bundled
+        count: nativeCount + bundled,
+        totalTiles: nativeCount,
+        totalBytes: combinedBytes,
+        sizeFormatted: `${mb} MB`,
+        bundledTiles: bundled,
+        nativeVaultTiles: nativeCount
       };
     }
 
@@ -384,33 +521,38 @@ class OfflineTileEngine {
       try {
         const tx = this.db.transaction('tiles', 'readonly');
         const store = tx.objectStore('tiles');
-        let totalTiles = 0;
-        let totalBytes = 0;
+        let idbTiles = 0;
+        let idbBytes = 0;
 
         const req = store.openCursor();
         req.onsuccess = (e) => {
           const cursor = e.target.result;
           if (cursor) {
-            totalTiles++;
-            totalBytes += cursor.value.size || 0;
+            idbTiles++;
+            idbBytes += cursor.value.size || 0;
             cursor.continue();
           } else {
-            const combinedBytes = totalBytes + (bundled * 26000);
+            const bestCount = Math.max(nativeCount, idbTiles);
+            const bestBytes = Math.max(nativeBytes, idbBytes);
+            const combinedBytes = bestBytes + (bundled * 26000);
             const mb = (combinedBytes / (1024 * 1024)).toFixed(1);
             resolve({
-              count: totalTiles + bundled,
-              totalTiles,
+              count: bestCount + bundled,
+              totalTiles: bestCount,
               totalBytes: combinedBytes,
               sizeFormatted: `${mb} MB`,
-              bundledTiles: bundled
+              bundledTiles: bundled,
+              nativeVaultTiles: nativeCount
             });
           }
         };
         req.onerror = () => {
-          resolve({ count: bundled, totalTiles: 0, totalBytes: bundled * 26000, sizeFormatted: '2.4 MB', bundledTiles: bundled });
+          const combinedBytes = nativeBytes + (bundled * 26000);
+          resolve({ count: nativeCount + bundled, totalTiles: nativeCount, totalBytes: combinedBytes, sizeFormatted: `${(combinedBytes / (1024 * 1024)).toFixed(1)} MB`, bundledTiles: bundled });
         };
       } catch (_) {
-        resolve({ count: bundled, totalTiles: 0, totalBytes: bundled * 26000, sizeFormatted: '2.4 MB', bundledTiles: bundled });
+        const combinedBytes = nativeBytes + (bundled * 26000);
+        resolve({ count: nativeCount + bundled, totalTiles: nativeCount, totalBytes: combinedBytes, sizeFormatted: `${(combinedBytes / (1024 * 1024)).toFixed(1)} MB`, bundledTiles: bundled });
       }
     });
   }
@@ -423,6 +565,12 @@ class OfflineTileEngine {
       }
     }
     this.memoryCache.clear();
+    if (this._overzoomCache) this._overzoomCache.clear();
+
+    if (this._hasNativeVault() && typeof window.AndroidTileVault.clearVault === 'function') {
+      try { window.AndroidTileVault.clearVault(); } catch (_) {}
+    }
+    try { localStorage.removeItem('dicklum_offline_map_ready'); } catch (_) {}
 
     if (!this.db) return true;
     return new Promise((resolve, reject) => {
@@ -473,7 +621,7 @@ class OfflineTileEngine {
 
     const layerKey = opts.layer || 'google_hybrid';
     const minZoom = opts.minZoom || 14;
-    const maxZoom = opts.maxZoom || 18; // Level 18 gives clear rooftops and meter standpipes
+    const maxZoom = opts.maxZoom || 19; // Level 19 gives crisp individual rooftops, driveways & meter standpipes
 
     const tiles = this.computeDiclumTileList(layerKey, minZoom, maxZoom);
     const total = tiles.length;
@@ -481,8 +629,8 @@ class OfflineTileEngine {
     let saved = 0;
     let errors = 0;
 
-    // Mobile-data-friendly concurrency (4 workers instead of flooding mobile network)
-    const concurrency = 4;
+    // High-throughput resumable parallel downloader (6 concurrent workers + automatic retry)
+    const concurrency = 6;
     let idx = 0;
 
     const worker = async () => {
@@ -490,36 +638,25 @@ class OfflineTileEngine {
         const item = tiles[idx++];
         let ok = false;
         try {
-          // 1. Check if already in IndexedDB or bundled
-          const existing = await this.getTileBlob(item.layer, item.z, item.x, item.y);
-          if (existing) {
+          // 1. Instant resume: skip tiles already permanently stored in Native Vault or IndexedDB
+          const alreadyStored = await this.hasTileStored(item.layer, item.z, item.x, item.y);
+          if (alreadyStored) {
             ok = true;
             saved++;
           } else {
-            // 2. Download real blob into IndexedDB + warm Service Worker cache
-            const storedBlob = await this.captureAndSaveTileFromImageOrNetwork(
-              item.layer,
-              item.z,
-              item.x,
-              item.y,
-              item.url
-            );
-            // Also warm standard Image cache for Service Worker
-            await new Promise((resolve) => {
-              const img = new Image();
-              img.referrerPolicy = 'no-referrer';
-              const timer = setTimeout(() => resolve(false), 6500);
-              img.onload = () => {
-                clearTimeout(timer);
-                resolve(true);
-              };
-              img.onerror = () => {
-                clearTimeout(timer);
-                resolve(false);
-              };
-              img.src = item.url;
-            });
-            ok = storedBlob;
+            // 2. Download real HD satellite blob with 2x automatic retry on flaky Wi-Fi
+            for (let attempt = 0; attempt < 2 && !ok && !this.cancelDownloadFlag; attempt++) {
+              ok = await this.captureAndSaveTileFromImageOrNetwork(
+                item.layer,
+                item.z,
+                item.x,
+                item.y,
+                item.url
+              );
+              if (!ok && attempt === 0) {
+                await new Promise(r => setTimeout(r, 350));
+              }
+            }
             if (ok) saved++;
           }
         } catch (_) {
@@ -711,7 +848,26 @@ class OfflineTileEngine {
         const x = coords.x;
         const y = coords.y;
 
-        // Fallback Step 2: Check if exact layer has a verified bundled tile
+        // Fallback Step 2: Zero-Blur Parent-Tile Overzoom from Native Vault / IndexedDB!
+        // If zoomed into Z18-Z22 offline, smoothly crop & upscale the highest-resolution saved satellite parent tile
+        // so the map stays razor-sharp like Google Maps with ZERO blank or dark grid tiles!
+        if (!tile._hasTriedParentOverzoom && z >= 15) {
+          tile._hasTriedParentOverzoom = true;
+          self.getParentOverzoomTile(normLayer, z, x, y).then((overzoomDataUrl) => {
+            if (overzoomDataUrl) {
+              tile.onload = () => finishTile(null);
+              tile.onerror = () => this._applyLocalBundledOrGridFallback(tile, coords, finishTile);
+              tile.src = overzoomDataUrl;
+              return;
+            }
+            this._applyLocalBundledOrGridFallback(tile, coords, finishTile);
+          }).catch(() => {
+            this._applyLocalBundledOrGridFallback(tile, coords, finishTile);
+          });
+          return;
+        }
+
+        // Fallback Step 3: Check if exact layer has a verified bundled tile
         const exactBundled = self.getBundledTilePath(normLayer, z, x, y);
         if (exactBundled && !tile._hasTriedExactBundled) {
           tile._hasTriedExactBundled = true;

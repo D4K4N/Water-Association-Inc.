@@ -58,9 +58,47 @@ class ReportsEngine {
       return false;
     };
 
-    // Build unified rows combining bills and readings so every reading from Previous -> Current is listed
+    const fmtDateTime = (iso) => {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso);
+      return d.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      });
+    };
+
+    const extractServiceMeta = (consumer, meter) => {
+      const isCutOff = Boolean(
+        (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) ||
+        (meter && (meter.status === 'Disconnected' || meter.status === 'Cut-Off'))
+      );
+      const cutOffAt = (meter && meter.cutOffAt) || (consumer && consumer.cutOffAt) || null;
+      const reconnectedAt = (meter && meter.reconnectedAt) || (consumer && consumer.reconnectedAt) || null;
+      const condition = (meter && meter.condition) || (consumer && consumer.meterCondition) || 'Operational';
+      const conditionAt = (meter && meter.conditionAt) || (consumer && consumer.meterConditionAt) || null;
+      const conditionText = condition && condition !== 'Operational'
+        ? `${condition}${conditionAt ? ` (${fmtDateTime(conditionAt)})` : ''}`
+        : 'Operational';
+      return {
+        serviceStatus: isCutOff ? 'CUT-OFF' : 'ACTIVE',
+        cutOffAt,
+        cutOffFormatted: fmtDateTime(cutOffAt),
+        reconnectedAt,
+        reconnectedFormatted: fmtDateTime(reconnectedAt),
+        meterCondition: condition,
+        meterConditionAt: conditionAt,
+        meterConditionFormatted: conditionText
+      };
+    };
+
+    // Build unified rows combining bills, readings, AND cut-off/reconnect/meter-issue events
     const rows = [];
     const seenReadingIds = new Set();
+    const seenConsumerIdsInRows = new Set();
 
     // 1. From Bills (which include reading + computed bill amount)
     for (const b of (bills || [])) {
@@ -76,6 +114,8 @@ class ReportsEngine {
       if (periodMode === 'month' && !isThisMonth(dateVal, b.billingPeriod)) continue;
 
       if (b.readingId) seenReadingIds.add(b.readingId);
+      if (b.consumerId) seenConsumerIdsInRows.add(b.consumerId);
+      const svc = extractServiceMeta(consumer, meter);
 
       rows.push({
         id: b.id,
@@ -92,7 +132,8 @@ class ReportsEngine {
         consumption: Number(b.consumption ?? Math.max(0, Number(b.currentReading || 0) - Number(b.previousReading || 0))),
         totalAmountDue: Number(b.totalAmountDue ?? 100),
         amountPaid: Number(b.amountPaid ?? 0),
-        paymentStatus: b.paymentStatus || 'UNPAID'
+        paymentStatus: b.paymentStatus || 'UNPAID',
+        ...svc
       });
     }
 
@@ -110,11 +151,13 @@ class ReportsEngine {
       if (periodMode === 'today' && !isSameDay(dateVal)) continue;
       if (periodMode === 'month' && !isThisMonth(dateVal, r.billingPeriod)) continue;
 
+      if (r.consumerId) seenConsumerIdsInRows.add(r.consumerId);
       const prev = Number(r.previousReading ?? 0);
       const curr = Number(r.currentReading ?? 0);
       const cons = Number(r.consumption ?? Math.max(0, curr - prev));
       const excess = Math.max(0, cons - 10);
       const estBill = cons <= 0 ? 0.00 : (100 + excess * 15);
+      const svc = extractServiceMeta(consumer, meter);
 
       rows.push({
         id: r.id,
@@ -131,38 +174,55 @@ class ReportsEngine {
         consumption: cons,
         totalAmountDue: estBill,
         amountPaid: 0,
-        paymentStatus: 'RECORDED'
+        paymentStatus: 'RECORDED',
+        ...svc
       });
     }
 
-    // 3. If filtering by Zone or Consumer and there are registered consumers in that zone who have an initial reading but no bill yet in 'all' mode
-    if (rows.length === 0 && periodMode === 'all') {
-      const targetConsumers = (consumers || []).filter(c => {
-        if (consumerId && c.id !== consumerId) return false;
-        if (zone && zone !== 'ALL' && c.zone !== zone) return false;
-        return true;
-      });
-      for (const c of targetConsumers) {
-        const meter = (meters || []).find(m => m.consumerId === c.id);
-        const initRdg = meter ? Number(meter.initialReading || 0) : 0;
-        rows.push({
-          id: c.id,
-          consumerId: c.id,
-          consumerName: c.name,
-          accountNo: c.accountNo,
-          meterNo: meter ? meter.meterNo : 'Unassigned',
-          zone: c.zone || 'Zone 1',
-          address: c.address || `${c.zone || 'Zone 1'}, Diclum`,
-          dateIso: c.createdAt || new Date().toISOString(),
-          billingPeriod: activeBillingPeriod || 'Initial Registration',
-          previousReading: initRdg,
-          currentReading: initRdg,
-          consumption: 0,
-          totalAmountDue: 0.00,
-          amountPaid: 0,
-          paymentStatus: 'REGISTERED'
-        });
+    // 3. Include consumers with Cut-Off, Reconnect, or Meter Condition (Guba / Gi-lumot) events in the chosen period,
+    //    OR in 'all' mode include all registered consumers with their latest previous reading & service/meter status.
+    const targetConsumers = (consumers || []).filter(c => {
+      if (consumerId && c.id !== consumerId) return false;
+      if (zone && zone !== 'ALL' && c.zone !== zone) return false;
+      return true;
+    });
+    for (const c of targetConsumers) {
+      if (seenConsumerIdsInRows.has(c.id)) continue;
+      const meter = (meters || []).find(m => m.consumerId === c.id);
+      const svc = extractServiceMeta(c, meter);
+      const eventDate = svc.cutOffAt || svc.reconnectedAt || svc.meterConditionAt || null;
+
+      let includeRow = false;
+      if (periodMode === 'all') {
+        includeRow = true;
+      } else if (eventDate) {
+        if (periodMode === 'today' && (isSameDay(svc.cutOffAt) || isSameDay(svc.reconnectedAt) || isSameDay(svc.meterConditionAt))) {
+          includeRow = true;
+        } else if (periodMode === 'month' && (isThisMonth(svc.cutOffAt) || isThisMonth(svc.reconnectedAt) || isThisMonth(svc.meterConditionAt))) {
+          includeRow = true;
+        }
       }
+      if (!includeRow) continue;
+
+      const initRdg = meter ? Number(meter.initialReading || 0) : 0;
+      rows.push({
+        id: c.id,
+        consumerId: c.id,
+        consumerName: c.name,
+        accountNo: c.accountNo,
+        meterNo: meter ? meter.meterNo : 'Unassigned',
+        zone: c.zone || 'Zone 1',
+        address: c.address || `${c.zone || 'Zone 1'}, Diclum`,
+        dateIso: eventDate || c.updatedAt || c.createdAt || new Date().toISOString(),
+        billingPeriod: activeBillingPeriod || 'Service Record',
+        previousReading: initRdg,
+        currentReading: initRdg,
+        consumption: 0,
+        totalAmountDue: 0.00,
+        amountPaid: 0,
+        paymentStatus: svc.serviceStatus === 'CUT-OFF' ? 'CUT-OFF' : (svc.meterCondition !== 'Operational' ? 'METER ISSUE' : 'REGISTERED'),
+        ...svc
+      });
     }
 
     rows.sort((a, b) => new Date(b.dateIso) - new Date(a.dateIso));
@@ -223,24 +283,27 @@ class ReportsEngine {
         <tr>
           <td style="text-align: center;">${idx + 1}</td>
           <td><strong>${r.consumerName}</strong></td>
-          <td style="font-family: monospace;">${r.accountNo}</td>
-          <td style="font-family: monospace; font-weight: 700; color: #1E40AF;">${r.meterNo}</td>
-          <td>${r.zone}</td>
-          <td style="font-size: 9.5px;">${dateFormatted}</td>
-          <td style="text-align: right; font-weight: 600;">${r.previousReading.toLocaleString()} m³</td>
-          <td style="text-align: right; font-weight: 800; color: #0F172A;">${r.currentReading.toLocaleString()} m³</td>
+          <td style="font-family: monospace; font-size: 9.5px;">${r.accountNo}</td>
+          <td style="font-family: monospace; font-weight: 700; color: #1E40AF; font-size: 9.5px;">${r.meterNo}</td>
+          <td style="font-size: 9.5px;">${r.zone}</td>
+          <td style="font-size: 9px;">${dateFormatted}</td>
+          <td style="text-align: right; font-weight: 600;">${r.previousReading.toLocaleString()}</td>
+          <td style="text-align: right; font-weight: 800; color: #0F172A;">${r.currentReading.toLocaleString()}</td>
           <td style="text-align: right; font-weight: 800; color: #0F766E;">${r.consumption.toLocaleString()} m³</td>
           <td style="text-align: right; font-weight: 800;">PHP ${r.totalAmountDue.toFixed(2)}</td>
+          <td style="font-size: 9px; color: ${r.cutOffAt ? '#DC2626' : '#64748B'}; font-weight: ${r.cutOffAt ? '700' : '400'};">${r.cutOffFormatted || '—'}</td>
+          <td style="font-size: 9px; color: ${r.reconnectedAt ? '#059669' : '#64748B'}; font-weight: ${r.reconnectedAt ? '700' : '400'};">${r.reconnectedFormatted || '—'}</td>
+          <td style="font-size: 9px; color: ${r.meterCondition && r.meterCondition !== 'Operational' ? '#B45309' : '#475569'}; font-weight: ${r.meterCondition && r.meterCondition !== 'Operational' ? '700' : '400'};">${r.meterConditionFormatted || 'Operational'}</td>
           <td style="text-align: center;">
-            <span class="badge ${r.paymentStatus === 'PAID' ? 'badge-success' : 'badge-warning'}">${r.paymentStatus}</span>
+            <span class="badge ${r.serviceStatus === 'CUT-OFF' ? 'badge-danger' : (r.paymentStatus === 'PAID' ? 'badge-success' : 'badge-warning')}">${r.serviceStatus === 'CUT-OFF' ? 'CUT-OFF' : r.paymentStatus}</span>
           </td>
         </tr>
       `;
     }).join('') : `
       <tr>
-        <td colspan="11" style="text-align: center; padding: 22px; color: #64748B;">
-          No reading or billing records found for <strong>${zoneLabel}</strong> under <strong>${periodLabel}</strong>.<br>
-          Try switching the filter between <em>"Records I Made Today"</em> and <em>"Records of This Month"</em>.
+        <td colspan="14" style="text-align: center; padding: 22px; color: #64748B;">
+          No reading, billing, cut-off, or meter condition records found for <strong>${zoneLabel}</strong> under <strong>${periodLabel}</strong>.<br>
+          Try switching the filter between <em>"Today"</em>, <em>"This Month"</em>, and <em>"All Records"</em>.
         </td>
       </tr>
     `;
@@ -283,16 +346,19 @@ class ReportsEngine {
         <table class="report-table">
           <thead>
             <tr>
-              <th style="width: 28px;">#</th>
-              <th>Water Meter Owner / Consumer</th>
+              <th style="width: 24px;">#</th>
+              <th>Consumer / Meter Owner</th>
               <th>Account #</th>
-              <th>Meter # (WM)</th>
+              <th>Meter #</th>
               <th>Zone</th>
-              <th>Reading Date</th>
-              <th style="text-align: right;">Previous Rdg</th>
-              <th style="text-align: right;">Current Rdg</th>
-              <th style="text-align: right;">Consumption</th>
-              <th style="text-align: right;">Current Bill</th>
+              <th>Date &amp; Time</th>
+              <th style="text-align: right;">Prev (m³)</th>
+              <th style="text-align: right;">Curr (m³)</th>
+              <th style="text-align: right;">Usage</th>
+              <th style="text-align: right;">Bill (PHP)</th>
+              <th>Na Cut-Off (Date)</th>
+              <th>Na Reconnect (Date)</th>
+              <th>Meter Condition / Issue</th>
               <th style="text-align: center;">Status</th>
             </tr>
           </thead>
@@ -301,10 +367,10 @@ class ReportsEngine {
           </tbody>
           <tfoot>
             <tr style="background: #F8FAFC; font-weight: 800;">
-              <td colspan="8" style="text-align: right;">TOTALS:</td>
+              <td colspan="8" style="text-align: right;">TOTALS (${rows.length} records):</td>
               <td style="text-align: right; color: #0F766E;">${totalVolume.toLocaleString()} m³</td>
               <td style="text-align: right;">PHP ${totalBilled.toFixed(2)}</td>
-              <td></td>
+              <td colspan="4"></td>
             </tr>
           </tfoot>
         </table>
@@ -386,6 +452,10 @@ class ReportsEngine {
           <td style="text-align:right; font-weight:bold; border:1px solid #CBD5E1; padding:6px;">${r.currentReading}</td>
           <td style="text-align:right; font-weight:bold; color:#0F766E; border:1px solid #CBD5E1; padding:6px;">${r.consumption}</td>
           <td style="text-align:right; font-weight:bold; border:1px solid #CBD5E1; padding:6px;">${r.totalAmountDue.toFixed(2)}</td>
+          <td style="text-align:center; font-weight:bold; color:${r.serviceStatus === 'CUT-OFF' ? '#DC2626' : '#059669'}; border:1px solid #CBD5E1; padding:6px;">${r.serviceStatus || 'ACTIVE'}</td>
+          <td style="border:1px solid #CBD5E1; padding:6px; color:${r.cutOffAt ? '#DC2626' : '#64748B'};">${r.cutOffFormatted || '—'}</td>
+          <td style="border:1px solid #CBD5E1; padding:6px; color:${r.reconnectedAt ? '#059669' : '#64748B'};">${r.reconnectedFormatted || '—'}</td>
+          <td style="border:1px solid #CBD5E1; padding:6px; color:${r.meterCondition && r.meterCondition !== 'Operational' ? '#B45309' : '#334155'};">${r.meterConditionFormatted || 'Operational'}</td>
           <td style="text-align:center; border:1px solid #CBD5E1; padding:6px;">${r.paymentStatus}</td>
         </tr>
       `;
@@ -400,13 +470,13 @@ class ReportsEngine {
       <body style="font-family: Arial, sans-serif; font-size: 12px;">
         <table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;">
           <tr>
-            <td colspan="12" style="background:#0F172A; color:#FFFFFF; font-size:15px; font-weight:bold; padding:10px;">
-              DICKLUM WATER ASSOCIATION, INC. — OFFICIAL METER READING &amp; BILLING RECORDS
+            <td colspan="16" style="background:#0F172A; color:#FFFFFF; font-size:15px; font-weight:bold; padding:10px;">
+              DICKLUM WATER ASSOCIATION, INC. — OFFICIAL METER READING, BILLING &amp; SERVICE HISTORY RECORDS
             </td>
           </tr>
           <tr>
-            <td colspan="6" style="background:#F1F5F9; font-weight:bold;">Scope / Zone: ${titleScope}</td>
-            <td colspan="6" style="background:#F1F5F9; font-weight:bold;">Filter: ${periodLabel}</td>
+            <td colspan="8" style="background:#F1F5F9; font-weight:bold;">Scope / Zone: ${titleScope}</td>
+            <td colspan="8" style="background:#F1F5F9; font-weight:bold;">Filter: ${periodLabel}</td>
           </tr>
           <tr style="background:#0F766E; color:#FFFFFF; font-weight:bold; text-align:center;">
             <th>#</th>
@@ -415,40 +485,60 @@ class ReportsEngine {
             <th>Water Meter # (WM)</th>
             <th>Zone</th>
             <th>Address</th>
-            <th>Reading Date &amp; Time</th>
+            <th>Reading / Event Date</th>
             <th>Previous Reading (m³)</th>
             <th>Current Reading (m³)</th>
             <th>Consumption (m³)</th>
             <th>Current Bill (PHP)</th>
-            <th>Status</th>
+            <th>Service Status</th>
+            <th>Na Cut-Off (Date &amp; Time)</th>
+            <th>Na Reconnect (Date &amp; Time)</th>
+            <th>Meter Condition / Issue (Guba / Gi-lumot)</th>
+            <th>Payment Status</th>
           </tr>
           ${tableRows}
           <tr style="background:#FEF3C7; font-weight:bold;">
             <td colspan="9" style="text-align:right; padding:6px;">TOTALS (${rows.length} record${rows.length === 1 ? '' : 's'}):</td>
             <td style="text-align:right; padding:6px;">${totalVolume} m³</td>
             <td style="text-align:right; padding:6px;">PHP ${totalBilled.toFixed(2)}</td>
-            <td></td>
+            <td colspan="5"></td>
           </tr>
         </table>
       </body>
       </html>
     `;
 
+    const cleanScope = (targetConsumer ? targetConsumer.name : zone).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const datePart = new Date().toISOString().slice(0, 10);
+    const filename = `Dicklum_${cleanScope}_${periodMode}_${datePart}.xls`;
+
+    // 1. Native Android APK Direct Save to Downloads/DicklumWater/ (100% Offline, Zero Browser Needed!)
+    if (typeof window !== 'undefined' && window.AndroidBackupBridge && typeof window.AndroidBackupBridge.saveFileToDownloads === 'function') {
+      try {
+        const rawRes = window.AndroidBackupBridge.saveFileToDownloads(filename, '\ufeff' + excelHtml, 'application/vnd.ms-excel', false);
+        const parsed = typeof rawRes === 'string' ? JSON.parse(rawRes) : rawRes;
+        if (parsed && parsed.ok) {
+          return { count: rows.length, filename, savedPath: parsed.path || `Downloads/DicklumWater/${filename}`, method: 'android-downloads-folder' };
+        }
+      } catch (nativeErr) {
+        console.warn('Android Excel save notice:', nativeErr);
+      }
+    }
+
+    // 2. Desktop / Mobile Browser Fallback (with 60s Blob retention)
     const blob = new Blob(['\ufeff', excelHtml], { type: 'application/vnd.ms-excel;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const cleanScope = (targetConsumer ? targetConsumer.name : zone).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const datePart = new Date().toISOString().slice(0, 10);
     a.href = url;
-    a.download = `Dicklum_${cleanScope}_${periodMode}_${datePart}.xls`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 300);
+      try { document.body.removeChild(a); } catch (_) {}
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }, 60000);
 
-    return { count: rows.length, filename: a.download };
+    return { count: rows.length, filename, method: 'browser-download' };
   }
 
   /**

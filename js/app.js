@@ -901,6 +901,32 @@ class WaterBillingApp {
       cutoffBtn.title = isCutOff ? 'Restore / Reconnect water service' : 'Mark water service as Cut-Off (Disconnected)';
     }
 
+    const condSelect = document.getElementById('sheet-meter-condition-select');
+    const currentCond = (meter && meter.condition) || (consumer && consumer.meterCondition) || 'Operational';
+    if (condSelect) {
+      condSelect.value = currentCond;
+    }
+
+    const histStrip = document.getElementById('sheet-service-history-strip');
+    if (histStrip) {
+      const cutOffAt = (meter && meter.cutOffAt) || (consumer && consumer.cutOffAt) || null;
+      const reconnectedAt = (meter && meter.reconnectedAt) || (consumer && consumer.reconnectedAt) || null;
+      const condAt = (meter && meter.conditionAt) || (consumer && consumer.meterConditionAt) || null;
+      const parts = [];
+      if (cutOffAt) parts.push(`<span style="color:#F87171;"><strong>Na Cut-Off:</strong> ${this._formatHistoryDateTime(cutOffAt)}</span>`);
+      if (reconnectedAt) parts.push(`<span style="color:#4ADE80;"><strong>Na Reconnect:</strong> ${this._formatHistoryDateTime(reconnectedAt)}</span>`);
+      if (currentCond && currentCond !== 'Operational') {
+        parts.push(`<span style="color:#FBBF24;"><strong>Meter Issue:</strong> ${currentCond}${condAt ? ` (${this._formatHistoryDateTime(condAt)})` : ''}</span>`);
+      }
+      if (parts.length > 0) {
+        histStrip.innerHTML = parts.join(' &nbsp;•&nbsp; ');
+        histStrip.style.display = 'block';
+      } else {
+        histStrip.innerHTML = '';
+        histStrip.style.display = 'none';
+      }
+    }
+
     // Refresh Delete Pin button enabled/disabled state based on Settings
     this.updatePinDeleteButtonsState();
 
@@ -1043,14 +1069,35 @@ class WaterBillingApp {
       ? (latestBill.paymentStatus === 'PAID' ? 'badge-success' : 'badge-warning')
       : 'badge-success';
 
+    const isMeterCutOff = Boolean(
+      (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) ||
+      (selectedMeter && (selectedMeter.status === 'Disconnected' || selectedMeter.status === 'Cut-Off'))
+    );
+    const meterCutOffAt = (selectedMeter && selectedMeter.cutOffAt) || (consumer && consumer.cutOffAt) || null;
+    const meterReconnectedAt = (selectedMeter && selectedMeter.reconnectedAt) || (consumer && consumer.reconnectedAt) || null;
+    const meterCond = (selectedMeter && selectedMeter.condition) || (consumer && consumer.meterCondition) || 'Operational';
+    const meterCondAt = (selectedMeter && selectedMeter.conditionAt) || (consumer && consumer.meterConditionAt) || null;
+
+    const historyParts = [];
+    if (meterCutOffAt) {
+      historyParts.push(`<span style="color:#F87171;"><strong>Na Cut-Off:</strong> ${this._formatHistoryDateTime(meterCutOffAt)}</span>`);
+    }
+    if (meterReconnectedAt) {
+      historyParts.push(`<span style="color:#4ADE80;"><strong>Na Reconnect:</strong> ${this._formatHistoryDateTime(meterReconnectedAt)}</span>`);
+    }
+    if (meterCond && meterCond !== 'Operational') {
+      historyParts.push(`<span style="color:#FBBF24;"><strong>Meter Issue:</strong> ${meterCond}${meterCondAt ? ` (${this._formatHistoryDateTime(meterCondAt)})` : ''}</span>`);
+    }
+
     detailPanel.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 10px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <div class="mse-circle-badge" style="width: 28px; height: 28px; font-size: 12px;">${selectedIndex + 1}</div>
+          <div class="mse-circle-badge" style="width: 28px; height: 28px; font-size: 12px; ${isMeterCutOff ? 'background:#DC2626;' : ''}">${selectedIndex + 1}</div>
           <div>
             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
               <strong style="font-size: 13.5px; font-weight: 600; color: var(--text-primary);">${ownerName}</strong>
               <span class="acct-pill">${accountNo}</span>
+              ${isMeterCutOff ? `<span class="badge badge-danger" style="background:#DC2626; color:#FFF; font-size:10px;">CUT-OFF</span>` : ''}
             </div>
             <div style="font-size: 11px; color: var(--text-muted); margin-top: 1px;">
               Meter: <strong style="color: var(--primary-light); font-weight: 600;">${selectedMeter.meterNo}</strong> • ${address}
@@ -1059,6 +1106,12 @@ class WaterBillingApp {
         </div>
         <span class="badge ${statusBadgeClass}">${statusLabel}</span>
       </div>
+
+      ${historyParts.length > 0 ? `
+        <div style="font-size: 11px; line-height: 1.45; padding: 6px 9px; margin-bottom: 8px; border-radius: 7px; background: rgba(15, 23, 42, 0.55); border: 1px solid var(--border);">
+          ${historyParts.join(' &nbsp;•&nbsp; ')}
+        </div>
+      ` : ''}
 
       <div class="b-readings-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 10px;">
         <div class="r-cell">
@@ -1077,6 +1130,19 @@ class WaterBillingApp {
           <span class="lbl">${latestBill ? 'Bill Amount' : 'Min Tariff'}</span>
           <span class="val" style="color: var(--success-text);">PHP ${totalDue.toFixed(2)}</span>
         </div>
+      </div>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;">
+        <button type="button" class="btn btn-sm btn-outline" style="flex: 1; font-weight: 700; color: ${isMeterCutOff ? '#4ADE80' : '#F87171'}; border-color: ${isMeterCutOff ? 'rgba(74,222,128,0.45)' : 'rgba(248,113,113,0.45)'};" onclick="window.app.setMeterServiceAction('${consumer ? consumer.id : ''}', '${selectedMeter.id}', '${isMeterCutOff ? 'reconnect' : 'cutoff'}')">
+          ${isMeterCutOff ? '✓ Reconnect Water' : '✕ Cut-Off Water'}
+        </button>
+        <select class="btn btn-sm btn-outline" style="flex: 1.15; font-size: 11px; padding: 5px 6px; background: var(--surface-2); color: var(--text-primary); border-color: rgba(245,158,11,0.45);" onchange="window.app.setMeterConditionStatus('${consumer ? consumer.id : ''}', '${selectedMeter.id}', this.value)">
+          <option value="Operational" ${meterCond === 'Operational' ? 'selected' : ''}>Meter: OK (Operational)</option>
+          <option value="Guba ang Meter (Damaged)" ${meterCond === 'Guba ang Meter (Damaged)' ? 'selected' : ''}>Meter: Guba (Damaged)</option>
+          <option value="Gi-lumot / Foggy (Mossy)" ${meterCond === 'Gi-lumot / Foggy (Mossy)' ? 'selected' : ''}>Meter: Gi-lumot (Mossy)</option>
+          <option value="Leaking Meter" ${meterCond === 'Leaking Meter' ? 'selected' : ''}>Meter: Leaking</option>
+          <option value="Replaced Meter" ${meterCond === 'Replaced Meter' ? 'selected' : ''}>Meter: Replaced</option>
+        </select>
       </div>
 
       <div style="display: flex; gap: 6px; flex-wrap: wrap;">
@@ -1274,12 +1340,46 @@ class WaterBillingApp {
 
     this._startCompassTracking();
 
-    // Track whether we've centered on real device location and the best accuracy seen
+    // Track whether we've centered on real device location, best accuracy, and Kalman smoothing state
     this._gpsPannedOnce = false;
     this._bestGpsAccuracy = Infinity;
+    this._kalmanGps = null;
 
-    const handleGpsPosition = (pos) => {
-      const { latitude, longitude, accuracy, heading } = pos.coords;
+    const smoothGps = (rawLat, rawLng, rawAcc) => {
+      const acc = Math.max(2, Number(rawAcc) || 20);
+      const now = Date.now();
+      if (!this._kalmanGps || (now - this._kalmanGps.ts) > 15000 || acc > 80) {
+        this._kalmanGps = { lat: rawLat, lng: rawLng, variance: acc * acc, ts: now };
+        return { lat: rawLat, lng: rawLng };
+      }
+      const dtSec = Math.max(0.2, (now - this._kalmanGps.ts) / 1000);
+      // Walking speed process noise (~2.2 m/s) so walking has ZERO lag while stationary jitter is filtered out
+      const q = dtSec * 2.2 * 2.2;
+      const predVar = this._kalmanGps.variance + q;
+      const k = predVar / (predVar + acc * acc);
+      this._kalmanGps.lat = this._kalmanGps.lat + k * (rawLat - this._kalmanGps.lat);
+      this._kalmanGps.lng = this._kalmanGps.lng + k * (rawLng - this._kalmanGps.lng);
+      this._kalmanGps.variance = (1 - k) * predVar;
+      this._kalmanGps.ts = now;
+      return { lat: this._kalmanGps.lat, lng: this._kalmanGps.lng };
+    };
+
+    const handleGpsPosition = (pos, extraMeta = null) => {
+      const coords = pos && pos.coords ? pos.coords : pos;
+      const rawLat = Number(coords.latitude ?? coords.lat);
+      const rawLng = Number(coords.longitude ?? coords.lng);
+      const accuracy = Number(coords.accuracy ?? 15);
+      const heading = coords.heading !== undefined ? coords.heading : null;
+      if (isNaN(rawLat) || isNaN(rawLng)) return;
+
+      const smoothed = smoothGps(rawLat, rawLng, accuracy);
+      const latitude = smoothed.lat;
+      const longitude = smoothed.lng;
+      const satsUsed = extraMeta && typeof extraMeta.satellitesUsed === 'number' ? extraMeta.satellitesUsed : null;
+
+      try {
+        localStorage.setItem('dicklum_last_known_gps', JSON.stringify({ lat: latitude, lng: longitude, accuracy, ts: Date.now() }));
+      } catch (_) {}
 
       if (this.mapEngine) {
         // Update the GPS marker with real coordinates, accuracy circle, heading beam, and elastic Diclum border
@@ -1301,15 +1401,16 @@ class WaterBillingApp {
 
       if (btn) {
         let accuracyStatus = '';
+        const satTag = satsUsed !== null && satsUsed > 0 ? ` • ${satsUsed}s` : '';
         if (accuracy <= 25) {
-          accuracyStatus = `● ±${Math.round(accuracy)}m`;
+          accuracyStatus = `● ±${Math.round(accuracy)}m${satTag}`;
         } else if (accuracy <= 60) {
-          accuracyStatus = `◉ ±${Math.round(accuracy)}m`;
+          accuracyStatus = `◉ ±${Math.round(accuracy)}m${satTag}`;
         } else {
-          accuracyStatus = `○ ±${Math.round(accuracy)}m`;
+          accuracyStatus = `○ ±${Math.round(accuracy)}m${satTag}`;
         }
         btn.innerHTML = `${window.AppIcons.crosshair()} ${accuracyStatus}`;
-        btn.title = `GPS Status:\nLat: ${latitude.toFixed(6)}\nLng: ${longitude.toFixed(6)}\nAccuracy: ±${Math.round(accuracy)}m${accuracy > 50 ? '\nTip: Move outdoors or turn ON "Precise Location" in phone settings for pinpoint accuracy.' : '\nHigh precision satellite lock.'}`;
+        btn.title = `Offline Satellite GNSS Status:\nLat: ${latitude.toFixed(6)}\nLng: ${longitude.toFixed(6)}\nAccuracy: ±${Math.round(accuracy)}m${satsUsed !== null ? `\nSatellites Locked: ${satsUsed}` : ''}${accuracy > 50 ? '\nTip: Move outdoors for clear sky satellite lock.' : '\nHigh precision pure-satellite lock (No Data Needed).'}`;
       }
 
       if (this.isRecordingRoute) {
@@ -1317,7 +1418,34 @@ class WaterBillingApp {
       }
     };
 
-    // Immediate high-accuracy position probe + continuous real-time watchPosition stream
+    // PRIORITY 1: Native Android Pure-Satellite Hardware GNSS Bridge (100% Offline, 1 Hz, Zero WebView Delay!)
+    if (typeof window !== 'undefined' && window.AndroidNativeGPS && typeof window.AndroidNativeGPS.startGps === 'function') {
+      window.__onNativeGpsFix = (fix) => {
+        if (!fix) return;
+        handleGpsPosition({
+          coords: {
+            latitude: fix.lat,
+            longitude: fix.lng,
+            accuracy: fix.accuracy,
+            heading: fix.heading
+          }
+        }, fix);
+      };
+      try {
+        window.AndroidNativeGPS.startGps();
+        this._nativeGpsRunning = true;
+        this.gpsWatchId = 'native-gnss';
+        const lastRaw = window.AndroidNativeGPS.getLastFix ? window.AndroidNativeGPS.getLastFix() : '';
+        if (lastRaw) {
+          try { window.__onNativeGpsFix(JSON.parse(lastRaw)); } catch (_) {}
+        }
+        return;
+      } catch (nativeGpsErr) {
+        console.warn('AndroidNativeGPS fallback to browser geolocation:', nativeGpsErr);
+      }
+    }
+
+    // PRIORITY 2: Standard Browser / PWA Geolocation API (Desktop & Mobile Chrome)
     navigator.geolocation.getCurrentPosition(handleGpsPosition, () => {}, {
       enableHighAccuracy: true,
       timeout: 12000,
@@ -1362,10 +1490,16 @@ class WaterBillingApp {
   }
 
   stopRealtimeGps() {
-    if (this.gpsWatchId !== null) {
-      navigator.geolocation.clearWatch(this.gpsWatchId);
-      this.gpsWatchId = null;
+    if (this._nativeGpsRunning && typeof window !== 'undefined' && window.AndroidNativeGPS && typeof window.AndroidNativeGPS.stopGps === 'function') {
+      try { window.AndroidNativeGPS.stopGps(); } catch (_) {}
+      this._nativeGpsRunning = false;
+      window.__onNativeGpsFix = null;
     }
+    if (this.gpsWatchId !== null && this.gpsWatchId !== 'native-gnss') {
+      navigator.geolocation.clearWatch(this.gpsWatchId);
+    }
+    this.gpsWatchId = null;
+    this._kalmanGps = null;
     this._stopCompassTracking();
     this._gpsPannedOnce = false;
     this._bestGpsAccuracy = Infinity;
@@ -2333,13 +2467,26 @@ class WaterBillingApp {
 
     try {
       if (typeof html2pdf !== 'undefined') {
+        const isWideTable = Boolean(element.querySelector('.report-table'));
         const opt = {
-          margin: [8, 8, 8, 8],
+          margin: [6, 6, 6, 6],
           filename: filename,
-          image: { type: 'jpeg', quality: 0.98 },
+          image: { type: 'jpeg', quality: 0.96 },
           html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+          jsPDF: { unit: 'mm', format: 'a4', orientation: isWideTable ? 'landscape' : 'portrait' }
         };
+
+        // 1. Native Android APK Direct Save to Downloads/DicklumWater/ (100% Offline, Zero Browser Needed!)
+        if (typeof window !== 'undefined' && window.AndroidBackupBridge && typeof window.AndroidBackupBridge.saveFileToDownloads === 'function') {
+          const dataUri = await html2pdf().set(opt).from(element).outputPdf('datauristring');
+          const rawRes = window.AndroidBackupBridge.saveFileToDownloads(filename, dataUri, 'application/pdf', true);
+          const parsed = typeof rawRes === 'string' ? JSON.parse(rawRes) : rawRes;
+          if (parsed && parsed.ok) {
+            this.showToast(`PDF saved directly to ${parsed.path || 'Downloads/DicklumWater/' + filename}!`, 4000);
+            return;
+          }
+        }
+
         await html2pdf().set(opt).from(element).save();
       } else {
         // Fallback: standalone print window
@@ -3350,8 +3497,10 @@ class WaterBillingApp {
         }
 
         const existingConsumerMeter = this.cachedMeters.find(m => m.consumerId === slotConsumerId);
-        const meterId = existingConsumerMeter ? existingConsumerMeter.id : `m-${Date.now().toString().slice(-5)}-${i + 1}`;
+        const meterId = existingConsumerMeter ? existingConsumerMeter.id : `m-${Date.now()}-${i + 1}`;
+        const preservedStatus = existingConsumerMeter ? (existingConsumerMeter.status || 'Operational') : 'Operational';
         const newMeter = {
+          ...(existingConsumerMeter || {}),
           id: meterId,
           meterNo: meterNo,
           consumerId: slotConsumerId,
@@ -3361,12 +3510,22 @@ class WaterBillingApp {
           meterLng: lng,
           isClustered: Boolean(activeClusterId),
           clusterId: activeClusterId || null,
-          installDate: new Date().toISOString().split('T')[0],
+          installDate: (existingConsumerMeter && existingConsumerMeter.installDate) || new Date().toISOString().split('T')[0],
           initialReading: initialReading,
-          status: 'Operational',
-          notes: notes
+          status: preservedStatus,
+          condition: (existingConsumerMeter && existingConsumerMeter.condition) || 'Operational',
+          statusHistory: (existingConsumerMeter && Array.isArray(existingConsumerMeter.statusHistory)) ? existingConsumerMeter.statusHistory : [],
+          conditionHistory: (existingConsumerMeter && Array.isArray(existingConsumerMeter.conditionHistory)) ? existingConsumerMeter.conditionHistory : [],
+          notes: notes || (existingConsumerMeter && existingConsumerMeter.notes) || '',
+          updatedAt: new Date().toISOString()
         };
         await window.db.put('meters', newMeter);
+        const existingIdx = this.cachedMeters.findIndex(m => m.id === meterId);
+        if (existingIdx >= 0) {
+          this.cachedMeters[existingIdx] = newMeter;
+        } else {
+          this.cachedMeters.push(newMeter);
+        }
 
         targetConsumerId = slotConsumerId;
         targetConsumerName = slotConsumerName;
@@ -3611,7 +3770,8 @@ class WaterBillingApp {
 
     if (format === 'excel') {
       const res = window.reportsEngine.downloadExcelReport(opts);
-      this.showToast(`Downloaded Excel table: ${res.filename} (${res.count} row${res.count === 1 ? '' : 's'})`, 3200);
+      const destNote = res.savedPath ? `Saved to ${res.savedPath}` : `Downloaded ${res.filename}`;
+      this.showToast(`${destNote} (${res.count} row${res.count === 1 ? '' : 's'})`, 3600);
       return;
     }
 
@@ -3886,36 +4046,83 @@ class WaterBillingApp {
     });
   }
 
+  _formatHistoryDateTime(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return String(isoStr);
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+  }
+
   async toggleConsumerCutoffStatus(consumerIdParam = null) {
     const consumer = (consumerIdParam && this.cachedConsumers.find(c => c.id === consumerIdParam)) || this.activeConsumer;
     const meter = this.activeMeter || (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : null);
     if (!consumer && !meter) return;
-
     const currentStatus = (consumer && consumer.status) || (meter && meter.status) || 'Active';
-    const isNowCutOff = currentStatus === 'Active';
-    const newStatus = isNowCutOff ? 'Disconnected' : 'Active';
-    const actionWord = isNowCutOff ? 'Cut-Off (Disconnect)' : 'Reconnect';
+    const action = (currentStatus === 'Disconnected' || currentStatus === 'Cut-Off') ? 'reconnect' : 'cutoff';
+    return this.setMeterServiceAction(consumer ? consumer.id : '', meter ? meter.id : '', action);
+  }
+
+  async setMeterServiceAction(consumerId = '', meterId = '', action = 'cutoff') {
+    const consumer = consumerId
+      ? this.cachedConsumers.find(c => c.id === consumerId)
+      : (meterId ? this.cachedConsumers.find(c => {
+          const m = this.cachedMeters.find(mm => mm.id === meterId);
+          return m && m.consumerId === c.id;
+        }) : this.activeConsumer);
+    const meter = meterId
+      ? this.cachedMeters.find(m => m.id === meterId)
+      : (consumer ? this.cachedMeters.find(m => m.consumerId === consumer.id) : this.activeMeter);
+    if (!consumer && !meter) return;
+
+    const isCutOffAction = action === 'cutoff';
+    const newStatus = isCutOffAction ? 'Disconnected' : 'Active';
+    const actionWord = isCutOffAction ? 'Cut-Off (Disconnect)' : 'Reconnect';
     const name = consumer ? consumer.name : (meter.ownerName || meter.meterNo);
 
-    if (!confirm(`${actionWord} water connection for "${name}"?\n\n(GPS satellite pins will stay exactly where they are on the map)`)) {
+    if (!confirm(`${actionWord} water connection for "${name}"?\n\nExact date & time will be recorded in history. (GPS satellite pins stay untouched.)`)) {
       return;
     }
+
+    const nowIso = new Date().toISOString();
+    const historyEntry = {
+      type: isCutOffAction ? 'CUT_OFF' : 'RECONNECTED',
+      label: isCutOffAction ? 'Na Cut-Off (Disconnected)' : 'Na Reconnect (Restored)',
+      dateIso: nowIso,
+      meterNo: meter ? meter.meterNo : ''
+    };
 
     try {
       if (consumer) {
         consumer.status = newStatus;
-        await window.db.update('consumers', consumer);
+        if (isCutOffAction) consumer.cutOffAt = nowIso;
+        else consumer.reconnectedAt = nowIso;
+        consumer.statusHistory = Array.isArray(consumer.statusHistory) ? consumer.statusHistory : [];
+        consumer.statusHistory.push(historyEntry);
+        consumer.updatedAt = nowIso;
+        await window.db.put('consumers', consumer);
       }
-      if (meter) {
-        meter.status = newStatus;
-        await window.db.update('meters', meter);
-      }
+
+      const targetMeters = [];
+      if (meter) targetMeters.push(meter);
       if (consumer) {
-        const otherMeters = this.cachedMeters.filter(m => m.consumerId === consumer.id);
-        for (const om of otherMeters) {
-          om.status = newStatus;
-          await window.db.update('meters', om);
+        for (const om of this.cachedMeters.filter(m => m.consumerId === consumer.id)) {
+          if (!targetMeters.some(tm => tm.id === om.id)) targetMeters.push(om);
         }
+      }
+      for (const tm of targetMeters) {
+        tm.status = newStatus;
+        if (isCutOffAction) tm.cutOffAt = nowIso;
+        else tm.reconnectedAt = nowIso;
+        tm.statusHistory = Array.isArray(tm.statusHistory) ? tm.statusHistory : [];
+        tm.statusHistory.push(historyEntry);
+        tm.updatedAt = nowIso;
+        await window.db.put('meters', tm);
       }
 
       await this.refreshDataCache();
@@ -3923,20 +4130,84 @@ class WaterBillingApp {
       this.renderConsumerList();
       this.renderBillingList();
 
-      if (this.activeConsumer && consumer && this.activeConsumer.id === consumer.id) {
-        this.openConsumerSheet(consumer.id, meter ? meter.id : null, this.activePinType);
-      } else if (this.activeMeter && meter && this.activeMeter.id === meter.id) {
-        this.openConsumerSheet(consumer ? consumer.id : null, meter.id, this.activePinType);
+      if (this.activeClusterId && document.getElementById('cluster-bottom-sheet')?.classList.contains('visible')) {
+        this.openClusterSheet(this.activeClusterId, meter ? meter.id : null);
+      } else if (document.getElementById('map-bottom-sheet')?.classList.contains('visible')) {
+        this.openConsumerSheet(consumer ? consumer.id : null, meter ? meter.id : null, this.activePinType);
       }
 
-      const msg = isNowCutOff
-        ? `"${name}" water connection marked as CUT-OFF / DISCONNECTED.`
-        : `"${name}" water connection restored to ACTIVE.`;
-      this.showToast(msg, 2600);
+      const stampLabel = this._formatHistoryDateTime(nowIso);
+      this.showToast(
+        isCutOffAction
+          ? `"${name}" marked CUT-OFF (${stampLabel}).`
+          : `"${name}" RECONNECTED (${stampLabel}).`,
+        3000
+      );
       this.autoSyncToOfficePcSilent();
     } catch (err) {
-      console.error('Error toggling cutoff status:', err);
+      console.error('Error updating meter service status:', err);
       alert(`Failed to update connection status: ${err.message}`);
+    }
+  }
+
+  async handleSheetMeterConditionChange(conditionValue) {
+    return this.setMeterConditionStatus(
+      this.activeConsumer ? this.activeConsumer.id : '',
+      this.activeMeter ? this.activeMeter.id : '',
+      conditionValue
+    );
+  }
+
+  async setMeterConditionStatus(consumerId = '', meterId = '', conditionValue = 'Operational') {
+    const meter = meterId
+      ? this.cachedMeters.find(m => m.id === meterId)
+      : (consumerId ? this.cachedMeters.find(m => m.consumerId === consumerId) : this.activeMeter);
+    const consumer = consumerId
+      ? this.cachedConsumers.find(c => c.id === consumerId)
+      : (meter && meter.consumerId ? this.cachedConsumers.find(c => c.id === meter.consumerId) : this.activeConsumer);
+    if (!consumer && !meter) return;
+
+    const nowIso = new Date().toISOString();
+    const condEntry = {
+      condition: conditionValue,
+      dateIso: nowIso,
+      meterNo: meter ? meter.meterNo : ''
+    };
+    const name = consumer ? consumer.name : (meter.ownerName || meter.meterNo);
+
+    try {
+      if (meter) {
+        meter.condition = conditionValue;
+        meter.conditionAt = nowIso;
+        meter.conditionHistory = Array.isArray(meter.conditionHistory) ? meter.conditionHistory : [];
+        meter.conditionHistory.push(condEntry);
+        meter.updatedAt = nowIso;
+        await window.db.put('meters', meter);
+      }
+      if (consumer) {
+        consumer.meterCondition = conditionValue;
+        consumer.meterConditionAt = nowIso;
+        consumer.conditionHistory = Array.isArray(consumer.conditionHistory) ? consumer.conditionHistory : [];
+        consumer.conditionHistory.push(condEntry);
+        consumer.updatedAt = nowIso;
+        await window.db.put('consumers', consumer);
+      }
+
+      await this.refreshDataCache();
+      this.syncPinsToMap();
+      this.renderConsumerList();
+
+      if (this.activeClusterId && document.getElementById('cluster-bottom-sheet')?.classList.contains('visible')) {
+        this.openClusterSheet(this.activeClusterId, meter ? meter.id : null);
+      } else if (document.getElementById('map-bottom-sheet')?.classList.contains('visible')) {
+        this.openConsumerSheet(consumer ? consumer.id : null, meter ? meter.id : null, this.activePinType);
+      }
+
+      this.showToast(`Recorded "${conditionValue}" for ${name} (${this._formatHistoryDateTime(nowIso)}).`, 3000);
+      this.autoSyncToOfficePcSilent();
+    } catch (err) {
+      console.error('Error recording meter condition:', err);
+      this.showToast('Failed to save meter condition: ' + err.message, 2500);
     }
   }
 
@@ -4630,21 +4901,39 @@ class WaterBillingApp {
     }
 
     try {
-      this.showToast('Starting Barangay Diclum offline map download...', 2000);
+      this.showToast('Starting Barangay Diclum HD Satellite offline map download (Zooms 14–19)...', 2400);
       const currentLayer = (this.mapEngine && this.mapEngine._currentLayerKey) || 'google_hybrid';
       const res = await window.offlineTileEngine.downloadDiclumMapPack({
         layer: currentLayer,
         minZoom: 14,
-        maxZoom: 18,
+        maxZoom: 19,
         onProgress: (p) => {
           if (progressBar) progressBar.style.width = `${p.percent}%`;
-          if (percentEl) percentEl.textContent = `${p.percent}% (${p.current}/${p.total})`;
-          if (labelEl) labelEl.textContent = `Caching Diclum zoom ${p.zoom}...`;
+          if (percentEl) percentEl.textContent = `${p.percent}% (${p.current}/${p.total} • ${p.bytesFormatted})`;
+          if (labelEl) labelEl.textContent = `Saving HD Diclum zoom ${p.zoom} to permanent phone storage...`;
         }
       });
 
-      if (labelEl) labelEl.textContent = 'Offline Diclum Map 100% Cached!';
-      this.showToast(`Diclum Map Download Complete! ${res.saved} tiles saved in IndexedDB for 100% offline use.`, 3500);
+      if (!res.cancelled) {
+        try {
+          localStorage.setItem('dicklum_offline_map_ready', JSON.stringify({
+            layer: currentLayer,
+            maxZoom: 19,
+            saved: res.saved,
+            total: res.total,
+            sizeFormatted: res.sizeFormatted,
+            completedAt: new Date().toISOString()
+          }));
+        } catch (_) {}
+      }
+
+      if (labelEl) labelEl.textContent = res.cancelled ? 'Paused (Tap Download to Resume)' : 'Offline HD Diclum Map 100% Ready!';
+      this.showToast(
+        res.cancelled
+          ? `Paused at ${res.saved}/${res.total} tiles. Tap Download anytime to resume without restarting.`
+          : `Diclum HD Map Complete! ${res.saved} tiles (${res.sizeFormatted}) permanently saved for 100% offline use.`,
+        4000
+      );
       await this.updateOfflineMapStatsUI();
       if (this.mapEngine && this.mapEngine._activeTileLayer && typeof this.mapEngine._activeTileLayer.redraw === 'function') {
         this.mapEngine._activeTileLayer.redraw();

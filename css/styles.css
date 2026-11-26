@@ -1896,6 +1896,12 @@ html, body {
   -webkit-touch-callout: none !important;
   user-select: none !important;
   -webkit-user-select: none !important;
+  contain: layout style;
+}
+
+/* Zero-lag overview mode: hide heavy text name tags when zoomed out (< Z17), show instantly at street zoom (Z17+) */
+.map-pins-compact .map-pin:not(.selected):not(.search-hovered):not(.is-dragging-pin) .pin-popup-label {
+  display: none !important;
 }
 
 .map-pin {

@@ -169,46 +169,69 @@
                 <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
               </svg>
             </button>
-            <!-- Real-Time Compass Indicator (Two-Finger Twist / Shift+Drag / Right-Click Drag, Click to Reset North) -->
-            <button type="button" id="btn-map-compass" class="map-circle-btn map-compass-btn" title="Compass (Click to reset North 0° • Twist 2 fingers or Shift+Drag / Right-Click Drag to rotate)">
-              <span class="compass-degree-badge hidden" id="compass-degree-badge">0°</span>
-              <svg id="compass-needle-svg" class="compass-needle-svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-                <!-- North pointer (Red) -->
-                <polygon points="12,2.5 15.2,12 8.8,12" fill="#EF4444" />
-                <!-- South pointer (Slate) -->
-                <polygon points="12,21.5 15.2,12 8.8,12" fill="#64748B" />
-                <!-- Center pivot ring -->
-                <circle cx="12" cy="12" r="2.1" fill="#FFFFFF" stroke="#0F172A" stroke-width="1.3" />
+            <!-- 1-Tap Sunlight High-Contrast Outdoor Mode -->
+            <button type="button" id="fab-toggle-sunlight" class="map-circle-btn" title="Toggle Sunlight High-Contrast Mode (Bright Outdoor View)">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
               </svg>
-              <span class="compass-north-tag">N</span>
             </button>
-            <!-- 0.5x / 1x Smooth Zoom Presets -->
-            <div class="zoom-preset-pill-group">
-              <button type="button" id="btn-zoom-05x" class="zoom-preset-pill" title="0.5x Wide Overview (District)">0.5x</button>
-              <button type="button" id="btn-zoom-1x" class="zoom-preset-pill active" title="1x Street Focus (Reading)">1x</button>
+            <!-- Collapsible Extra Map Tools (Keeps satellite map wide open!) -->
+            <button type="button" id="fab-more-tools" class="map-circle-btn" title="Show / Hide Extra Map Tools (Compass, 0.5x/1x, Route, Zoom)">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>
+              </svg>
+            </button>
+            <div id="map-extra-tools-drawer" class="map-extra-tools-drawer collapsed">
+              <!-- Real-Time Compass Indicator (Two-Finger Twist / Shift+Drag / Right-Click Drag, Click to Reset North) -->
+              <button type="button" id="btn-map-compass" class="map-circle-btn map-compass-btn" title="Compass (Click to reset North 0° • Twist 2 fingers or Shift+Drag / Right-Click Drag to rotate)">
+                <span class="compass-degree-badge hidden" id="compass-degree-badge">0°</span>
+                <svg id="compass-needle-svg" class="compass-needle-svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                  <!-- North pointer (Red) -->
+                  <polygon points="12,2.5 15.2,12 8.8,12" fill="#EF4444" />
+                  <!-- South pointer (Slate) -->
+                  <polygon points="12,21.5 15.2,12 8.8,12" fill="#64748B" />
+                  <!-- Center pivot ring -->
+                  <circle cx="12" cy="12" r="2.1" fill="#FFFFFF" stroke="#0F172A" stroke-width="1.3" />
+                </svg>
+                <span class="compass-north-tag">N</span>
+              </button>
+              <!-- 0.5x / 1x Smooth Zoom Presets -->
+              <div class="zoom-preset-pill-group">
+                <button type="button" id="btn-zoom-05x" class="zoom-preset-pill" title="0.5x Wide Overview (District)">0.5x</button>
+                <button type="button" id="btn-zoom-1x" class="zoom-preset-pill active" title="1x Street Focus (Reading)">1x</button>
+              </div>
+              <button id="btn-start-record-route" class="map-circle-btn" title="Record Walking Route" style="color: #0284C7;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/>
+                </svg>
+              </button>
+              <button id="btn-zoom-in" class="map-circle-btn" title="Zoom In">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M5 12h14"/><path d="M12 5v14"/>
+                </svg>
+              </button>
+              <button id="btn-zoom-out" class="map-circle-btn" title="Zoom Out">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M5 12h14"/>
+                </svg>
+              </button>
             </div>
-            <button id="btn-start-record-route" class="map-circle-btn" title="Record Walking Route" style="color: #0284C7;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <polygon points="10 8 16 12 10 16 10 8" fill="currentColor"/>
-              </svg>
-            </button>
-            <button id="btn-zoom-in" class="map-circle-btn" title="Zoom In">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 12h14"/><path d="M12 5v14"/>
-              </svg>
-            </button>
-            <button id="btn-zoom-out" class="map-circle-btn" title="Zoom Out">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 12h14"/>
-              </svg>
-            </button>
             <button id="fab-add-pin" class="map-circle-btn fab-add" title="Pin Location">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M5 12h14"/><path d="M12 5v14"/>
               </svg>
             </button>
           </div>
+        </div>
+
+        <!-- Guided Field Walk: Floating Nearest Unread Meter Pill (Powered by O(1) Spatial Grid) -->
+        <div id="nearest-unread-pill" class="hidden" style="position: absolute; bottom: 68px; left: 12px; right: 72px; max-width: 340px; z-index: 1020; background: rgba(15, 23, 42, 0.94); border: 1.5px solid #0EA5E9; border-radius: 12px; padding: 8px 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+          <div style="min-width: 0;">
+            <div style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #38BDF8; font-weight: 800;">Nearest Unread Meter</div>
+            <div id="nearest-unread-name" style="font-size: 12px; font-weight: 700; color: #F8FAFC; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">—</div>
+          </div>
+          <button type="button" id="btn-nearest-unread-go" class="btn btn-xs btn-primary" style="white-space: nowrap; font-weight: 700; padding: 6px 10px;">Read Now</button>
         </div>
 
         <!-- Floating Active Pin-Move Bar (shown after user confirms Yes to move pin) -->
@@ -222,6 +245,32 @@
           <div style="display: flex; gap: 8px;">
             <button type="button" id="btn-save-pin-move" class="btn btn-sm btn-primary" style="flex: 1; background: #16A34A; border-color: #16A34A; font-weight: 700;">Save New Location</button>
             <button type="button" id="btn-cancel-pin-move" class="btn btn-sm btn-outline" style="flex: 0.7; color: #F87171; border-color: rgba(248,113,113,0.45);">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Cluster Batch Reading Modal (Read All Meters in Cluster in One Screen!) -->
+        <div id="modal-cluster-batch-read" class="app-modal">
+          <div class="modal-backdrop"></div>
+          <div class="modal-card" style="max-width: 560px; width: 96%; max-height: 90dvh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+              <div>
+                <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--primary-light); font-weight: 700;">Fast Cluster Batch Reading</div>
+                <h3 id="batch-read-cluster-title" style="margin: 2px 0 0 0; font-size: 14.5px;">Clustered Water Meters</h3>
+              </div>
+              <button class="modal-close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+            <div class="modal-body" style="overflow-y: auto; padding: 12px;">
+              <p style="font-size: 11.5px; color: var(--text-muted); margin: 0 0 10px 0;">
+                Enter current readings for any or all meters below. Press <strong>Enter</strong> to jump to the next meter.
+              </p>
+              <div id="batch-read-rows-container" style="display: flex; flex-direction: column; gap: 8px;"></div>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px;">
+              <button type="button" class="modal-close btn btn-outline">Close</button>
+              <button type="button" id="btn-save-cluster-batch" class="btn btn-primary" style="flex: 1; font-weight: 700;">Save All Readings</button>
+            </div>
           </div>
         </div>
 
@@ -317,6 +366,9 @@
               <strong id="cluster-sheet-name" style="font-size: 14.5px; display: block; margin-top: 3px;"></strong>
             </div>
             <div style="display: flex; align-items: center; gap: 6px;">
+              <button type="button" id="btn-cluster-batch-read" class="btn btn-xs btn-primary" style="font-weight: 700; padding: 4px 8px;" title="Read all water meters in this cluster on one screen">
+                Read All
+              </button>
               <button type="button" id="btn-cluster-add-meter" class="btn btn-xs btn-outline" style="border-color: var(--primary); color: var(--primary-light); font-weight: 700; padding: 4px 8px;">
                 + Add Meter
               </button>

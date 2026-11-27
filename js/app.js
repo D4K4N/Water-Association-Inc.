@@ -614,15 +614,32 @@ class WaterBillingApp {
     if (!this.mapEngine) return;
 
     const pins = [];
+    const nowYm = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    const activeCode = (this.activeBillingCode || '').toLowerCase();
+    const activePeriod = (this.activeBillingPeriod || '').toLowerCase();
     const readConsumerIds = new Set(
-      this.cachedBills
-        .filter(b => b.billingPeriod.includes('2026-10') || b.billingPeriod.includes('October 2026'))
+      (this.cachedBills || [])
+        .filter(b => {
+          const bp = String(b.billingPeriod || '').toLowerCase();
+          const dt = String(b.createdAt || b.billDate || '');
+          return (activeCode && bp.includes(activeCode)) ||
+                 (activePeriod && bp.includes(activePeriod)) ||
+                 dt.startsWith(nowYm);
+        })
         .map(b => b.consumerId)
     );
+    const hasConditionIssue = (obj) => {
+      const cond = (obj && (obj.condition || obj.meterCondition)) || 'Operational';
+      return cond && cond !== 'Operational' && cond !== 'Replaced Meter';
+    };
 
     // 1. Household Pins
     for (const c of this.cachedConsumers) {
       if (c.householdLat && c.householdLng) {
+        const linkedMeter = this.cachedMeters.find(m => m.consumerId === c.id);
+        const isCutOff = c.status === 'Disconnected' || c.status === 'Cut-Off' || (linkedMeter && (linkedMeter.status === 'Disconnected' || linkedMeter.status === 'Cut-Off'));
+        const isRead = readConsumerIds.has(c.id);
+        const hasIssue = hasConditionIssue(c) || hasConditionIssue(linkedMeter);
         pins.push({
           id: c.id,
           type: 'household',
@@ -636,8 +653,10 @@ class WaterBillingApp {
             zone: c.zone,
             address: c.address,
             status: c.status || 'Active',
-            isCutOff: c.status === 'Disconnected' || c.status === 'Cut-Off',
-            isUnread: !readConsumerIds.has(c.id)
+            isCutOff,
+            isReadThisPeriod: isRead,
+            hasMeterIssue: hasIssue,
+            isUnread: !isRead && !isCutOff
           }
         });
       }
@@ -651,6 +670,8 @@ class WaterBillingApp {
         const consumer = this.cachedConsumers.find(c => c.id === m.consumerId);
         const ownerDisplay = (consumer && consumer.name) ? consumer.name : (m.ownerName || m.meterNo);
         const isCutOff = (consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) || m.status === 'Disconnected' || m.status === 'Cut-Off';
+        const isRead = consumer ? readConsumerIds.has(consumer.id) : false;
+        const hasIssue = hasConditionIssue(m) || hasConditionIssue(consumer);
         pins.push({
           id: m.id,
           type: 'meter',
@@ -667,9 +688,11 @@ class WaterBillingApp {
             zone: m.zone || (consumer ? consumer.zone : ''),
             status: (consumer && consumer.status) || m.status || 'Active',
             isCutOff,
+            isReadThisPeriod: isRead,
+            hasMeterIssue: hasIssue,
             householdLat: consumer ? consumer.householdLat : null,
             householdLng: consumer ? consumer.householdLng : null,
-            isUnread: consumer ? !readConsumerIds.has(consumer.id) : false
+            isUnread: consumer ? (!isRead && !isCutOff) : false
           }
         });
       }
@@ -695,6 +718,10 @@ class WaterBillingApp {
               : `${ownerNames.slice(0, 2).join(', ')} +${ownerNames.length - 2}`)
           : cl.name;
 
+        const hasUnreadMeters = clusterMeters.some(m => m.consumerId && !readConsumerIds.has(m.consumerId) && m.status !== 'Disconnected' && m.status !== 'Cut-Off');
+        const allReadThisPeriod = clusterMeters.length > 0 && clusterMeters.every(m => m.consumerId && readConsumerIds.has(m.consumerId));
+        const hasClusterIssue = clusterMeters.some(m => hasConditionIssue(m));
+
         pins.push({
           id: cl.id,
           type: 'cluster',
@@ -709,7 +736,10 @@ class WaterBillingApp {
             zone: cl.zone || (firstMeterWithCoords ? firstMeterWithCoords.zone : ''),
             description: cl.description,
             meterCount: clusterMeters.length,
-            meters: clusterMeters
+            meters: clusterMeters,
+            hasUnreadMeters,
+            isReadThisPeriod: allReadThisPeriod,
+            hasMeterIssue: hasClusterIssue
           }
         });
       }
@@ -833,6 +863,183 @@ class WaterBillingApp {
     if (!save) {
       this.showToast('Pin move cancelled — restored to original location.', 2000);
     }
+  }
+
+  // --- Guided Field Walk: Floating Nearest Unread Meter Card ---
+  updateNearestUnreadMeterCard(lat, lng) {
+    const pill = document.getElementById('nearest-unread-pill');
+    const nameEl = document.getElementById('nearest-unread-name');
+    if (!pill || !nameEl || !this.mapEngine || typeof this.mapEngine.findNearestUnreadPin !== 'function') return;
+
+    const found = this.mapEngine.findNearestUnreadPin(lat, lng, 180);
+    if (!found || !found.pin) {
+      this._nearestUnreadTarget = null;
+      pill.classList.add('hidden');
+      return;
+    }
+
+    this._nearestUnreadTarget = found;
+    const label = found.pin.title || (found.pin.data && (found.pin.data.ownerSummary || found.pin.data.name || found.pin.data.meterNo)) || 'Meter';
+    nameEl.textContent = `${label} (${found.distanceMeters}m away)`;
+    pill.classList.remove('hidden');
+  }
+
+  // --- Fast Cluster Batch Reading (Read All Meters in Cluster on One Screen) ---
+  openClusterBatchReadModal(clusterId) {
+    const cluster = this.cachedClusters.find(c => c.id === clusterId);
+    if (!cluster) return;
+    const clusterMeters = this.cachedMeters.filter(m => m.clusterId === clusterId);
+    if (clusterMeters.length === 0) {
+      this.showToast('No water meters in this cluster yet.', 2200);
+      return;
+    }
+
+    this._batchReadClusterId = clusterId;
+    const titleEl = document.getElementById('batch-read-cluster-title');
+    if (titleEl) titleEl.textContent = `${cluster.name || 'Clustered Meters'} (${clusterMeters.length} WM)`;
+
+    const container = document.getElementById('batch-read-rows-container');
+    if (!container) return;
+
+    container.innerHTML = clusterMeters.map((m, idx) => {
+      const consumer = this.cachedConsumers.find(c => c.id === m.consumerId) || null;
+      const ownerName = (consumer && consumer.name) ? consumer.name : (m.ownerName || `Meter #${idx + 1}`);
+      const isCutOff = Boolean((consumer && (consumer.status === 'Disconnected' || consumer.status === 'Cut-Off')) || m.status === 'Disconnected' || m.status === 'Cut-Off');
+      const latestBill = consumer
+        ? (this.cachedBills || []).filter(b => b.consumerId === consumer.id).sort((a, b) => new Date(b.createdAt || b.billDate || 0) - new Date(a.createdAt || a.billDate || 0))[0]
+        : null;
+      const prevRdg = latestBill ? Number(latestBill.currentReading || 0) : Number(m.initialReading || 0);
+
+      return `
+        <div class="batch-read-row" data-consumer-id="${consumer ? consumer.id : ''}" data-meter-id="${m.id}" data-prev="${prevRdg}" style="display: grid; grid-template-columns: 1.4fr 0.9fr 0.8fr; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); ${isCutOff ? 'opacity: 0.65;' : ''}">
+          <div style="min-width: 0;">
+            <div style="font-size: 12.5px; font-weight: 700; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">#${idx + 1} ${ownerName} ${isCutOff ? '<span style="color:#EF4444;font-size:10px;">(CUT-OFF)</span>' : ''}</div>
+            <div style="font-size: 10.5px; color: var(--text-muted);">${m.meterNo || 'WM'} • Prev: <strong>${prevRdg}</strong> m³</div>
+          </div>
+          <input type="number" class="form-control batch-curr-input" inputmode="numeric" placeholder="Curr m³" min="${prevRdg}" style="padding: 6px 8px; font-size: 13px; font-weight: 700;" ${!consumer || isCutOff ? 'disabled' : ''}>
+          <div class="batch-usage-preview" style="font-size: 11px; font-weight: 700; text-align: right; color: var(--text-muted);">—</div>
+        </div>
+      `;
+    }).join('');
+
+    const inputs = Array.from(container.querySelectorAll('.batch-curr-input'));
+    inputs.forEach((inp, i) => {
+      inp.addEventListener('input', () => {
+        const row = inp.closest('.batch-read-row');
+        const prev = Number(row.dataset.prev) || 0;
+        const preview = row.querySelector('.batch-usage-preview');
+        if (inp.value.trim() === '') {
+          preview.textContent = '—';
+          preview.style.color = 'var(--text-muted)';
+          return;
+        }
+        const curr = Number(inp.value);
+        const usage = curr - prev;
+        if (usage < 0) {
+          preview.textContent = 'Low!';
+          preview.style.color = '#EF4444';
+        } else {
+          const bill = usage <= 0 ? 0 : (100 + Math.max(0, usage - 10) * 15);
+          preview.textContent = `${usage}m³ · ₱${bill}`;
+          preview.style.color = usage > 50 ? '#F59E0B' : '#16A34A';
+        }
+      });
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const next = inputs[i + 1];
+          if (next && !next.disabled) next.focus();
+        }
+      });
+    });
+
+    document.getElementById('modal-cluster-batch-read')?.classList.add('active');
+    const firstActive = inputs.find(el => !el.disabled);
+    if (firstActive) setTimeout(() => firstActive.focus(), 120);
+  }
+
+  async saveClusterBatchReadings() {
+    const container = document.getElementById('batch-read-rows-container');
+    if (!container) return;
+    const rows = Array.from(container.querySelectorAll('.batch-read-row'));
+    const entries = [];
+
+    for (const row of rows) {
+      const inp = row.querySelector('.batch-curr-input');
+      if (!inp || inp.disabled || inp.value.trim() === '') continue;
+      const consumerId = row.dataset.consumerId;
+      const meterId = row.dataset.meterId;
+      const prev = Number(row.dataset.prev) || 0;
+      const curr = Number(inp.value);
+      if (isNaN(curr) || curr < prev) {
+        alert('One of the entered readings is lower than the previous reading. Please check highlighted rows.');
+        inp.focus();
+        return;
+      }
+      if ((curr - prev) > 50) {
+        const consumer = this.cachedConsumers.find(c => c.id === consumerId);
+        const okHigh = confirm(`HIGH USAGE WARNING (${curr - prev} m³) for ${consumer ? consumer.name : meterId}!\nPrev: ${prev} → Curr: ${curr}\nContinue saving?`);
+        if (!okHigh) { inp.focus(); return; }
+      }
+      entries.push({ consumerId, meterId, prev, curr });
+    }
+
+    if (entries.length === 0) {
+      this.showToast('Enter at least one current reading first.', 2200);
+      return;
+    }
+
+    let savedCount = 0;
+    for (const item of entries) {
+      try {
+        await window.readingModule.saveReading({
+          consumerId: item.consumerId,
+          meterId: item.meterId,
+          billingPeriod: this.activeBillingCode,
+          previousReading: item.prev,
+          currentReading: item.curr,
+          readerName: (this.cachedSettings.reader && this.cachedSettings.reader.name) || '',
+          notes: 'Cluster Batch Reading',
+          isRolloverOverride: false,
+          photoDataUrl: null
+        });
+        savedCount++;
+      } catch (err) {
+        console.warn('Batch reading skip:', err);
+      }
+    }
+
+    await this.refreshDataCache();
+    this.syncPinsToMap();
+    this.renderConsumerList();
+    this.renderBillingList();
+    try { await this.renderZoneExportCenter(); } catch (_) {}
+    this.autoSyncToOfficePcSilent();
+    this.maybeRunDailyAutoBackup();
+
+    document.getElementById('modal-cluster-batch-read')?.classList.remove('active');
+    if (this._batchReadClusterId) {
+      this.openClusterSheet(this._batchReadClusterId);
+    }
+    this.showToast(`Saved ${savedCount} cluster meter reading${savedCount === 1 ? '' : 's'}!`, 3200);
+  }
+
+  // --- Silent Automatic Daily Rolling Backup to Downloads/DicklumWater/ ---
+  async maybeRunDailyAutoBackup() {
+    try {
+      if (typeof window === 'undefined' || !window.AndroidBackupBridge || typeof window.AndroidBackupBridge.saveJsonToDownloads !== 'function') {
+        return;
+      }
+      const todayKey = new Date().toISOString().slice(0, 10);
+      if (localStorage.getItem('dicklum_last_auto_backup_date') === todayKey) return;
+      const dump = await window.db.dumpAllData();
+      const jsonStr = JSON.stringify(dump, null, 2);
+      const resRaw = window.AndroidBackupBridge.saveJsonToDownloads(`auto-backup-${todayKey}.json`, jsonStr);
+      const parsed = typeof resRaw === 'string' ? JSON.parse(resRaw) : resRaw;
+      if (parsed && parsed.ok) {
+        localStorage.setItem('dicklum_last_auto_backup_date', todayKey);
+      }
+    } catch (_) {}
   }
 
   async handlePinMove(pin, newLat, newLng) {
@@ -1521,6 +1728,9 @@ class WaterBillingApp {
       if (this.isRecordingRoute) {
         this.appendRoutePoint(latitude, longitude, accuracy);
       }
+
+      // Guided Field Walk: O(1) Spatial Grid nearest-unread-meter suggestion (within 180m)
+      this.updateNearestUnreadMeterCard(latitude, longitude);
     };
 
     // PRIORITY 1: Native Android Pure-Satellite Hardware GNSS Bridge (100% Offline, 1 Hz, Zero WebView Delay!)
@@ -2067,6 +2277,18 @@ class WaterBillingApp {
       return;
     }
 
+    // Smart Typo / High-Usage Anomaly Guard (catches accidental extra digits like 19570 instead of 1957)
+    const computedUsage = isOverride ? curr : Math.max(0, curr - prev);
+    if (computedUsage > 50) {
+      const okHigh = confirm(
+        `HIGH USAGE WARNING: ${computedUsage.toLocaleString()} m³!\n\n` +
+        `Consumer: ${this.activeConsumer.name}\n` +
+        `Previous: ${prev.toLocaleString()} m³ → Current: ${curr.toLocaleString()} m³\n\n` +
+        `Please double-check the digits on the water meter. Save this reading anyway?`
+      );
+      if (!okHigh) return;
+    }
+
     try {
       const result = await window.readingModule.saveReading({
         consumerId: this.activeConsumer.id,
@@ -2086,6 +2308,7 @@ class WaterBillingApp {
       this.renderBillingList();
       await this.renderZoneExportCenter();
       this.autoSyncToOfficePcSilent();
+      this.maybeRunDailyAutoBackup();
 
       if (andPrint) {
         this.openThermalReceiptModal(result.bill.id);
@@ -5534,6 +5757,20 @@ class WaterBillingApp {
     if (searchInput && searchResults) {
       this._lastSearchMatches = [];
 
+      const fuzzyTokenScore = (haystack, query) => {
+        if (!haystack || !query) return 0;
+        const h = String(haystack).toLowerCase();
+        if (h === query) return 100;
+        if (h.startsWith(query)) return 85;
+        if (h.includes(query)) return 70;
+        // Subsequence / 1-typo tolerance for field names & meter numbers
+        let qi = 0;
+        for (let hi = 0; hi < h.length && qi < query.length; hi++) {
+          if (h[hi] === query[qi]) qi++;
+        }
+        return qi === query.length && query.length >= 3 ? 45 : 0;
+      };
+
       const computeSearchMatches = (rawQuery) => {
         const q = (rawQuery || '').toLowerCase().trim();
         if (!q) return [];
@@ -5541,17 +5778,17 @@ class WaterBillingApp {
 
         this.cachedConsumers.forEach(c => {
           const meter = this.cachedMeters.find(m => m.consumerId === c.id);
-          const nameMatch = c.name && c.name.toLowerCase().includes(q);
-          const acctMatch = c.accountNo && c.accountNo.toLowerCase().includes(q);
-          const meterMatch = meter && meter.meterNo && meter.meterNo.toLowerCase().includes(q);
-          const addressMatch = c.address && c.address.toLowerCase().includes(q);
-          const zoneMatch = c.zone && c.zone.toLowerCase().includes(q);
+          const nameScore = fuzzyTokenScore(c.name, q);
+          const acctScore = fuzzyTokenScore(c.accountNo, q);
+          const meterScore = meter ? fuzzyTokenScore(meter.meterNo, q) : 0;
+          const addrScore = fuzzyTokenScore(c.address, q) * 0.5;
+          const zoneScore = fuzzyTokenScore(c.zone, q) * 0.5;
+          const bestScore = Math.max(nameScore, acctScore, meterScore, addrScore, zoneScore);
 
-          if (nameMatch || acctMatch || meterMatch || addressMatch || zoneMatch) {
+          if (bestScore > 0) {
             const hasHouseCoords = Boolean(c.householdLat && c.householdLng);
             const hasMeterCoords = Boolean(meter && meter.meterLat && meter.meterLng);
-            // Prefer household pin when searching by owner name unless only meter is pinned or query matched meterNo specifically
-            const preferMeter = (!hasHouseCoords && hasMeterCoords) || (meterMatch && !nameMatch && hasMeterCoords);
+            const preferMeter = (!hasHouseCoords && hasMeterCoords) || (meterScore > nameScore && hasMeterCoords);
             const isClusteredMeter = Boolean(preferMeter && meter && meter.isClustered && meter.clusterId);
             const pinType = isClusteredMeter ? 'cluster' : (preferMeter ? 'meter' : 'household');
             const pinId = isClusteredMeter ? meter.clusterId : (preferMeter && meter ? meter.id : c.id);
@@ -5559,6 +5796,7 @@ class WaterBillingApp {
             const lng = preferMeter ? Number(meter.meterLng) : Number(c.householdLng || (meter && meter.meterLng) || 0);
 
             matches.push({
+              score: bestScore,
               consumer: c,
               meter,
               consumerId: c.id,
@@ -5575,8 +5813,10 @@ class WaterBillingApp {
 
         // Check standalone / unassigned meters
         this.cachedMeters.forEach(m => {
-          if (!m.consumerId && m.meterNo && m.meterNo.toLowerCase().includes(q)) {
+          const ms = !m.consumerId ? fuzzyTokenScore(m.meterNo, q) : 0;
+          if (ms > 0) {
             matches.push({
+              score: ms,
               consumer: null,
               meter: m,
               consumerId: '',
@@ -5591,6 +5831,7 @@ class WaterBillingApp {
           }
         });
 
+        matches.sort((a, b) => (b.score || 0) - (a.score || 0));
         return matches;
       };
 
@@ -6297,6 +6538,55 @@ class WaterBillingApp {
       btnCancelPinMove.addEventListener('click', () => this.finishActivePinMove(false));
     }
     this.syncPinMoveGuardUI();
+
+    // 1-Tap Outdoor Sunlight High-Contrast Mode
+    const savedSunlight = localStorage.getItem('dicklum_sunlight_mode') === 'true';
+    if (savedSunlight) document.body.classList.add('sunlight-mode');
+    const fabSunlight = document.getElementById('fab-toggle-sunlight');
+    if (fabSunlight) {
+      fabSunlight.addEventListener('click', () => {
+        const enabled = document.body.classList.toggle('sunlight-mode');
+        try { localStorage.setItem('dicklum_sunlight_mode', String(enabled)); } catch (_) {}
+        this.showToast(enabled ? 'Sunlight High-Contrast Mode ON (Outdoor View)' : 'Dark Field Mode ON', 2000);
+      });
+    }
+
+    // Collapsible Extra Map Tools Drawer
+    const fabMoreTools = document.getElementById('fab-more-tools');
+    const extraDrawer = document.getElementById('map-extra-tools-drawer');
+    if (fabMoreTools && extraDrawer) {
+      fabMoreTools.addEventListener('click', () => {
+        extraDrawer.classList.toggle('collapsed');
+      });
+    }
+
+    // Guided Field Walk: Nearest Unread Meter Action
+    const btnNearestGo = document.getElementById('btn-nearest-unread-go');
+    if (btnNearestGo) {
+      btnNearestGo.addEventListener('click', () => {
+        if (!this._nearestUnreadTarget) return;
+        const { pin } = this._nearestUnreadTarget;
+        if (pin.type === 'cluster') {
+          this.openClusterBatchReadModal(pin.data.clusterId);
+        } else if (pin.data && pin.data.consumerId) {
+          this.startReadingForConsumer(pin.data.consumerId);
+        } else {
+          this.handlePinSelect(pin);
+        }
+      });
+    }
+
+    // Fast Cluster Batch Reading Modal Triggers
+    const btnClusterBatch = document.getElementById('btn-cluster-batch-read');
+    if (btnClusterBatch) {
+      btnClusterBatch.addEventListener('click', () => {
+        if (this.activeClusterId) this.openClusterBatchReadModal(this.activeClusterId);
+      });
+    }
+    const btnSaveClusterBatch = document.getElementById('btn-save-cluster-batch');
+    if (btnSaveClusterBatch) {
+      btnSaveClusterBatch.addEventListener('click', () => this.saveClusterBatchReadings());
+    }
 
     // Tariff Configuration Save (Phase 5, Section 13)
     document.getElementById('btn-save-tariff').addEventListener('click', async () => {

@@ -268,8 +268,12 @@ class FieldMapEngine {
 
     // Initialize Layer Groups
     this._boundaryLayerGroup = L.layerGroup().addTo(this._map);
+    this._canvasRenderer = L.canvas({ padding: 0.5 });
+    this._canvasOverviewGroup = L.layerGroup().addTo(this._map);
     this._pinsLayerGroup = L.layerGroup().addTo(this._map);
     this._savedRoutesLayerGroup = L.layerGroup().addTo(this._map);
+    this._spatialGrid = new Map();
+    this._gridCellSize = 0.001; // ~110m spatial hash cell size for O(1) viewport & nearest-meter queries
 
     // Set initial tile layer & render Barangay Diclum Red Border Line
     this.setLayer(this._currentLayerKey);
@@ -608,8 +612,84 @@ class FieldMapEngine {
 
   setPins(pins) {
     this._pins = pins || [];
+    this._buildSpatialGrid();
     this._renderDicklumBoundary();
     this._renderAllPins();
+  }
+
+  _gridKey(lat, lng) {
+    const cs = this._gridCellSize || 0.001;
+    return `${Math.floor(lat / cs)},${Math.floor(lng / cs)}`;
+  }
+
+  _buildSpatialGrid() {
+    this._spatialGrid = new Map();
+    for (const pin of (this._pins || [])) {
+      const lat = Number(pin.lat ?? pin.householdLat ?? pin.meterLat);
+      const lng = Number(pin.lng ?? pin.householdLng ?? pin.meterLng);
+      if (isNaN(lat) || isNaN(lng)) continue;
+      const gk = this._gridKey(lat, lng);
+      let bucket = this._spatialGrid.get(gk);
+      if (!bucket) {
+        bucket = [];
+        this._spatialGrid.set(gk, bucket);
+      }
+      bucket.push(pin);
+    }
+  }
+
+  _querySpatialGrid(bounds) {
+    if (!bounds || !this._spatialGrid || this._spatialGrid.size === 0) return this._pins || [];
+    const cs = this._gridCellSize || 0.001;
+    const minLat = Math.floor(bounds.getSouth() / cs);
+    const maxLat = Math.floor(bounds.getNorth() / cs);
+    const minLng = Math.floor(bounds.getWest() / cs);
+    const maxLng = Math.floor(bounds.getEast() / cs);
+    const out = [];
+    for (let gy = minLat; gy <= maxLat; gy++) {
+      for (let gx = minLng; gx <= maxLng; gx++) {
+        const bucket = this._spatialGrid.get(`${gy},${gx}`);
+        if (bucket) {
+          for (let i = 0; i < bucket.length; i++) out.push(bucket[i]);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * O(1) Spatial Grid nearest-unread-meter finder for guided field walking.
+   */
+  findNearestUnreadPin(lat, lng, maxDistMeters = 180) {
+    if (!this._spatialGrid || this._spatialGrid.size === 0 || isNaN(lat) || isNaN(lng)) return null;
+    const cs = this._gridCellSize || 0.001;
+    const cy = Math.floor(lat / cs);
+    const cx = Math.floor(lng / cs);
+    const radiusCells = Math.max(1, Math.ceil((maxDistMeters / 111000) / cs));
+
+    let best = null;
+    let bestDist = maxDistMeters;
+    for (let dy = -radiusCells; dy <= radiusCells; dy++) {
+      for (let dx = -radiusCells; dx <= radiusCells; dx++) {
+        const bucket = this._spatialGrid.get(`${cy + dy},${cx + dx}`);
+        if (!bucket) continue;
+        for (const pin of bucket) {
+          const d = pin.data || {};
+          if (d.isCutOff) continue;
+          const isUnread = pin.type === 'cluster' ? Boolean(d.hasUnreadMeters) : Boolean(d.isUnread);
+          if (!isUnread) continue;
+          const plat = Number(pin.lat ?? pin.householdLat ?? pin.meterLat);
+          const plng = Number(pin.lng ?? pin.householdLng ?? pin.meterLng);
+          if (isNaN(plat) || isNaN(plng)) continue;
+          const dist = this._calculateDistanceMeters(lat, lng, plat, plng);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = { pin, distanceMeters: Math.round(dist) };
+          }
+        }
+      }
+    }
+    return best;
   }
 
   setPinsHidden(hidden) {
@@ -708,34 +788,93 @@ class FieldMapEngine {
   }
 
   /**
-   * High-Performance Viewport-Culled & Diffed Pin Renderer (60 FPS with 500–2,000+ pins):
-   * - Only mounts DOM markers currently inside the visible screen + 35% pan buffer.
-   * - Diffs against already-mounted markers so panning/zooming never recreates visible DOM nodes.
-   * - Always keeps selected pin & active move-session pin mounted regardless of pan.
+   * Dual-Mode High-Performance Pin Renderer (60 FPS with 500–5,000+ pins):
+   * - Overview Zoom (< Z16): Renders all visible pins on a single GPU HTML5 <canvas> layer (zero DOM lag!).
+   * - Street Zoom (Z16+): Uses O(1) Spatial Grid viewport culling + incremental DOM diffing.
+   * - Always keeps selected pin & active move-session pin mounted regardless of zoom/pan.
    */
   _renderViewportPins(forceRebuild = false) {
     if (!this._map || !this._pinsLayerGroup) return;
 
     this._syncCompactPinZoomClass();
+    const zoom = this._map.getZoom ? this._map.getZoom() : 16;
+    const useCanvasOverview = zoom < 16 && !this._isolatedPinId && !this._activeMoveSession;
+
+    if (useCanvasOverview) {
+      // Clear interactive DOM pins when zoomed out to barangay overview -> 0 DOM lag!
+      if (this._pinMarkers.size > 0) {
+        this._pinsLayerGroup.clearLayers();
+        this._pinMarkers.clear();
+      }
+      if (this._canvasOverviewGroup) {
+        this._canvasOverviewGroup.clearLayers();
+        const visible = this.getVisiblePins();
+        for (const pin of visible) {
+          const lat = Number(pin.lat ?? pin.householdLat ?? pin.meterLat);
+          const lng = Number(pin.lng ?? pin.householdLng ?? pin.meterLng);
+          if (isNaN(lat) || isNaN(lng)) continue;
+          const d = pin.data || {};
+          let fill = pin.type === 'household' ? '#0D9488' : (pin.type === 'cluster' ? '#7C3AED' : '#0284C7');
+          if (d.isCutOff) fill = '#DC2626';
+          else if (d.hasMeterIssue) fill = '#F59E0B';
+          else if (d.isReadThisPeriod) fill = '#16A34A';
+
+          const dot = L.circleMarker([lat, lng], {
+            renderer: this._canvasRenderer,
+            radius: pin.type === 'cluster' ? 6.5 : 5,
+            color: '#FFFFFF',
+            weight: 1.5,
+            fillColor: fill,
+            fillOpacity: 0.92
+          });
+          dot.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            this._map.flyTo([lat, lng], 18, { duration: 0.45 });
+            setTimeout(() => this.selectPinById(pin.id, pin.type), 480);
+          });
+          this._canvasOverviewGroup.addLayer(dot);
+        }
+      }
+      return;
+    }
+
+    // Street Zoom (Z16+): Clear Canvas overview dots and render viewport-culled interactive HTML pins
+    if (this._canvasOverviewGroup) {
+      this._canvasOverviewGroup.clearLayers();
+    }
 
     if (forceRebuild) {
       this._pinsLayerGroup.clearLayers();
       this._pinMarkers.clear();
     }
 
-    const visible = this.getVisiblePins();
     const bounds = this._map.getBounds ? this._map.getBounds().pad(0.35) : null;
     const activeMovePin = this._activeMoveSession ? this._activeMoveSession.pin : null;
 
-    // Filter strictly to pins inside the padded viewport (plus selected / moving pin)
+    // Use O(1) Spatial Grid when not isolated, falling back to getVisiblePins()
+    let candidatePins;
+    if (this._isolatedPinId || this._pinsHidden || !bounds || !this._spatialGrid || this._spatialGrid.size === 0) {
+      candidatePins = this.getVisiblePins();
+    } else {
+      const fm = this._filterMode || 'all';
+      const zf = this._zoneFilter || null;
+      candidatePins = this._querySpatialGrid(bounds).filter(pin => {
+        if (fm === 'household' && pin.type !== 'household') return false;
+        if (fm === 'meter' && pin.type !== 'meter' && pin.type !== 'cluster') return false;
+        if (zf && ((pin.data && pin.data.zone) || pin.zone || '') !== zf) return false;
+        return true;
+      });
+    }
+
     const inViewPins = [];
     const desiredKeys = new Set();
-    for (const pin of visible) {
+    for (const pin of candidatePins) {
       const lat = Number(pin.lat ?? pin.householdLat ?? pin.meterLat);
       const lng = Number(pin.lng ?? pin.householdLng ?? pin.meterLng);
       if (isNaN(lat) || isNaN(lng)) continue;
 
       const key = `${pin.id || pin.accountNo || ''}_${pin.type}`;
+      if (desiredKeys.has(key)) continue;
       const isSelected = this._selectedPinKey === key;
       const isMoving = activeMovePin && activeMovePin.id === pin.id && activeMovePin.type === pin.type;
 
@@ -1212,9 +1351,27 @@ class FieldMapEngine {
 
     const mCount = Number(d.meterCount || (d.meters && d.meters.length) || 0);
     const isCutOff = Boolean(d.isCutOff || d.status === 'Disconnected' || d.status === 'Cut-Off');
-    const cutOffBadge = isCutOff ? `<span class="pin-cutoff-badge">CUT-OFF</span>` : '';
-    const cutOffClass = isCutOff ? ' pin-cutoff' : '';
-    const effectiveAccent = isCutOff ? '#DC2626' : accent;
+    const hasIssue = Boolean(d.hasMeterIssue);
+    const isRead = Boolean(d.isReadThisPeriod);
+
+    let statusBadge = '';
+    let stateClass = '';
+    let effectiveAccent = accent;
+    if (isCutOff) {
+      statusBadge = `<span class="pin-cutoff-badge">CUT-OFF</span>`;
+      stateClass = ' pin-cutoff';
+      effectiveAccent = '#DC2626';
+    } else if (hasIssue) {
+      statusBadge = `<span class="pin-issue-badge">ISSUE</span>`;
+      stateClass = ' pin-has-issue';
+      effectiveAccent = '#D97706';
+    } else if (isRead) {
+      statusBadge = `<span class="pin-read-badge">✓</span>`;
+      stateClass = ' pin-read-done';
+      effectiveAccent = '#16A34A';
+    }
+    const cutOffBadge = statusBadge;
+    const cutOffClass = stateClass;
 
     const wmSuffix = type === 'meter'
       ? `<span class="pin-wm-tag">WM</span>`

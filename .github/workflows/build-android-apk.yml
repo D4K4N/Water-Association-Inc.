@@ -28,6 +28,12 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Restore Persistent Android Signing Keystore (Enables 1-Tap In-Place APK Updates Without Uninstalling!)
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: dicklum-persistent-signing-keystore-v1
+
       - name: Run Automated Verification & Billing Test Suite
         run: node test-suite.js
 
